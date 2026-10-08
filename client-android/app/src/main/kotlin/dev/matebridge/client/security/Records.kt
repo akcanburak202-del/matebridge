@@ -10,38 +10,6 @@ import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
-/**
- * T-292: how [RecordOpener] drives AES-GCM. Developer knob `--es aead_path legacy|direct` (needs `--ez dev true`).
- * [DIRECT] is the default since the Game 60 device A/B (GC 11.2% -> 2.8%, minor faults 5,038 -> 2,362/s, no AUTH_FAILED).
- * [LEGACY] stays selectable for one cycle as a fallback and will be removed later (with this knob).
- * Wire format, nonce, AAD, per-record `init` and error behaviour are identical in both modes.
- *
- * Platform Conscrypt (Android 12, `OpenSSLAeadCipher`) facts behind [DIRECT] (source read; measured on device in the T-292 A/B):
- * `doFinal(byte[]...)` copies the input into the SPI's internal buffer (`updateInternal`/`expand`), JNI-copies it again, and
- * `reset()` reallocates that buffer whenever the record size changes. `doFinal(ByteBuffer, ByteBuffer)` with two direct
- * buffers and nothing buffered goes straight to `EVP_AEAD_CTX_open_buf`: no internal copy, no allocation. (The per-`init`
- * SPI re-creation stays: a `Cipher` with a fixed SPI never calls `engineInit`, so it cannot be reused safely.)
- */
-enum class AeadPath(val id: String) {
-    /** The T-285 behaviour: `Cipher.doFinal(byte[])`. Fallback only; will be removed after one cycle without a regression. */
-    LEGACY("legacy"),
-
-    /** Default: direct-ByteBuffer `doFinal` (input staged into a reused direct buffer, plaintext copied out once). */
-    DIRECT("direct");
-
-    companion object {
-        val IDS: Set<String> = values().map { it.id }.toSet()
-
-        /** Unknown or absent = [DEFAULT] ([DIRECT]). */
-        fun parse(v: String?): AeadPath {
-            val t = v?.trim()?.lowercase(java.util.Locale.ROOT)
-            return values().firstOrNull { it.id == t } ?: DEFAULT
-        }
-
-        val DEFAULT: AeadPath = DIRECT
-    }
-}
-
 /*
  * Encrypted records (PROTOCOL.md section 9): u32 length (LE) || AES-256-GCM(type || payload) || 16-byte tag.
  * nonce = 00 00 00 00 || counter (u64 LE), AAD = the 4 length bytes. The counter starts at 0 per connection
@@ -77,9 +45,6 @@ object Records {
         }
         return c
     }
-
-    /** Path new [RecordOpener]s use unless told otherwise; set once at launch from the `aead_path` dev knob (T-292). */
-    @Volatile var aeadPath: AeadPath = AeadPath.DEFAULT
 
     /**
      * T-077 diagnostics: when true every [RecordOpener] open stamps [OpenStamps.current] of the calling thread (the
@@ -136,7 +101,6 @@ class RecordSealer(key: ByteArray, startCounter: Long = 0) {
 class RecordOpener(
     key: ByteArray,
     startCounter: Long = 0,
-    val path: AeadPath = Records.aeadPath,
     /** Test hook: the cipher to use instead of the platform's. */
     private val cipher: Cipher = Records.newCipher(),
 ) {
@@ -144,7 +108,7 @@ class RecordOpener(
     private var counter = startCounter
     private var scratch = ByteArray(0)
 
-    // AeadPath.DIRECT only: staging buffers, grown on demand and reused for every record.
+    // T-292: direct-ByteBuffer decrypt (the only path since T-295). Staging buffers, grown on demand and reused for every record.
     private var directIn: ByteBuffer? = null
     private var directOut: ByteBuffer? = null
 
@@ -179,10 +143,7 @@ class RecordOpener(
             cipher.init(Cipher.DECRYPT_MODE, keySpec, GCMParameterSpec(Records.TAG_BYTES * 8, Records.nonce(counter)))
             cipher.updateAAD(hdr, hOff, Records.HEADER_BYTES)
             stamps?.initNs = System.nanoTime()
-            val n = if (path == AeadPath.DIRECT) doFinalDirect(src, bOff, bLen) else {
-                scratch = Records.ensureOutput(scratch, cipher, bLen)
-                cipher.doFinal(src, bOff, bLen, scratch, 0)
-            }
+            val n = doFinalDirect(src, bOff, bLen)
             stamps?.finalNs = System.nanoTime()
             counter++
             return n
@@ -196,8 +157,12 @@ class RecordOpener(
     }
 
     /**
-     * [AeadPath.DIRECT]: stage `src[bOff, bOff+bLen)` in a reused direct buffer, decrypt direct to direct (no Conscrypt
+     * T-292: stage `src[bOff, bOff+bLen)` in a reused direct buffer, decrypt direct to direct (no Conscrypt
      * staging copy or allocation), then copy the plaintext once into [scratch]. Returns the plaintext length.
+     * Platform Conscrypt (Android 12, `OpenSSLAeadCipher`): `doFinal(byte[]...)` copies the input into the SPI's internal
+     * buffer and reallocates it whenever the record size changes; `doFinal(ByteBuffer, ByteBuffer)` with two direct buffers
+     * goes straight to `EVP_AEAD_CTX_open_buf`. (The per-`init` SPI re-creation stays: a fixed-SPI `Cipher` never calls
+     * `engineInit`, so it cannot be reused safely.) Device A/B, Game 60: GC 11.2% -> 2.8%, minor faults 5,038 -> 2,362/s.
      */
     private fun doFinalDirect(src: ByteArray, bOff: Int, bLen: Int): Int {
         var din = directIn

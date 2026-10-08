@@ -399,7 +399,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             },
         )
         MbLog.i("dev_knobs", devKnobs.logFields(), "diag") // keys only, never values
-        dev.matebridge.client.security.Records.aeadPath = devKnobs.aeadPath // T-292 dev knob (`aead_path`), read when a connection's opener is built
     }
 
     private fun parseWifiKnobs() {
@@ -1534,7 +1533,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         ).also {
             it.pacerTuning = devKnobs.pacerTuning // T-251 dev knobs (`pace_dcap_half`, `pace_feedback`)
             it.catchUp = devKnobs.catchUp // T-252 dev knob (`catch_up`)
-            it.decoderWait = devKnobs.decoderWait // T-286 dev knob (`dec_wait`)
             pacerKnobsLogged = false
             it.paceTrace = paceTrace
             it.paceTraceFile = java.io.File(cacheDir, "pace_trace.csv")

@@ -1,10 +1,8 @@
 package dev.matebridge.client.session
 
-import dev.matebridge.client.security.AeadPath
 import dev.matebridge.client.stream.HzPinVariant
 import dev.matebridge.client.video.ColorOverrides
 import dev.matebridge.client.video.DecoderLatencyKnobs
-import dev.matebridge.client.video.DecoderWait
 import dev.matebridge.client.video.PacerTuning
 import java.util.Locale
 
@@ -102,17 +100,6 @@ data class DevKnobs(
     val catchUp: Boolean = true,
     /** `--ez cursor_predict false` (T-278, decision 0036 v2): the local cursor draws the host's position as in v1. Default on. */
     val cursorPredict: Boolean = true,
-    /**
-     * `--es dec_wait event_in|poll` (T-286): how the decoder input thread waits while idle. Absent, unknown or the removed
-     * `event` = [DecoderWait.EVENT_IN] (parks until a frame, a retire or an output error; the output thread keeps its poll).
-     * `poll` = the old fixed 4 ms input timeout, a fallback kept for one cycle that will be removed later.
-     */
-    val decoderWait: DecoderWait = DecoderWait.DEFAULT,
-    /**
-     * `--es aead_path legacy|direct` (T-292): how the video record decrypt drives AES-GCM. Absent or unknown =
-     * [AeadPath.DEFAULT] (`direct`); `legacy` (the T-285 behaviour) is a fallback that will be removed later.
-     */
-    val aeadPath: AeadPath = AeadPath.DEFAULT,
     /** Keep: `--ez stats_1s true` (T-141). */
     val stats1s: Boolean = false,
     /** Keep: `--ez pace_trace true` (T-069). */
@@ -174,8 +161,6 @@ data class DevKnobs(
             Spec("pace_feedback", Kind.BOOL, debugOnly = true),
             Spec("catch_up", Kind.BOOL, debugOnly = true),
             Spec("cursor_predict", Kind.BOOL, debugOnly = true),
-            Spec("dec_wait", Kind.STRING, debugOnly = true, ids = DecoderWait.IDS),
-            Spec("aead_path", Kind.STRING, debugOnly = true, ids = AeadPath.IDS),
             Spec("stats_1s", Kind.BOOL, debugOnly = false),
             Spec("pace_trace", Kind.BOOL, debugOnly = false),
             Spec("stall_diag", Kind.BOOL, debugOnly = false),
@@ -223,8 +208,6 @@ data class DevKnobs(
                 ),
                 catchUp = x.bool("catch_up", true),
                 cursorPredict = x.bool("cursor_predict", true),
-                decoderWait = DecoderWait.parse(x.string("dec_wait")),
-                aeadPath = AeadPath.parse(x.string("aead_path")),
                 stats1s = x.bool("stats_1s", false),
                 paceTrace = x.bool("pace_trace", false),
                 stallDiag = x.bool("stall_diag", false),

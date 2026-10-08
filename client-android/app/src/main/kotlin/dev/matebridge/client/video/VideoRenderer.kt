@@ -109,18 +109,9 @@ class VideoRenderer(
         /** Margin added to the presentation deadline when deciding how long an output may be held back (T-057). */
         const val DISPATCH_MARGIN_NS = 1_000_000L
         const val TRACE_DUMP_EVERY = 10
-        /** Park of the input thread per wait for a frame; an offer wakes it at once, so this bounds shutdown latency only. */
-        private const val INPUT_WAIT_NS = 4_000_000L
     }
 
     private val tag = "MB/decoder"
-
-    /**
-     * T-286 dev knob (`dec_wait`): how the input thread waits while idle; default [DecoderWait.EVENT_IN] (parks until a
-     * frame, a retire or an output error). [DecoderWait.POLL] = the old fixed 4 ms timeout, a fallback that will be
-     * removed later. Read on every loop turn, so it may be changed while running.
-     */
-    @Volatile var decoderWait: DecoderWait = DecoderWait.DEFAULT
 
     /** Current stream configuration; replaced by [reconfigure]. Read once per codec creation. */
     @Volatile private var config: StreamConfig = initialConfig
@@ -699,13 +690,9 @@ class VideoRenderer(
                 inSlot.prefetch()
                 // T-141: an offer unparks the wait at once; the timeout only bounds how fast a stop is seen.
                 // T-219: frames of this generation only; once retired it gets null and the loop ends on `active`.
-                // T-286 (`dec_wait event_in`, default): parks until a frame, a retire or an output error; the timeout is a safety net.
-                val mode = decoderWait
+                // T-286: parks until a frame, a retire or an output error; the timeout is a safety net.
                 val fromQueue = if (held == null) {
-                    queue.awaitNext(
-                        DecoderWaits.inputWaitNs(mode, System.nanoTime() - lastFrameNs, INPUT_WAIT_NS), att.gen, takeMark,
-                        if (mode.parksInput) inputAbort else null,
-                    )
+                    queue.awaitNext(DecoderWaits.EVENT_INPUT_WAIT_NS, att.gen, takeMark, inputAbort)
                 } else null
                 if (fromQueue != null) lastFrameNs = System.nanoTime()
                 if (fromQueue != null && trace != null) takenNs = lastFrameNs

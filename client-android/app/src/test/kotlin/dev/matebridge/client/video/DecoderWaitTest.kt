@@ -16,44 +16,17 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/**
- * T-286: event-driven input wait of the decoder (`dec_wait event_in`, the default) against the old fixed poll (`poll`,
- * a fallback kept for one cycle). The `event` arm (long output idle wait) is gone; its id parses to the default.
- */
+/** T-286: event-driven input wait of the decoder (the only mode since T-295; the fixed 4 ms poll is gone). */
 class DecoderWaitTest {
     private val ms = 1_000_000L
 
     // ---- policy (pure) ----
 
-    @Test fun parseKnownIdsAndFallBackToTheDefault() {
-        assertEquals(DecoderWait.EVENT_IN, DecoderWait.DEFAULT)
-        assertEquals(DecoderWait.EVENT_IN, DecoderWait.parse("event_in"))
-        assertEquals(DecoderWait.EVENT_IN, DecoderWait.parse(" Event_In "))
-        assertEquals(DecoderWait.POLL, DecoderWait.parse("poll"))
-        assertEquals(DecoderWait.POLL, DecoderWait.parse(" POLL "))
-        assertEquals(DecoderWait.EVENT_IN, DecoderWait.parse(null))
-        assertEquals(DecoderWait.EVENT_IN, DecoderWait.parse("fast"))
-        assertEquals("the removed event arm falls back to the default", DecoderWait.EVENT_IN, DecoderWait.parse("event"))
-        assertEquals(setOf("poll", "event_in"), DecoderWait.IDS)
+    @Test fun inputWaitIsASafetyNetNotAPoll() {
+        assertTrue(DecoderWaits.EVENT_INPUT_WAIT_NS >= 100 * ms)
     }
 
-    @Test fun defaultModeParksTheInputThread() {
-        for (since in listOf(0L, 100 * ms, 5_000 * ms)) {
-            assertEquals(DecoderWaits.EVENT_INPUT_WAIT_NS, DecoderWaits.inputWaitNs(DecoderWait.DEFAULT, since, 4 * ms))
-        }
-        assertTrue(DecoderWaits.EVENT_INPUT_WAIT_NS >= 100 * ms) // a safety net, not a poll
-        assertTrue(DecoderWait.EVENT_IN.parksInput)
-        assertFalse(DecoderWait.POLL.parksInput)
-    }
-
-    @Test fun pollFallbackKeepsTodaysInputWait() {
-        // 4 ms while frames flow, 20 ms (IdleWait) after 300 ms without one.
-        assertEquals(4 * ms, DecoderWaits.inputWaitNs(DecoderWait.POLL, 0, 4 * ms))
-        assertEquals(4 * ms, DecoderWaits.inputWaitNs(DecoderWait.POLL, 299 * ms, 4 * ms))
-        assertEquals(20 * ms, DecoderWaits.inputWaitNs(DecoderWait.POLL, 300 * ms, 4 * ms))
-    }
-
-    @Test fun outputWaitIsThePollForEveryModeWithNoLongIdleWait() {
+    @Test fun outputWaitIsThePollWithNoLongIdleWait() {
         // 5 ms while outputs flow, 20 ms (IdleWait) after 300 ms without one: never longer.
         assertEquals(5_000L, DecoderWaits.outputWaitUs(10 * ms, 5_000, null))
         assertEquals(5_000L, DecoderWaits.outputWaitUs(299 * ms, 5_000, null))
@@ -172,9 +145,9 @@ class DecoderWaitTest {
     private val env = TestDecoderEnv()
     private val renderers = CopyOnWriteArrayList<VideoRenderer>()
 
-    private fun make(mode: DecoderWait) = VideoRenderer(
+    private fun make() = VideoRenderer(
         config, onKeyframeRequest = {}, codecFactory = factory, env = env,
-    ).also { it.decoderWait = mode; renderers.add(it) }
+    ).also { renderers.add(it) }
 
     @After fun tearDown() {
         for (r in renderers) r.detachSurface()
@@ -199,41 +172,24 @@ class DecoderWaitTest {
     }
 
 
-    // ---- renderer: default (event_in) input park, output keeps polling ----
+    // ---- renderer: input park, output keeps polling ----
 
-    @Test fun theDefaultModeIsEventIn() {
-        val r = VideoRenderer(config, onKeyframeRequest = {}, codecFactory = factory, env = env)
-        renderers.add(r)
-        assertEquals(DecoderWait.EVENT_IN, r.decoderWait)
-    }
-
-    @Test fun eventInParksInputWithFarFewerWakeUpsThanPollAndTheOutputThreadKeepsPolling() {
-        val poll = make(DecoderWait.POLL)
-        startStream(poll)
-        val pollParks = idleParks(poll, 1_000)
-        val pollOut = factory.silentOutputPolls
-        poll.detachSurface()
-
-        val r = make(DecoderWait.EVENT_IN)
-        val codecsBefore = factory.codecs.size
-        r.attachTarget(Any())
-        assertTrue(factory.await { codecs.size > codecsBefore })
-        r.onFrame(frame(0, VideoFrame.CODEC_CONFIG))
-        r.onFrame(frame(1, VideoFrame.KEYFRAME))
-        val codec = factory.codecs.last()
-        assertTrue(factory.await { codec.renderedPts.contains(1L) })
+    @Test fun inputParksWithFewWakeUpsAndTheOutputThreadKeepsPolling() {
+        val r = make()
+        val codec = startStream(r)
         val outBefore = factory.silentOutputPolls
         val parks = idleParks(r, 1_000)
         val out = factory.silentOutputPolls - outBefore
 
-        // Absolute bound holds on a loaded machine too (slow threads only wake less often); poll (4 ms, then 20 ms after
-        // 300 ms idle) gives ~100 parks on an idle machine, event_in a handful.
-        assertTrue("input parks $parks (poll $pollParks)", parks <= 10 && parks < pollParks)
-        assertTrue("output polls $out (poll $pollOut)", out >= 15) // poll's 5 ms then 20 ms idle polls, not a handful
+        // Absolute bound holds on a loaded machine too (slow threads only wake less often); the removed 4 ms poll (then
+        // 20 ms after 300 ms idle) gave ~100 parks on an idle machine, the park a handful.
+        assertTrue("input parks $parks", parks <= 10)
+        assertTrue("output polls $out", out >= 15) // 5 ms then 20 ms idle polls, not a handful
+        assertTrue(codec.renderedPts.contains(1L))
     }
 
     @Test fun aFrameAfterALongIdleIsTakenAtOnceAndOrderIsKept() {
-        val r = make(DecoderWait.EVENT_IN)
+        val r = make()
         val codec = startStream(r)
         Thread.sleep(600)
         val inputsBefore = factory.queuedInputs
@@ -254,21 +210,8 @@ class DecoderWaitTest {
         assertEquals(0, env.lines("decode_error").size)
     }
 
-    @Test fun theModeCanBeSwitchedWhileRunning() {
-        val r = make(DecoderWait.POLL)
-        val codec = startStream(r)
-        r.decoderWait = DecoderWait.EVENT_IN
-        Thread.sleep(100)
-        r.onFrame(frame(2))
-        assertTrue(factory.await { codec.renderedPts.contains(2L) })
-        r.decoderWait = DecoderWait.POLL
-        Thread.sleep(100)
-        r.onFrame(frame(3))
-        assertTrue(factory.await { codec.renderedPts.contains(3L) })
-    }
-
     @Test fun aParkedInputThreadStopsAtOnceOnDetach() {
-        val r = make(DecoderWait.EVENT_IN)
+        val r = make()
         startStream(r)
         Thread.sleep(150)
         val t0 = System.nanoTime()
@@ -281,7 +224,7 @@ class DecoderWaitTest {
     }
 
     @Test fun anOutputThreadErrorIsSeenByAParkedInputThreadAtOnce() {
-        val r = make(DecoderWait.EVENT_IN)
+        val r = make()
         startStream(r)
         Thread.sleep(150)
         val t0 = System.nanoTime()
@@ -295,7 +238,7 @@ class DecoderWaitTest {
     }
 
     @Test fun reconfigureWhileParkedHandsOverToTheNextGeneration() {
-        val r = make(DecoderWait.EVENT_IN)
+        val r = make()
         startStream(r)
         Thread.sleep(150)
         r.reconfigure(config)
