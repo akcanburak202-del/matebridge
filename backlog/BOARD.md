@@ -27,7 +27,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-199](tasks/T-199-host-stale-input-policy.md) | Apply the stale-input policy on the host | 6 | mac-host-dev | [T-171, T-175] |
 | [T-200](tasks/T-200-host-display-keep-on-failure.md) | Keep a healthy display when capture or the encoder fails | 6 | mac-host-dev | [T-165, T-166] |
 | [T-202](tasks/T-202-host-crash-restart-agent.md) | Relaunch the host after a crash (LaunchAgent with KeepAlive) | 6 | mac-host-dev | [T-147, T-148] |
-| [T-304](tasks/T-304-host-vd-transfer-removal.md) | Host — MATEBRIDGE_VD_TRANSFER anahtarını kaldır (karar 0032 eki); HDR10 aktarım ve primer kurulumu kalır | 7 | mac-host-dev | [T-302] |
 | [T-307](tasks/T-307-str8-invalid-utf8.md) | Protokol — str8 içinde geçersiz UTF-8 iki tarafta da protokol hatası (E9); fixture invalid_str8_utf8 | 7 | orchestrator | [] |
 | [T-308](tasks/T-308-audio-sleep-gate-generation.md) | Host — ses uyku kapısı; kuyrukta bekleyen eski uyanma, yeni bir uykunun kapısını temizlemesin (uyku kuşağı) | 7 | mac-host-dev | [T-299] |
 | [T-310](tasks/T-310-decode-clock-60fps.md) | Ölçüm — 2800×1840@60'ta çözme süresi kare süresini aşıyor (Günlük'te karelerin %31'i > 16,7 ms); saat, DVFS ve girdi yükseltmesi | 7 | orchestrator | [T-306] |
@@ -322,6 +321,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-301](tasks/T-301-client-release-build.md) | Tablet — günlük kullanım için debug olmayan profileable derleme (aynı imza) ve minSdk 31 (karar 0037) | 7 | android-client-dev | [] |
 | [T-302](tasks/T-302-host-knob-removals.md) | Host — kapanmış deney anahtarlarını kaldır (BITRATE_STEP + canlı bit hızı zinciri, QUALITY, ENCODER=llrc, REFRESH, WIFI_BITRATE_KBPS, CHROMA 444/sharp_bilinear) | 7 | mac-host-dev | [] |
 | [T-303](tasks/T-303-client-dead-code-jitter.md) | Tablet — ölü ve yalnız testte kullanılan kod, sabit titreşim tamponu (FramePacer), API < 31 dalları | 7 | android-client-dev | [T-300] |
+| [T-304](tasks/T-304-host-vd-transfer-removal.md) | Host — MATEBRIDGE_VD_TRANSFER anahtarını kaldır (karar 0032 eki); HDR10 aktarım ve primer kurulumu kalır | 7 | mac-host-dev | [T-302] |
 | [T-305](tasks/T-305-pen-path-cost.md) | Kalem yolu maliyeti — örnek başına host CPU (~0,6 ms), her örneğin ayrı kayıt olması (max_batch=1), kontrol bağlantısında kuyruk (RTT 108 ms) | 7 | orchestrator | [T-296] |
 | [T-306](tasks/T-306-motion-skip-pct.md) | 60 fps içerik 60 Hz panelde %15–35 skip_pct — zamanlayıcı mı, panel mi, ölçüt mü | 7 | orchestrator | [T-296] |
 | [T-309](tasks/T-309-host-cursor-sampler-cost.md) | Host — yerel imleç örnekleyicisi her girdi olayında imleç görüntüsünü kopyalayıp hash'liyor; biçim kontrolü yalnız imleç değiştiğinde | 7 | mac-host-dev | [] |

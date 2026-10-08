@@ -1,13 +1,15 @@
 ---
 id: T-304
 title: Host — MATEBRIDGE_VD_TRANSFER anahtarını kaldır (karar 0032 eki); HDR10 aktarım ve primer kurulumu kalır
-status: review
+status: done
 phase: 7
 owner: mac-host-dev
 depends_on: [T-302]
 decisions: [0032]
 files:
-  - host-mac/Sources/MateBridgeHost/Video/VirtualDisplay.swift
+  - host-mac/Sources/MateBridgeHost/VirtualDisplay.swift  # (orkestratör düzeltmesi: gerçek yol)
+  - host-mac/Sources/MateBridgeHost/Video/VideoDump.swift  # (orkestratör, Codex P3: derleme için tek satır)
+  - host-mac/Sources/MateBridgeHost/Video/VideoPipeline.swift  # (orkestratör, Codex P3: yalnız yorum)
   - host-mac/Sources/MateBridgeHost/Session/StreamCoordinator.swift
   - host-mac/Sources/MateBridgeCore/Video/
   - host-mac/Tests/MateBridgeCoreTests/
@@ -40,3 +42,5 @@ Karar 0032 eki, 2026-10-08 (`docs/reviews/2026-10-08/agents/simp-f-knobs.md`, VD
 - Cihazda doğrulanmadı: Günlük'te SDR açılış (`vd_transfer requested=0 applied=0`) ve HDR açılış (`requested=1 applied=1 primaries=p3`).
 
 ## Open questions
+
+- (orkestratör) Kapsam istisnası: `VideoDump.swift` (kaldırılan anahtarı set eden tek satır) ve `VideoPipeline.swift` (yorum) kart dışıydı; `files:` düzeltildi. Kart yolu hatası orkestratörün.
