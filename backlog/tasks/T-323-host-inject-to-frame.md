@@ -1,7 +1,7 @@
 ---
 id: T-323
 title: Host — "girdi enjekte edildi → ilk değişen kare" süresi (EN2/HA3), SCK dirty rect ile; yalnız log
-status: todo
+status: review
 phase: 7
 owner: mac-host-dev
 depends_on: []
@@ -29,6 +29,20 @@ T-298 `docs/reviews/2026-10-08/agents/opt-c-e2e.md` EN2 ve `opt-a-host.md` HA3. 
 
 ## Plan
 
+Core: `InjectToFrameMatcher` (saf eşleştirme) + `InjectToFrameMeter` (kilitli, 10 sn rapor) + `MacEvent.isPressEdge`. Host: `InjectToFrameProbe` (Input/), InputController `flush` içinde post edilen basma kenarında damga, ScreenCapture `complete` karede dirty-rect varlığıyla besler. Log `video ev=inject_to_frame`.
+
 ## Handoff
+
+- Commit: `git log task/T-323-inject-to-frame -1` (T-323: inject-to-frame latency log).
+- Dosyalar: `Core/Video/InjectToFrame.swift` (yeni), `Tests/.../InjectToFrameTests.swift` (yeni, 9 test), `Host/Input/InjectToFrameProbe.swift` (yeni), `Host/Input/InputController.swift` (2 küçük ekleme: flush'ta damga, sessionStarted'da oturum no), `Host/Video/ScreenCapture.swift` (1 blok), bu kart.
+- Davranış: basma kenarı = keyDown/modifierDown (autorepeat hariç), fare düğmesi down, kalem down; CGEvent post'undan hemen sonra host saatiyle damgalanır (post başarısızsa damga yok). Örnek = ilk `complete` + boş olmayan dirty-rect karesinin SCK callback varış zamanı - damga. Dirty-rect listesi ekte yoksa "kirli" sayılır. Durağanlık: damgadan önceki 500 ms'de kirli kare varsa ölçülmez, `noisy` sayılır; 1 sn'de kare gelmezse `timeout`. Bekleyen ölçüm varken gelen ikinci basma aynı kareyle cevaplanır (ayrı örnek yok).
+- İkinci aşama (enjeksiyon noktasını içeren dirty rect) YAPILMADI: dirtyRects koordinat uzayı (piksel/nokta, Y yönü) cihazda doğrulanmadan eşlemek yanlış sonuç verirdi. Gerekirse ayrı kart.
+- 10 sn raporu: `StreamCoordinator` `files:` dışında olduğu için log probe içinden yazılır; ScreenCapture her `complete` karede ve basma sonrası tetikler. Yalnız örnek varken yazılır; oturum bitince son pencere yazılmayabilir.
+- Yaklaşıklık: durağanlıktan hemen sonra gelen alakasız bir ekran değişimi yanlış eşleşebilir; `noisy` azaltır, tam elemez.
+- check.sh: ALL OK (1034 test).
+- Cihazla doğrulanacak: (1) log satırı çıkıyor mu (host yeniden başlatılıp tabletten tuş/kalem basılınca), (2) `dirtyRects` ekte geliyor mu (gelmiyorsa her kare kirli sayılır, noisy artar), (3) değerler makul mü.
+- Önerilen LOGGING metni: `- V video ev=inject_to_frame n=<n> p50_ms=<f> p95_ms=<f> max_ms=<f> noisy=<n> timeout=<n>` (T-323): 10 sn'de bir, yalnız örnek varken. Örnek = bir basma kenarının (tuş/düğme/kalem teması) host'ta post edilmesinden sonra ilk değişen (boş olmayan dirty rect) `complete` SCK karesinin callback'ine kadar geçen süre. `noisy` = ekran son 500 ms içinde zaten değiştiği için ölçülmeyen basmalar, `timeout` = 1 sn içinde kare gelmeyen basmalar. Koordinat/içerik yok. Yaklaşık bir ölçüdür.
+- Review round 1 (Codex P2 x3, commits 75b59439 + follow-up): (1) probe meter reset at session begin/end, `generation` token bumped at end, ScreenCapture takes it at start() and old-session callbacks are ignored; (2) report moved off the `.complete` path to a 2 s utility timer plus forced flush at session end (static screens now report); (3) matcher judges frames by capture timestamp, not arrival: an earlier-captured dirty frame inside the 500 ms quiet window before an armed press drops it as noisy, older ones are ignored; tests added, and the old frame-before-press test updated to the new rule. check.sh: ALL OK. Not tested on device: timer/session-end log line.
+- Review round 2 (Codex high, 2 x P2): (1) the generation token is now taken once when `VideoPipeline` is created (`probeGeneration` property) and passed to `ScreenCapture.init`; `start()` no longer reads it, so a delayed start/retry cannot adopt a newer session's token. This touches `Video/VideoPipeline.swift` (property + one argument), outside `files:`, as the coordinator asked; (2) `InjectToFrameProbe` does session begin/end, frame validate+meter update, injection note and report-take (fields + the session ids they belong to) under one lock; end-of-session flush is taken and logged with the ending ids. No Core test added: the token rule lives in the Host-only probe. check.sh result below in the commit message/report.
 
 ## Open questions

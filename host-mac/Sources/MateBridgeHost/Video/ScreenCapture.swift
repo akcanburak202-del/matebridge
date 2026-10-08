@@ -36,14 +36,18 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
     private let onStop: @Sendable (Error) -> Void
     private let meter: CadenceMeter?
     private var stream: SCStream?
+    /// T-323: the inject-to-frame generation this capture started under (frames of an older session are ignored).
+    private let probeGeneration: UInt64
     /// The configuration the running stream has now (decision 0036: `setShowsCursor` changes only `showsCursor`).
     /// Guarded by `liveLock`, together with `stream`'s use there.
     private let liveLock = NSLock()
     private var liveConfig: SCStreamConfiguration?
     private let sampleQueue = DispatchQueue(label: "matebridge.capture", qos: .userInteractive)
 
-    init(meter: CadenceMeter? = nil, handler: @escaping Handler, onStop: @escaping @Sendable (Error) -> Void = { _ in }) {
+    init(meter: CadenceMeter? = nil, probeGeneration: UInt64, handler: @escaping Handler,
+         onStop: @escaping @Sendable (Error) -> Void = { _ in }) {
         self.meter = meter
+        self.probeGeneration = probeGeneration
         self.handler = handler
         self.onStop = onStop
     }
@@ -136,6 +140,12 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
         let us = UInt64(max(0, CMTimeGetSeconds(pts)) * 1_000_000)
         let status = raw.flatMap { SCFrameStatus(rawValue: $0) }
         meter?.recordCapture(status: ScreenCapture.statusName(status), ptsUs: us, arrivalUs: arrivalUs)
+        if status == .complete {
+            // T-323: an absent dirty-rect list counts as dirty (unknown); an empty one as unchanged.
+            let rects = attachments?.first?[.dirtyRects] as? [Any]
+            InjectToFrameProbe.shared.noteFrame(generation: probeGeneration, dirty: rects.map { !$0.isEmpty } ?? true,
+                                                arrivalUs: arrivalUs, captureUs: us)
+        }
         guard status == .complete, let pb = CMSampleBufferGetImageBuffer(sb) else { return }
         let displayUs = (attachments?.first?[.displayTime] as? UInt64).map(ScreenCapture.machTicksToUs) ?? 0
         handler(pb, pts, us, displayUs)

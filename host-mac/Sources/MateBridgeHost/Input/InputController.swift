@@ -186,6 +186,7 @@ public final class InputController: @unchecked Sendable {
             guard !stopped else { return }
             self.sessionID = sessionID
             self.configID = configID
+            InjectToFrameProbe.shared.beginSession(sessionID: sessionID, configID: configID)
             messages = 0
             eventsPosted = 0
             loggedDrops = pipeline.planner.counters
@@ -247,6 +248,7 @@ public final class InputController: @unchecked Sendable {
                     + "dropped_no_display=\(d.droppedNoDisplay - loggedDrops.droppedNoDisplay)"
                     + timingFields + ages.sessionFields)
             loggedDrops = d
+            InjectToFrameProbe.shared.endSession()  // T-323: reports the last samples under this session's ids
             sessionID = 0
             configID = 0
             endActivity()
@@ -432,6 +434,7 @@ public final class InputController: @unchecked Sendable {
                 "released=\(events.count) owed_before_drain=\(owedBeforeDrain) owed=\(remaining) "
                     + "permission=\(lastStatus?.accessibilityTrusted == true ? 1 : 0)")
             stopped = true
+            InjectToFrameProbe.shared.endSession()
             endActivity()
             watchdogTimer.cancel()
             pollTimer.cancel()
@@ -503,6 +506,10 @@ public final class InputController: @unchecked Sendable {
         let postStart = DispatchTime.now().uptimeNanoseconds
         let result = post(events)
         let postNs = DispatchTime.now().uptimeNanoseconds &- postStart
+        // T-323: a posted press edge starts an inject-to-frame measurement (host clock, right after the post).
+        if events.contains(where: { $0.isPressEdge && !result.failed.contains($0) }) {
+            InjectToFrameProbe.shared.noteInjection()
+        }
         eventsPosted += events.count - result.failed.count
         if !result.failed.isEmpty {
             pipeline.postFailed(result.failed, now: now, permitted: result.permitted)
