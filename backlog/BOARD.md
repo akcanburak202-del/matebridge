@@ -7,6 +7,9 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-147](tasks/T-147-recovery-runbook.md) | Write and rehearse the recovery runbook and known-good version pair | 6 | orchestrator | [T-145, T-146] |
+| [T-296](tasks/T-296-perf-baseline-kit.md) | Ölçüm tabanı — tekrarlanabilir sentetik senaryolarla iki tarafın CPU, uyanma, gecikme ve pil maliyeti (kullanıcısız) | 7 | orchestrator | [] |
+| [T-297](tasks/T-297-simplification-review.md) | Sadeleştirme incelemesi — alt sistem başına Opus ajanları + gpt-6-astra (high) mimari geçiş + gpt-6.1-sol doğrulama | 7 | orchestrator | [] |
+| [T-298](tasks/T-298-optimization-research.md) | Optimizasyon araştırması — gecikme zinciri, kodlayıcı/yakalama ayarları, tablet enerji/CPU, ağ | 7 | orchestrator | [] |
 
 ## todo
 
