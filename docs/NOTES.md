@@ -1740,3 +1740,31 @@ Yöntem T-282 (iş parçacığı `/proc` farkı), her kol uygulama yeniden başl
 - APK `main`'den (T-294 birleşmesi sonrası `check.sh` derlemesi) kablosuz adb ile kuruldu. Host yeniden paketlendi ve başlatıldı; tek süreç çalışıyor.
 - Host yeniden başlatıldıktan sonra yeni oturumda `video_health` STARTING → HEALTHY 0,4 sn sürdü. Breaker logu yok (beklenen); tuş girişi akıyor.
 - Kalıcı hata senaryosu cihazda denenmedi. Kullanıcıya normal kullanım kontrol listesi verildi.
+
+## 2026-10-08 ~11:12–11:20 — Arka plan ve zorla kapatma maliyeti (Wi-Fi, APK/host `a0348c49`, T-295 dahil)
+
+Yöntem: tablete adb ile `input keyevent HOME` ve `am force-stop`, ardından her biri için 150 sn ölçüm.
+- **Mac:** her 5 sn'de `top` (CPU) ve `nettop -d` (bayt); başta, +3, +12, +30, +60 sn'de ve sonda `system_profiler SPDisplaysDataType`.
+- **Tablet:** başta ve sonda `/proc/<pid>/stat` tik farkı, iş parçacığı sayısı, uygulama uid'inin TCP/UDP soketleri, `logcat -d`.
+- Kullanıcı Mac'i kullanmadı.
+
+| | Akış (taban, ~10 fps dönen simge) | Arka plan (HOME) | Zorla kapatma |
+|---|---|---|---|
+| Mac MateBridgeApp CPU | %3,5 | ilk 5 sn %0,9, sonra %0,1–0,2 | %0,1–0,3 |
+| Mac → tablet bayt | ~23 KB/s | ilk 5 sn 23 KB (BYE öncesi kuyruk), sonra **0** (150 sn) | ilk 5 sn 1,8 KB, sonra **0** |
+| Tablet → Mac bayt | ~190 B/s | ilk 5 sn 289 B, sonra **0** | sonra **0** |
+| Sanal ekran | 2800×1840 | +12 sn'de kalktı; yalnız 1920×1080 yer tutucu | +12 sn'de kalktı |
+| Tablet uygulaması | tek çekirdeğin %25'i, 40 iş parçacığı, 2 TCP | süreç önbellekte duruyor: %0,3 (151 sn'de 49 tik), 32 iş parçacığı, **0 soket**, **0 log satırı** | süreç yok, soket yok |
+
+- **Host sırası (arka plan):**
+  - `bye_received` geldikten sonra, aynı ~20 ms içinde ses, imleç ve girdi oturumu kapandı ve ekran uykusu tutması bırakıldı;
+  - ardından `display_parked keep_s=10`;
+  - 10,3 sn sonra `display_teardown reason=keep_expired`;
+  - sonra yalnız iki `input_gate`/`input_displays` satırı, ardından sessizlik.
+- **Zorla kapatma:** BYE yok. Mac bağlantının kapandığını (`control_closed`) ~0,3 sn'de gördü, çünkü çekirdek soketleri kapatınca FIN gidiyor. Sonrası arka planla aynı.
+- **Tablet arka plana giderken:** `release_all` (reason 1, 2, 0), `codec_stop`, `input_active on=0`, `activity_stop`.
+- `VTEncoderXPCService` host süreciyle birlikte duruyor ama %0 CPU, 2 iş parçacığı. Ekransız durumda WindowServer %3,9; bu macOS'un kendisi, Terminal'deki dönen simge de sayılabilir.
+- **Dönüş:**
+  - arka plandan: `activity_start` → `healthy` 0,51 sn, ekran sıfırdan kuruldu;
+  - zorla kapatmadan: soğuk açılış → `healthy` 1,25 sn.
+- **Ölçülmeyen:** ağın ya da gücün aniden kesilmesi (FIN gitmez; host zaman aşımına kalır) ve Mac'in arka planda uzun süre (saatler) kalması.
