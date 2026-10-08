@@ -32,6 +32,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-322](tasks/T-322-client-input-send-age-unbuffered.md) | Tablet — girdi gönderim yaşı istatistiği (EN1) ve parmak/trackpad/fare için tamponsuz dağıtım anahtarı (EN3) | 7 | android-client-dev | [] |
 | [T-323](tasks/T-323-host-inject-to-frame.md) | Host — "girdi enjekte edildi → ilk değişen kare" süresi (EN2/HA3), SCK dirty rect ile; yalnız log | 7 | mac-host-dev | [] |
 | [T-324](tasks/T-324-host-usb-watcher-idle.md) | Host — Wi-Fi'deyken USB tünel izleyicisi ~%1,5 işlemci harcıyor (adb yoklaması); kablo yokken yoklamayı seyrek ya da olay tabanlı yap | 7 | mac-host-dev | [] |
+| [T-325](tasks/T-325-coordinator-stall.md) | Host — StreamCoordinator oturum kapanışında takıldı; posta kutusu taştı ve her yeni oturum hemen kapandı (kullanıcı Mac'i zorla kapattı) | 7 | mac-host-dev | [] |
 
 ## done
 
