@@ -66,34 +66,14 @@ enum class StreamMode(val id: String, val label: String) {
         /** Every mode asks for the full encoded size now (the Performans scale is gone, decision 0030 §4). */
         const val SCALE_PERMILLE = 1000
 
-        /** Unknown or missing values fall back to [DEFAULT]; a removed (T-223) stored id maps like [LegacyModes]. */
+        /** Unknown or missing values (also the pre-T-223 ids) fall back to [DEFAULT]. */
         fun parse(id: String?): StreamMode =
-            entries.firstOrNull { it.id == id } ?: LegacyModes.migrate(id)?.mode ?: DEFAULT
+            entries.firstOrNull { it.id == id } ?: DEFAULT
 
         /** Overlay line: the chosen mode and what the host actually encodes, e.g. "Mod Günlük 120 fps | 2800x1840 @120". */
         fun overlayLine(mode: StreamMode, fps: Int, config: StreamConfig?): String =
             "Mod ${mode.label} ${mode.resolveFps(fps)} fps" + (if (config != null) " | ${config.widthPx}x${config.heightPx} @${config.fps}" else "")
     }
-}
-
-/**
- * Decision 0030 §5: the five pre-T-223 stored mode ids and what they become (a mode and its frame rate). `game` is also
- * the new Oyun id, so the one-time `Settings.migrateModesOnce` is what writes its 120 fps; [StreamMode.parse] alone maps
- * every old id to a mode.
- */
-object LegacyModes {
-    data class Migrated(val mode: StreamMode, val fps: Int)
-
-    /** Null for the three new ids (and for unknown or missing values: they become Günlük at its default). */
-    fun migrate(id: String?): Migrated? = when (id) {
-        "clarity" -> Migrated(StreamMode.DAILY, 60)
-        "smooth", "performance", "performance144" -> Migrated(StreamMode.DAILY, 120) // performance144: removed even earlier
-        "game60" -> Migrated(StreamMode.GAME, 60)
-        else -> null
-    }
-
-    /** What the stored [id] means for a first start after the update: the old `game` is Oyun 120 (the new Oyun defaults to 60). */
-    fun migrateStored(id: String?): Migrated? = if (id == "game") Migrated(StreamMode.GAME, 120) else migrate(id)
 }
 
 /**

@@ -43,7 +43,7 @@ class LatencyStageFormatTest {
     @Test fun latencyStageFieldsListEveryStage() {
         val s = VideoStats.Snapshot(60, 60, 58, 2, 4_000, 1_000, 11_000,
             capDec = full, readySlot = full, capRel = full, capCb = full, latNeg = 3, discarded = 2, renderCbMissing = 1)
-        val f = StatsFormat.latencyStageFields(s, codecCallbacks = true, clockUncUs = 2_300)
+        val f = StatsFormat.latencyStageFields(s, clockUncUs = 2_300)
         assertEquals(
             "cap_dec_p50_us=11000 cap_dec_p95_us=14000 cap_dec_p99_us=15000 cap_dec_max_us=16000 " +
                 "ready_slot_p50_us=11000 ready_slot_p95_us=14000 ready_slot_p99_us=15000 " +
@@ -52,9 +52,8 @@ class LatencyStageFormatTest {
                 "render_cb_missing=1 discarded=2 lat_neg=3 clock_unc_us=2300",
             f,
         )
-        val gl = StatsFormat.latencyStageFields(s, codecCallbacks = false, clockUncUs = null)
-        assertTrue(gl, gl.contains("cap_cb_p50_us=- ") && gl.contains("cap_cb_max_us=- render_cb_missing=- "))
-        assertTrue(gl, gl.endsWith(" clock_unc_us=-"))
+        val noClock = StatsFormat.latencyStageFields(s, clockUncUs = null)
+        assertTrue(noClock, noClock.endsWith(" clock_unc_us=-"))
     }
 
     @Test fun overlaySaysCaptureToDecodeAndShowsReadyToSlotAndClock() {

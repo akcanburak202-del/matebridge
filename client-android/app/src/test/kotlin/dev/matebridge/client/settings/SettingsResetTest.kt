@@ -121,7 +121,6 @@ class SettingsResetTest {
         val id = s.deviceId()
         s.saveEndpoint(Endpoint("192.168.1.20", 47800))
         kv.putString("transport", "usb")
-        assertEquals("usb", s.migrateTransportToAutoOnce()) // sets transport_auto_migrated
         kv.putString("wol_macs", "aa:bb:cc:dd:ee:ff")
         kv.putString("wol_host", "192.168.1.20")
         kv.putString("wol_port", "47800")
@@ -129,9 +128,9 @@ class SettingsResetTest {
         kv.putString("future_key", "x") // anything not on the user-setting list stays
         setEverythingNonDefault(s)
         val kept = kv.map.filterKeys {
-            it in setOf("device_id", "last_endpoint", "transport_auto_migrated", "wol_macs", "wol_host", "wol_port", "wol_subnet", "future_key")
+            it in setOf("device_id", "last_endpoint", "wol_macs", "wol_host", "wol_port", "wol_subnet", "future_key")
         }
-        assertEquals(8, kept.size)
+        assertEquals(7, kept.size)
         val pairBefore = LinkedHashMap(pairKeys.map)
 
         s.resetToDefaults()
@@ -140,7 +139,6 @@ class SettingsResetTest {
         assertEquals(pairBefore, pairKeys.map)
         assertArrayEquals(id, Settings(kv).deviceId())
         assertEquals(Endpoint("192.168.1.20", 47800), s.lastEndpoint())
-        assertNull(s.migrateTransportToAutoOnce()) // the T-096 migration does not run again
     }
 
     @Test fun resetOnAFreshInstallRemovesNothing() {

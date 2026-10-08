@@ -233,7 +233,7 @@ class PinchTest {
     @Test fun disablingFingersAndReleaseCancelAnOpenPinch() {
         val a = tracker()
         twoDown(a); spread(a, 20, 150f)
-        assertEquals(listOf(Pinch.CANCELLED), pinches(a.setDisabled(true, 50)).map { it.phase })
+        assertEquals(listOf(Pinch.CANCELLED), pinches(a.setPolicy(FingerPolicy.OFF, 50)).map { it.phase })
         val b = tracker()
         twoDown(b); spread(b, 20, 150f)
         assertEquals(listOf(Pinch.CANCELLED), pinches(b.release(50)).map { it.phase })
@@ -242,7 +242,7 @@ class PinchTest {
 
     @Test fun aDisabledTrackerRefusesTheSecondFingerSoNoPinchStarts() {
         val t = tracker()
-        t.setDisabled(true, 0)
+        t.setPolicy(FingerPolicy.OFF, 0)
         twoDown(t)
         assertTrue(spread(t, 20, 150f).isEmpty())
     }

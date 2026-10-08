@@ -4,7 +4,6 @@ import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
-import android.os.Build
 import android.os.Environment
 import android.os.Process
 import dev.matebridge.client.protocol.FilesInfo
@@ -122,7 +121,7 @@ class FilesController(
             }
         }
 
-    fun hasPermission(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && Environment.isExternalStorageManager()
+    fun hasPermission(): Boolean = Environment.isExternalStorageManager()
 
     /**
      * Starts or stops the server for the current [enabled] setting, [foreground] state and session ([sessionTrusted]
@@ -171,7 +170,6 @@ class FilesController(
      * then to the app's details. False when nothing could be opened.
      */
     fun openPermissionScreen(activity: Activity): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return false
         val pkg = Uri.parse("package:${activity.packageName}")
         val intents = listOf(
             Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, pkg),

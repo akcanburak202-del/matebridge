@@ -63,10 +63,8 @@ class TouchTracker(
     var policy = FingerPolicy.ALL
         private set
 
-    /** Every finger refused ([FingerPolicy.OFF]); assigning is [setPolicy] without sending the releases. */
-    var disabled: Boolean
-        get() = policy == FingerPolicy.OFF
-        set(value) { policy = if (value) FingerPolicy.OFF else FingerPolicy.ALL }
+    /** Every finger refused ([FingerPolicy.OFF]). */
+    val disabled: Boolean get() = policy == FingerPolicy.OFF
 
     private var mode = Mode.IDLE
     private var pointerId = -1
@@ -210,9 +208,6 @@ class TouchTracker(
         }
         return out
     }
-
-    fun setDisabled(value: Boolean, nowMs: Long): List<Outgoing> =
-        setPolicy(if (value) FingerPolicy.OFF else FingerPolicy.ALL, nowMs)
 
     /**
      * Switches the finger policy and returns the releases it owes:

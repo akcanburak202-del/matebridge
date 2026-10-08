@@ -18,8 +18,6 @@ class AudioRamp(private val channels: Int = 2) {
 
     fun fadeIn(frames: Int) = rampTo(1f, frames)
 
-    fun setSilent() { gain = 0f; target = 0f; stepPerFrame = 0f }
-
     private fun rampTo(to: Float, frames: Int) {
         target = to
         if (frames <= 0) { gain = to; stepPerFrame = 0f; return }

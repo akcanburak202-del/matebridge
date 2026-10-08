@@ -278,7 +278,7 @@ class FingerPolicyTest {
         assertTrue(t.setPolicy(FingerPolicy.GESTURES_ONLY, 5).isEmpty())
         assertEquals(FingerPolicy.GESTURES_ONLY, t.policy)
         assertFalse(t.disabled)
-        t.setDisabled(true, 10)
+        t.setPolicy(FingerPolicy.OFF, 10)
         assertTrue(t.disabled)
         assertEquals(FingerPolicy.OFF, t.policy)
     }

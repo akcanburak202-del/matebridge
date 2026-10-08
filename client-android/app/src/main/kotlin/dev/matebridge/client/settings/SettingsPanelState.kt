@@ -57,9 +57,6 @@ class SettingsPanelState(
         return true
     }
 
-    /** Ctrl+Shift+6 toggles the panel (the activity calls this for [LocalAction.SETTINGS] while the panel is closed). */
-    fun toggle(via: Via, streaming: Boolean): Boolean = if (isOpen) close(via) else open(via, streaming)
-
     /** Input goes to the Mac only when it would otherwise ([base]) and the panel is closed. */
     fun inputAllowed(base: Boolean): Boolean = base && !isOpen
 

@@ -36,11 +36,6 @@ data class DevKnobs(
     val ignored: List<String> = emptyList(),
     /** Honoured, profile-relevant knobs as `key:value` ([SPECS] order); the `ev=profile` `knobs=` field. */
     val knobs: List<String> = emptyList(),
-    /**
-     * `--ei jitter N`: fixed jitter buffer 0..2, or [JITTER_ADAPTIVE] (T-210: the adaptive pacer even in game modes);
-     * null = not given (the mode decides).
-     */
-    val jitter: Int? = null,
     /** `--ei hz N`: null = follow the stream. */
     val hz: Int? = null,
     /** `--ei lead_us N` (>= 0); null = default lead. */
@@ -110,7 +105,6 @@ data class DevKnobs(
 
         /** Decision 0026 classes (`docs/KNOBS.md`), in log order. */
         val SPECS: List<Spec> = listOf(
-            Spec("jitter", Kind.INT, debugOnly = true),
             Spec("hz", Kind.INT, debugOnly = true),
             Spec("lead_us", Kind.INT, debugOnly = true),
             Spec("deadline_us", Kind.INT, debugOnly = true),
@@ -140,12 +134,6 @@ data class DevKnobs(
 
         val DEBUG_ONLY_KEYS: Set<String> = SPECS.filter { it.debugOnly }.map { it.key }.toSet()
 
-        /** `--ei jitter -1`: the adaptive pacer (equals `VideoRenderer.BUFFER_ADAPTIVE`; T-210, A/B in game modes). */
-        const val JITTER_ADAPTIVE = -1
-
-        /** T-210: -1 is kept (adaptive); anything else is clamped to the fixed buffer range 0..2 as before. */
-        fun jitter(v: Int): Int = if (v == JITTER_ADAPTIVE) v else v.coerceIn(0, 2)
-
         fun parse(raw: LaunchExtras): DevKnobs {
             val dev = raw.bool(EXTRA_DEV, false)
             val ignored = if (dev) emptyList() else SPECS.filter { it.debugOnly && raw.has(it.key) }.map { it.key }
@@ -155,7 +143,6 @@ data class DevKnobs(
                 dev = dev,
                 ignored = ignored,
                 knobs = knobs,
-                jitter = if (x.has("jitter")) jitter(x.int("jitter", 0)) else null,
                 hz = if (x.has("hz")) x.int("hz", -1) else null,
                 leadUs = if (x.has("lead_us")) x.int("lead_us", -1).takeIf { it >= 0 } else null,
                 deadlineUs = if (x.has("deadline_us")) x.int("deadline_us", -1) else null,
@@ -221,8 +208,6 @@ data class StreamProfile(
     /** Audio playback on, and the output preference in effect ([AudioOutPref.id]). */
     val audioOn: Boolean,
     val audioOut: String,
-    /** Renderer buffer: negative = adaptive pacer, else the fixed jitter buffer in frames. */
-    val bufferFrames: Int,
     /** T-215: the requested game display (STREAM_PREFS `display_*`); 0×0 = native HiDPI display. */
     val displayWidthPx: Int = 0,
     val displayHeightPx: Int = 0,
@@ -237,7 +222,7 @@ data class StreamProfile(
             "bitrate_kbps=$bitrateKbps " +
             "bitrate_setting=${if (bitrateSettingKbps <= 0) "auto" else bitrateSettingKbps.toString()} " +
             "transport=${id(transport)} transport_mode=${id(transportMode)} audio=${if (audioOn) 1 else 0} " +
-            "audio_out=${id(audioOut)} pacer=${if (bufferFrames < 0) "adaptive" else "buffer$bufferFrames"} " +
+            "audio_out=${id(audioOut)} pacer=adaptive " + // constant since T-303; tools/measure/mblog.py reads it
             "sha=${token(sha)} built=${token(built)} dev=${if (knobs.dev) 1 else 0} " +
             "knobs=${knobs.knobs.joinToString(";").ifEmpty { "-" }}"
 

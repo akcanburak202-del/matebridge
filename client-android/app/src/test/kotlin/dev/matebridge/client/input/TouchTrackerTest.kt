@@ -216,11 +216,11 @@ class TouchTrackerTest {
         val t = tracker()
         t.onFrame(touchFrame(TouchAction.DOWN, 0, 1, finger(1, 300f, 400f)), 0)
         t.tick(50)
-        assertEquals(listOf(0), buttons(t.setDisabled(true, 60)))
+        assertEquals(listOf(0), buttons(t.setPolicy(FingerPolicy.OFF, 60)))
         assertTrue(t.onFrame(touchFrame(TouchAction.DOWN, 100, 2, finger(2, 10f, 10f)), 100).isEmpty())
         assertTrue(t.tick(500).isEmpty())
         assertTrue(t.isIdle)
-        assertTrue(t.setDisabled(false, 600).isEmpty())
+        assertTrue(t.setPolicy(FingerPolicy.ALL, 600).isEmpty())
         t.onFrame(touchFrame(TouchAction.DOWN, 700, 3, finger(3, 10f, 10f)), 700)
         assertFalse(t.isIdle)
     }

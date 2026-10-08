@@ -147,7 +147,7 @@ class AuxDecoder(
     }
 
     private fun format(codec: DecoderCodec): DecoderFormat {
-        val mime = if (config.codec == StreamConfig.CODEC_H264) MediaFormat.MIMETYPE_VIDEO_AVC else MediaFormat.MIMETYPE_VIDEO_HEVC
+        val mime = videoMime(config)
         val f = DecoderFormat(mime, config.widthPx, config.heightPx)
         f.setInteger(MediaFormat.KEY_PRIORITY, 0)
         f.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, config.widthPx * config.heightPx * 3 / 2)
@@ -165,7 +165,7 @@ class AuxDecoder(
         val outError = java.util.concurrent.atomic.AtomicReference<String?>(null)
         val running = java.util.concurrent.atomic.AtomicBoolean(true)
         try {
-            val mime = if (config.codec == StreamConfig.CODEC_H264) MediaFormat.MIMETYPE_VIDEO_AVC else MediaFormat.MIMETYPE_VIDEO_HEVC
+            val mime = videoMime(config)
             val c = codecFactory.create(mime)
             codec = c
             c.configure(format(c), surface)

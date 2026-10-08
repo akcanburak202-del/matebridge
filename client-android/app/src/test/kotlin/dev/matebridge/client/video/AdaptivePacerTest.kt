@@ -317,7 +317,7 @@ class PresentMeterTest {
         val snap = st.snapshot(reset = true)
         assertEquals(50.0, snap.skipPct!!, 0.0)
         assertNull(st.snapshot().skipPct)
-        val line = StatsFormat.pacingLine(120f, -1, 4_000, 1.5)
+        val line = StatsFormat.pacingLine(120f, 4_000, 1.5)
         assertTrue(line, line.contains("Uyarlı") && line.contains("%1.5"))
     }
 }

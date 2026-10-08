@@ -85,7 +85,7 @@ object Capabilities {
     /** Handles the audio messages (0x30-0x32) and plays PCM s16le 48 kHz stereo (T-095; off with `--ez audio false`). */
     const val AUDIO_PCM = 1 shl 8
 
-    /** Opens the settings panel while streaming and handles SETTINGS_OPEN (decision 0013). Not sent yet: T-105 turns it on. */
+    /** Opens the settings panel while streaming and handles SETTINGS_OPEN (decision 0013, sent since T-105). */
     const val SETTINGS_PANEL = 1 shl 9
 
     /** Can run the tablet-files WebDAV server and sends FILES_INFO (decision 0015, T-135). */
@@ -200,7 +200,10 @@ data class StreamPrefs(
     val displayWidthPx: Int = 0,
     val displayHeightPx: Int = 0,
     val dynamicRange: Int = DYNAMIC_RANGE_SDR,
-    /** Decision 0033: `0` normal 4:2:0, `1` sharp colour edges (host luma-adjusted 4:2:0). Same group as [dynamicRange]. */
+    /**
+     * Decision 0033: `0` normal 4:2:0, `1` sharp colour edges (host luma-adjusted 4:2:0), `2` packed full colour
+     * (decision 0034, [CHROMA_FULL]). Same group as [dynamicRange].
+     */
     val chroma: Int = CHROMA_NORMAL,
 ) : Message {
     override val type get() = MsgType.STREAM_PREFS

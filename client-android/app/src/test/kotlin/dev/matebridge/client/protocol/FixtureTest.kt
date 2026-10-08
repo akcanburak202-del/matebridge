@@ -2,6 +2,7 @@ package dev.matebridge.client.protocol
 
 import java.io.File
 import java.util.Random
+import dev.matebridge.client.security.hex
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -27,8 +28,6 @@ class FixtureTest {
             }
             return out.toByteArray()
         }
-
-        private fun hex(s: String) = ByteArray(s.length / 2) { s.substring(it * 2, it * 2 + 2).toInt(16).toByte() }
 
         private val deviceId = Bytes(hex("0123456789abcdef0123456789abcdef"))
         private val clientNonce = Bytes(hex("c0c1c2c3c4c5c6c7c8c9cacbcccdcecf"))

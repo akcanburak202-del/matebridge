@@ -20,7 +20,7 @@ class DevKnobsTest {
 
     /** Every debug-only key with a non-default value. */
     private val allDebugOnly: Array<Pair<String, Any>> = arrayOf(
-        "jitter" to 1, "hz" to 120, "lead_us" to 4000, "deadline_us" to -1, "ping_ms" to 100,
+        "hz" to 120, "lead_us" to 4000, "deadline_us" to -1, "ping_ms" to 100,
         "audio" to false, "transport" to "wifi", "audio_out" to "track",
         "audio_buf_bursts" to 3, "quickack" to false, "net_bench" to "192.168.1.20:5201", "net_bench_s" to 5,
         "net_bench_dir" to "up", "net_bench_streams" to 2, "net_bench_rcvbuf_kb" to 512, "decoder_fault" to "dequeue",
@@ -32,7 +32,6 @@ class DevKnobsTest {
 
     private fun assertDefaults(k: DevKnobs) {
         val d = DevKnobs()
-        assertNull(k.jitter)
         assertNull(k.hz)
         assertNull(k.leadUs)
         assertNull(k.deadlineUs)
@@ -73,14 +72,14 @@ class DevKnobsTest {
     }
 
     @Test fun devFalseIsTheSameAsAbsent() {
-        val k = parse("dev" to false, "jitter" to 1)
-        assertNull(k.jitter)
-        assertEquals("dev=0 ignored=jitter", k.logFields())
+        val k = parse("dev" to false, "hz" to 1)
+        assertNull(k.hz)
+        assertEquals("dev=0 ignored=hz", k.logFields())
     }
 
     @Test fun ignoredLineNamesKeysOnly() {
-        val k = parse("jitter" to 1, "net_bench" to "10.0.0.5:5201")
-        assertEquals("dev=0 ignored=jitter,net_bench", k.logFields())
+        val k = parse("hz" to 1, "net_bench" to "10.0.0.5:5201")
+        assertEquals("dev=0 ignored=hz,net_bench", k.logFields())
         assertFalse(k.logFields().contains("10.0.0.5"))
     }
 
@@ -88,7 +87,6 @@ class DevKnobsTest {
         val k = parse("dev" to true, *allDebugOnly)
         assertTrue(k.dev)
         assertEquals(emptyList<String>(), k.ignored)
-        assertEquals(1, k.jitter)
         assertEquals(120, k.hz)
         assertEquals(4000, k.leadUs)
         assertEquals(-1, k.deadlineUs)
@@ -105,26 +103,6 @@ class DevKnobsTest {
         assertFalse(k.gameDisplay)
         assertEquals(PacerTuning(3, false), k.pacerTuning)
         assertEquals("dev=1 ignored=-", k.logFields())
-    }
-
-    @Test fun jitterIsClampedButMinusOneSelectsAdaptive() {
-        assertEquals(DevKnobs.JITTER_ADAPTIVE, parse("dev" to true, "jitter" to -1).jitter)
-        assertEquals(dev.matebridge.client.video.VideoRenderer.BUFFER_ADAPTIVE, DevKnobs.JITTER_ADAPTIVE)
-        assertEquals(0, parse("dev" to true, "jitter" to -2).jitter)
-        assertEquals(2, parse("dev" to true, "jitter" to 3).jitter)
-        assertEquals(2, parse("dev" to true, "jitter" to 9).jitter)
-        for (v in 0..2) assertEquals(v, parse("dev" to true, "jitter" to v).jitter)
-    }
-
-    @Test fun adaptiveJitterWithoutDevIsIgnored() {
-        val k = parse("jitter" to -1)
-        assertNull(k.jitter)
-        assertEquals("dev=0 ignored=jitter", k.logFields())
-        assertEquals(emptyList<String>(), k.knobs)
-    }
-
-    @Test fun adaptiveJitterIsListedInKnobs() {
-        assertEquals(listOf("jitter:-1"), parse("dev" to true, "jitter" to -1).knobs)
     }
 
     @Test fun negativeLeadIsIgnoredAndDeadlineKeepsMinusOne() {
@@ -155,7 +133,7 @@ class DevKnobsTest {
         val k = parse("dev" to true, *allDebugOnly, "stats_1s" to true)
         assertEquals(
             listOf(
-                "jitter:1", "hz:120", "lead_us:4000", "deadline_us:-1", "ping_ms:100",
+                "hz:120", "lead_us:4000", "deadline_us:-1", "ping_ms:100",
                 "audio:0", "transport:wifi", "audio_out:track", "audio_buf_bursts:3", "audio_idle_pause:stop", "quickack:0",
                 "decoder_fault:dequeue", "decoder_fault_after_s:15", "game_display:0",
                 "pace_dcap_half:3", "pace_feedback:0", "catch_up:0", "cursor_predict:0", "stats_1s:1",
@@ -177,12 +155,11 @@ class DevKnobsTest {
         transport: String = "usb",
         mode: String = "smooth",
         audioOut: String = "auto",
-        bufferFrames: Int = -1,
         settingKbps: Long = 0,
     ) = StreamProfile(
         mode = mode, fps = 120, widthPx = 2800, heightPx = 1840, scalePermille = 1000, bitrateKbps = 60_000,
         bitrateSettingKbps = settingKbps, transport = transport, transportMode = "auto", audioOn = true,
-        audioOut = audioOut, bufferFrames = bufferFrames,
+        audioOut = audioOut,
     )
 
     @Test fun profileHasTheDocumentedFieldsInOrder() {
@@ -200,14 +177,14 @@ class DevKnobsTest {
         assertTrue(line, line.contains(" display=native hdr=1 bitrate_kbps=60000 "))
     }
 
-    @Test fun profileShowsFixedBufferBitrateSettingDevAndKnobs() {
-        val k = parse("dev" to true, "jitter" to 1, "pace_trace" to true)
-        val line = profile(transport = "wifi", bufferFrames = 1, settingKbps = 40_000).logFields("abc1234-dirty", "unknown", k)
+    @Test fun profileShowsBitrateSettingDevAndKnobs() {
+        val k = parse("dev" to true, "hz" to 120, "pace_trace" to true)
+        val line = profile(transport = "wifi", settingKbps = 40_000).logFields("abc1234-dirty", "unknown", k)
         assertTrue(line, line.contains(" bitrate_setting=40000 "))
         assertTrue(line, line.contains(" transport=wifi "))
-        assertTrue(line, line.contains(" pacer=buffer1 "))
+        assertTrue(line, line.contains(" pacer=adaptive "))
         assertTrue(line, line.contains(" sha=abc1234-dirty built=unknown dev=1 "))
-        assertTrue(line, line.endsWith(" knobs=jitter:1;pace_trace:1"))
+        assertTrue(line, line.endsWith(" knobs=hz:120;pace_trace:1"))
     }
 
     @Test fun gameDisplayKnob() {

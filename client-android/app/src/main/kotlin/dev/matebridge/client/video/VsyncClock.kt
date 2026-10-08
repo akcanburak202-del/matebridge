@@ -151,55 +151,16 @@ class VsyncClock(private val initialHz: Float = 60f) {
 }
 
 /**
- * Chooses the render timestamp for each decoded frame (used with releaseOutputBuffer(idx, ns)).
- *
- * Buffer N means: present at the first vsync V >= decode-ready time + N vsync periods of slack, so the
- * added latency versus rendering at once is about N periods (<= 1 content frame at buffer 1 on a 60 or
- * 120 Hz display). The timestamp handed to the codec is V - period/2 (mid-period, robust to phase error;
- * the compositor shows the frame at V). Consecutive frames keep the content cadence (one cadence step
- * apart) so arrival jitter does not become uneven display times, but the cadence debt is bounded: when a
- * frame would be later than its decode-ready target by more than half a content frame, it re-anchors to
- * its own decode-ready target. A collision is reported only when the newer frame ends up on the previous
- * frame's slot (the older one is superseded: newest wins). Single-threaded (decoder thread).
+ * A pacing decision for one decoded frame. [renderNs] goes to releaseOutputBuffer; [addedNs] is the delay versus the
+ * earliest possible vsync; [slotNs] is the target vsync (display time). [lateDrop]: the frame found no slot within the
+ * latency bound and shares the previous frame's slot instead of queueing behind it.
  */
-class FramePacer(
-    private val vsync: VsyncClock,
-    @Volatile var bufferFrames: Int,
-    private val frameIntervalNs: Long,
-) {
-    /** T-059: effective content interval for a given panel period; null = the stream's own interval. */
-    @Volatile var intervalProvider: ((Long) -> Long)? = null
+class PacerDecision(
+    val renderNs: Long, val collided: Boolean, val addedNs: Long, val skipped: Boolean = false,
+    val slotNs: Long = 0, val lateDrop: Boolean = false,
+    /** For a [lateDrop]: the slot this frame would have taken (display time); 0 otherwise. */
+    val ownSlotNs: Long = 0,
+)
 
-    /**
-     * [renderNs] goes to releaseOutputBuffer; [addedNs] is the delay versus the earliest possible vsync; [slotNs]
-     * is the target vsync (display time). [lateDrop]: the frame found no slot within the latency bound and shares
-     * the previous frame's slot instead of queueing behind it.
-     */
-    class Decision(
-        val renderNs: Long, val collided: Boolean, val addedNs: Long, val skipped: Boolean = false,
-        val slotNs: Long = 0, val lateDrop: Boolean = false,
-        /** For a [lateDrop]: the slot this frame would have taken (display time); 0 otherwise. */
-        val ownSlotNs: Long = 0,
-    )
-
-    private var lastVsyncNs = Long.MIN_VALUE
-
-    /** Null when no vsync sample exists yet: the caller renders immediately. */
-    fun schedule(nowNs: Long): Decision? {
-        if (!vsync.hasSample) return null
-        val grid = vsync.grid()
-        val period = grid.periodNs
-        val fi = intervalProvider?.invoke(period) ?: if (frameIntervalNs > 0) frameIntervalNs else period
-        val earliest = grid.slotAtOrAfter(nowNs, 0.0)
-        val base = grid.slotAtOrAfter(nowNs + bufferFrames.coerceIn(0, 2) * period, 0.0)
-        val cadence = Math.round(fi.toDouble() / period).coerceAtLeast(1) * period
-        var v = if (lastVsyncNs == Long.MIN_VALUE) base else maxOf(base, lastVsyncNs + cadence)
-        if (v - base > fi / 2) v = base // re-anchor: too much cadence debt
-        var collided = false
-        if (lastVsyncNs != Long.MIN_VALUE && v <= lastVsyncNs) { v = lastVsyncNs; collided = true }
-        lastVsyncNs = v
-        return Decision(v - vsync.leadNs(), collided, (v - earliest).coerceAtLeast(0), slotNs = v)
-    }
-
-    fun reset() { lastVsyncNs = Long.MIN_VALUE }
-}
+/** The content cadence as a whole number of panel periods (at least one), in ns; [fiNs] is the content interval. */
+internal fun cadenceNs(fiNs: Long, periodNs: Long): Long = Math.round(fiNs.toDouble() / periodNs).coerceAtLeast(1) * periodNs

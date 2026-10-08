@@ -6,12 +6,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class QuickAckTest {
-    @Test fun parseExtra() {
-        assertTrue(QuickAck.parseExtra(false, false)) // absent: on
-        assertTrue(QuickAck.parseExtra(true, true))
-        assertFalse(QuickAck.parseExtra(true, false))
-    }
-
     @Test fun rearmsAfterEveryRead() {
         var n = 0
         val q = QuickAck(true, { n++ })

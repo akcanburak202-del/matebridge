@@ -170,7 +170,7 @@ class LatencyStageRendererTest {
     private val config = StreamConfig(1, StreamConfig.CODEC_HEVC, 2800, 1840, 1400, 920, 60, 50000, 1, 13, 1, 1)
     private val factory = FakeDecoderFactory()
     private val env = TestDecoderEnv()
-    private val renderer = VideoRenderer(config, onKeyframeRequest = {}, bufferFrames = 0, codecFactory = factory, env = env)
+    private val renderer = VideoRenderer(config, onKeyframeRequest = {}, codecFactory = factory, env = env)
 
     @After fun tearDown() = renderer.detachSurface()
 

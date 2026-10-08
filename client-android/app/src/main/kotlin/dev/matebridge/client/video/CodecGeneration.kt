@@ -114,7 +114,7 @@ class GenerationHandoff(private val timer: HandoffTimer = HandoffTimer.SYSTEM) {
         return locked
     }
 
-    fun isFinished(g: CodecGeneration): Boolean = lock.withLock { g.liveThreads <= 0 }
+    internal fun isFinished(g: CodecGeneration): Boolean = lock.withLock { g.liveThreads <= 0 }
 
     /** True when no generation holds a codec any more (the owner's decoder and output threads all exited). */
     fun isIdle(): Boolean = lock.withLock { owner.let { it == null || it.liveThreads <= 0 } }

@@ -171,10 +171,6 @@ class InputCapture(
         rel.widthPt = widthPt
     }
 
-    /** "Parmak dokunmasını tamamen kapat". Turning it on releases any finger currently held. */
-    fun setFingersDisabled(disabled: Boolean, nowMs: Long) =
-        setFingerPolicy(if (disabled) FingerPolicy.OFF else FingerPolicy.ALL, nowMs)
-
     /** The finger policy in effect ([FingerPolicy]); [fingersDisabled] is only its OFF case. */
     val fingerPolicy get() = touch.policy
 

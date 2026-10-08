@@ -79,7 +79,7 @@ class GameModeSettings(
     /** True while a layer (Oyun or Çizim) is in effect. */
     val active: Boolean get() = layer != null
 
-    /** True while the Oyun layer is in effect (jitter choice, `GameJitter`). */
+    /** True while the Oyun layer is in effect. */
     val gameActive: Boolean get() = layerMode == StreamMode.GAME
 
     /** The mode whose layer is in effect, null in Günlük. The panels mark the layered settings with it ([marker]). */
@@ -310,34 +310,8 @@ class GameModeSettings(
         }
 
         /** `ev=mode_layer` fields, e.g. `mode=game action=enter overrides=bitrate,audio,pen jitter=adaptive ...`. */
-        fun logFields(t: Transition, jitter: GameJitter.Choice, effective: Values): String =
-            "mode=${t.mode.id} action=${t.change.action} overrides=${overridesText(t.mode)} jitter=${GameJitter.label(jitter.bufferFrames)}" +
-                (if (jitter.source != GameJitter.Source.MODE) " jitter_src=${jitter.source.id}" else "") +
+        fun logFields(t: Transition, effective: Values): String =
+            "mode=${t.mode.id} action=${t.change.action} overrides=${overridesText(t.mode)}" +
                 " bitrate_kbps=${effective.bitrateKbps} audio_out=${effective.audioOut.id} fingers=${effective.fingers.id}"
     }
-}
-
-/**
- * The video jitter buffer per display mode (decision 0014 §2, amended 2026-10-04, T-211):
- * [VideoRenderer.BUFFER_ADAPTIVE] in every mode, game modes included (buffer 0 skipped ~10% of vsyncs at 60 fps on
- * the 120 Hz panel). A launch value (`--ez dev true --ei jitter N`) always wins: `0` gives the old game-mode
- * behaviour (each frame to the next vsync) for A/B, `-1` = [VideoRenderer.BUFFER_ADAPTIVE] (T-210).
- */
-object GameJitter {
-    enum class Source(val id: String) { MODE("mode"), EXTRA("extra") }
-
-    data class Choice(val bufferFrames: Int, val source: Source)
-
-    /**
-     * [launch] is the launch-time buffer ([VideoRenderer.BUFFER_ADAPTIVE] when nothing was given); [fixed] is where a
-     * fixed launch value came from (null = none, the mode decides).
-     */
-    fun choose(launch: Int, fixed: Source?, game: Boolean): Choice = when {
-        fixed != null -> Choice(launch, fixed)
-        game -> Choice(VideoRenderer.BUFFER_ADAPTIVE, Source.MODE)
-        else -> Choice(launch, Source.MODE)
-    }
-
-    /** "adaptive" or the buffer size in frames. */
-    fun label(bufferFrames: Int): String = if (bufferFrames == VideoRenderer.BUFFER_ADAPTIVE) "adaptive" else bufferFrames.toString()
 }

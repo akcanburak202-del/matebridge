@@ -74,24 +74,6 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
         if (fps in dev.matebridge.client.stream.StreamMode.FPS_OPTIONS) store.putString(key, fps.toString())
     }
 
-    /**
-     * T-223 one-time migration (decision 0030 §5): the pre-T-223 five mode ids become a mode plus that mode's frame rate
-     * (`clarity` Günlük 60, `smooth`/`performance` Günlük 120, `game` Oyun 120, `game60` Oyun 60). The flag is set either
-     * way (so a new Oyun choice with the default 60 is never mistaken for an old `game`) and survives "Varsayılanlara
-     * dön". Returns what the stored id became, or null when nothing was stored to migrate.
-     */
-    fun migrateModesOnce(): dev.matebridge.client.stream.LegacyModes.Migrated? {
-        if (store.getString(KEY_MODES_MIGRATED) == "1") return null
-        val old = store.getString(KEY_STREAM_MODE)
-        val m = dev.matebridge.client.stream.LegacyModes.migrateStored(old)
-        if (m != null) {
-            store.putString(KEY_STREAM_MODE, m.mode.id)
-            setModeFps(m.mode, m.fps)
-        }
-        store.putString(KEY_MODES_MIGRATED, "1")
-        return m
-    }
-
     /** "Oyun çözünürlüğü" (T-215, decision 0029); default 1848×1214, also for an unknown stored value. */
     fun gameResolution(): dev.matebridge.client.stream.GameResolution =
         dev.matebridge.client.stream.GameResolution.parse(store.getString(KEY_GAME_RESOLUTION))
@@ -190,20 +172,6 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
     fun setTransportMode(m: TransportMode) = store.putString(KEY_TRANSPORT, m.id)
 
     /**
-     * T-096 one-time migration (orchestrator decision): a `usb`/`wifi` stored before T-096 is reset to AUTO once, because
-     * the user asked for automatic switching and had probably tapped a transport button long ago. The flag is set
-     * either way, so every later panel choice (including `usb`/`wifi`) is respected. Returns the replaced value, or
-     * null when nothing was changed.
-     */
-    fun migrateTransportToAutoOnce(): String? {
-        if (store.getString(KEY_TRANSPORT_AUTO_MIGRATED) == "1") return null
-        val old = store.getString(KEY_TRANSPORT)
-        if (old != null && old != TransportMode.AUTO.id) store.putString(KEY_TRANSPORT, TransportMode.AUTO.id)
-        store.putString(KEY_TRANSPORT_AUTO_MIGRATED, "1")
-        return old?.takeIf { it != TransportMode.AUTO.id }
-    }
-
-    /**
      * "Parmak dokunmasını tamamen kapat" (decision 0006): when on, finger touches are never sent.
      * Default off, so fingers work unless the user turns them off.
      */
@@ -272,7 +240,6 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
         const val KEY_DEVICE_ID = "device_id"
         const val KEY_ENDPOINT = "last_endpoint"
         const val KEY_TRANSPORT = "transport"
-        const val KEY_TRANSPORT_AUTO_MIGRATED = "transport_auto_migrated"
         const val KEY_STATS = "stats_overlay"
         const val KEY_STREAM_MODE = "stream_mode"
         const val KEY_BITRATE = "bitrate_kbps"
@@ -281,7 +248,6 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
         const val KEY_FPS_GAME = "fps_game"
         const val KEY_HDR_GAME = "hdr_game"
         const val KEY_HDR_DAILY = "hdr_daily"
-        const val KEY_MODES_MIGRATED = "modes_migrated"
         const val KEY_PAD_SPEED = "touchpad_speed"
         const val KEY_MOUSE_SPEED = "mouse_speed"
         const val KEY_CLIPBOARD = "clipboard_share"

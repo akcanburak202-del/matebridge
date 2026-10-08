@@ -385,67 +385,21 @@ class GameModeTest {
         assertEquals("bitrate,audio,pen", GameModeSettings.overridesText(StreamMode.GAME))
         assertEquals("bitrate,finger", GameModeSettings.overridesText(StreamMode.DRAWING))
     }
-
-    // ---- jitter ----
-
-    @Test fun game120And60ShareNothingAnyMoreButJitterIsAdaptiveEverywhere() {
-        // Decision 0014 §2 amended 2026-10-04 (T-211): the adaptive pacer in every mode, Oyun included.
-        val adaptive = VideoRenderer.BUFFER_ADAPTIVE
-        val fromMode = GameJitter.Choice(adaptive, GameJitter.Source.MODE)
-        assertEquals(fromMode, GameJitter.choose(adaptive, null, game = false))
-        assertEquals(fromMode, GameJitter.choose(adaptive, null, game = true))
-        val g = GameModeSettings(settings)
-        assertEquals(enterGame, g.onModeChanged(StreamMode.GAME))
-        val c = GameJitter.choose(adaptive, null, g.gameActive)
-        assertEquals(fromMode, c)
-        assertEquals(
-            "mode=game action=enter overrides=bitrate,audio,pen jitter=adaptive bitrate_kbps=60000 audio_out=auto fingers=all",
-            GameModeSettings.logFields(enterGame, c, g.effective()),
-        )
-    }
-
-    @Test fun jitterSurvivesExitAndReentry() {
-        val adaptive = VideoRenderer.BUFFER_ADAPTIVE
-        val g = GameModeSettings(settings)
-        for (mode in listOf(StreamMode.GAME, StreamMode.DAILY, StreamMode.DRAWING, StreamMode.GAME)) {
-            g.onModeChanged(mode)
-            assertEquals(mode.isGame, g.gameActive)
-            assertEquals(GameJitter.Choice(adaptive, GameJitter.Source.MODE), GameJitter.choose(adaptive, null, g.gameActive))
-        }
-        // `--ez dev true --ei jitter 0`: buffer 0 in and out of a layer, across re-entry
-        val g2 = GameModeSettings(settings)
-        for (mode in listOf(StreamMode.GAME, StreamMode.DAILY, StreamMode.DRAWING)) {
-            g2.onModeChanged(mode)
-            assertEquals(GameJitter.Choice(0, GameJitter.Source.EXTRA), GameJitter.choose(0, GameJitter.Source.EXTRA, g2.gameActive))
-        }
-    }
-
-    @Test fun launchJitterWinsOverTheMode() {
-        assertEquals(GameJitter.Choice(2, GameJitter.Source.EXTRA), GameJitter.choose(2, GameJitter.Source.EXTRA, game = true))
-        assertEquals(GameJitter.Choice(1, GameJitter.Source.EXTRA), GameJitter.choose(1, GameJitter.Source.EXTRA, game = false))
-        val adaptive = VideoRenderer.BUFFER_ADAPTIVE
-        val c = GameJitter.choose(adaptive, GameJitter.Source.EXTRA, game = true) // T-210
-        assertEquals(GameJitter.Choice(adaptive, GameJitter.Source.EXTRA), c)
-        assertEquals("adaptive", GameJitter.label(c.bufferFrames))
-    }
+    // ---- log line ----
 
     @Test fun logLines() {
         val e = values(60_000, AudioOutPref.AUTO, trail = false, dot = false)
         assertEquals(
-            "mode=game action=enter overrides=bitrate,audio,pen jitter=0 bitrate_kbps=60000 audio_out=auto fingers=all",
-            GameModeSettings.logFields(enterGame, GameJitter.Choice(0, GameJitter.Source.MODE), e),
+            "mode=game action=enter overrides=bitrate,audio,pen bitrate_kbps=60000 audio_out=auto fingers=all",
+            GameModeSettings.logFields(enterGame, e),
         )
         assertEquals(
-            "mode=game action=exit overrides=bitrate,audio,pen jitter=adaptive bitrate_kbps=0 audio_out=track fingers=all",
-            GameModeSettings.logFields(
-                exitGame,
-                GameJitter.Choice(VideoRenderer.BUFFER_ADAPTIVE, GameJitter.Source.MODE),
-                e.copy(bitrateKbps = 0, audioOut = AudioOutPref.TRACK),
-            ),
+            "mode=game action=exit overrides=bitrate,audio,pen bitrate_kbps=0 audio_out=track fingers=all",
+            GameModeSettings.logFields(exitGame, e.copy(bitrateKbps = 0, audioOut = AudioOutPref.TRACK)),
         )
         assertEquals(
-            "mode=drawing action=enter overrides=bitrate,finger jitter=2 jitter_src=extra bitrate_kbps=60000 audio_out=auto fingers=gestures",
-            GameModeSettings.logFields(enterDrawing, GameJitter.Choice(2, GameJitter.Source.EXTRA), e.copy(fingers = FingerPolicy.GESTURES_ONLY)),
+            "mode=drawing action=enter overrides=bitrate,finger bitrate_kbps=60000 audio_out=auto fingers=gestures",
+            GameModeSettings.logFields(enterDrawing, e.copy(fingers = FingerPolicy.GESTURES_ONLY)),
         )
     }
 }

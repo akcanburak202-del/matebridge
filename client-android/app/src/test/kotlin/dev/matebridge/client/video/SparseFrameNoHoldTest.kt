@@ -9,7 +9,8 @@ import java.io.File
 /**
  * T-115: a lone frame on the phase-lock path (first frame, or a capture gap above LOCK_GAP_PERIODS periods) goes to the
  * earliest slot without hold, its delay stays out of the jitter history, and the lock forms on the next continuous frame.
- * Old/new comparisons use the A/B switch [AdaptivePacer.sparseEarly].
+ * The old arm (lone frames held like before) was removed in T-303; its comparisons became pinned numbers of the
+ * current schedule.
  */
 class SparseFrameNoHoldTest {
     private val ms = 1_000_000L
@@ -19,10 +20,10 @@ class SparseFrameNoHoldTest {
     }
 
     /** Pacer + SlotReleaser on a live vsync grid (6 ms deadline), like the decoder output thread. */
-    private class Sim(panelHz: Int, sparseEarly: Boolean = true) {
+    private class Sim(panelHz: Int) {
         val clk = VsyncClock(panelHz.toFloat()).also { it.onVsync(0); it.setDisplayTiming(0, 13_330_000L) }
         val period = clk.grid().periodNs
-        val pacer = AdaptivePacer(clk, period).also { it.sparseEarly = sparseEarly }
+        val pacer = AdaptivePacer(clk, period)
         val probe = PaceProbe().also { pacer.probe = it }
         val released = HashMap<Int, Long>()
         val discarded = ArrayList<Int>()
@@ -37,7 +38,7 @@ class SparseFrameNoHoldTest {
             rel.flushDue(t)
         }
 
-        fun frame(k: Int, captureNs: Long, readyNs: Long): FramePacer.Decision {
+        fun frame(k: Int, captureNs: Long, readyNs: Long): PacerDecision {
             advanceTo(readyNs)
             probe.clear()
             val d = pacer.schedule(captureNs / 1000, readyNs)!!
@@ -84,37 +85,19 @@ class SparseFrameNoHoldTest {
         }
     }
 
-    @Test fun withTheSwitchOffSparseFramesAreHeldLikeBefore() {
-        // A/B reference: the pre-T-115 acquisition holds these frames by up to a vsync (the reason for this task).
-        for (hz in listOf(60, 120)) {
-            var sum = 0L; var period = 0L
-            for (phase in 0 until 8) {
-                val s = Sim(hz, sparseEarly = false)
-                period = s.period
-                sum += sparse(s, s.period * phase / 8, 20 * ms, 5L + phase)
-            }
-            println("hz=$hz old mean pace_add ${sum / 8 / 1000} us (new: 0)")
-            assertTrue("hz=$hz old mean pace_add ${sum / 8}", sum / 8 > period / 3)
-        }
-    }
-
     @Test fun loneFrameDelaysStayOutOfTheJitterHistory() {
         for (hz in listOf(60, 120)) {
-            val dNs = HashMap<Boolean, Long>()
-            for (early in listOf(true, false)) {
-                val s = Sim(hz, early)
-                val rnd = Lcg(9L)
-                var cap = 1_000_000_000L
-                var k = 0
-                // Idle desktop: lone frames, cold (0..12 ms extra delay), 150 ms apart.
-                repeat(300) { s.frame(k++, cap, cap + 15 * ms + (rnd.next() * 12 * ms).toLong()); cap += 150 * ms }
-                // Then continuous motion at the panel rate with 0..2 ms of jitter.
-                repeat(60) { s.frame(k++, cap, cap + 15 * ms + (rnd.next() * 2 * ms).toLong()); cap += s.period }
-                dNs[early] = s.pacer.lastDNs
-            }
-            println("hz=$hz D half a second into the motion: new ${dNs[true]!! / 1000} us, old ${dNs[false]!! / 1000} us")
-            assertTrue("hz=$hz D ${dNs[true]}", dNs[true]!! <= 3 * ms) // the motion's own jitter (2 ms) + margin
-            assertTrue("hz=$hz old D ${dNs[false]} (reference)", dNs[false]!! >= dNs[true]!! + 3 * ms)
+            val s = Sim(hz)
+            val rnd = Lcg(9L)
+            var cap = 1_000_000_000L
+            var k = 0
+            // Idle desktop: lone frames, cold (0..12 ms extra delay), 150 ms apart.
+            repeat(300) { s.frame(k++, cap, cap + 15 * ms + (rnd.next() * 12 * ms).toLong()); cap += 150 * ms }
+            // Then continuous motion at the panel rate with 0..2 ms of jitter.
+            repeat(60) { s.frame(k++, cap, cap + 15 * ms + (rnd.next() * 2 * ms).toLong()); cap += s.period }
+            val dNs = s.pacer.lastDNs
+            println("hz=$hz D half a second into the motion: ${dNs / 1000} us")
+            assertTrue("hz=$hz D $dNs", dNs <= 3 * ms) // the motion's own jitter (2 ms) + margin
         }
     }
 
@@ -161,8 +144,8 @@ class SparseFrameNoHoldTest {
      * [cycles] cycles of 8 lone frames followed by 120 continuous frames at the panel rate (0..2 ms jitter).
      * [coldFirstNs]: extra delay of the first frame of each motion (cold decoder).
      */
-    private fun cycles(hz: Int, offsetNs: Long, seed: Long, early: Boolean, coldFirstNs: Long = 0, cycles: Int = 6): Counts {
-        val s = Sim(hz, early)
+    private fun cycles(hz: Int, offsetNs: Long, seed: Long, coldFirstNs: Long = 0, cycles: Int = 6): Counts {
+        val s = Sim(hz)
         val rnd = Lcg(seed)
         val t = Counts()
         var cap = 1_000_000_000L
@@ -198,11 +181,11 @@ class SparseFrameNoHoldTest {
         return t
     }
 
-    private fun sweep(hz: Int, early: Boolean, coldFirstNs: Long): Counts {
+    private fun sweep(hz: Int, coldFirstNs: Long): Counts {
         val sum = Counts()
         val p = 1_000_000_000L / hz
         for (i in 0 until 12) for (seed in 1L..10L) {
-            val t = cycles(hz, p * i / 12, seed, early, coldFirstNs)
+            val t = cycles(hz, p * i / 12, seed, coldFirstNs)
             sum.collided += t.collided; sum.lateDrop += t.lateDrop; sum.gaps += t.gaps; sum.doubleSlots += t.doubleSlots
             sum.loneReplaced += t.loneReplaced
         }
@@ -213,13 +196,13 @@ class SparseFrameNoHoldTest {
 
     @Test fun sparseToContinuousWithJitterDropsNoMoreThanBefore() {
         for (hz in listOf(60, 120)) {
-            val new = sweep(hz, true, 0)
-            val old = sweep(hz, false, 0)
-            println("hz=$hz $motions motions, collided/lateDrop/gaps: new ${new.collided}/${new.lateDrop}/${new.gaps}, old ${old.collided}/${old.lateDrop}/${old.gaps}")
+            val new = sweep(hz, 0)
+            println("hz=$hz $motions motions, collided/lateDrop/gaps: ${new.collided}/${new.lateDrop}/${new.gaps}")
+            // Pinned numbers of the current schedule (T-303, replacing the old-vs-new comparison): collided/lateDrop/gaps.
+            val pin = mapOf(60 to Triple(10, 0, 68), 120 to Triple(23, 1, 140))[hz]!!
+            assertEquals("hz=$hz pinned", pin, Triple(new.collided, new.lateDrop, new.gaps))
             assertEquals("hz=$hz double slots", 0, new.doubleSlots)
             assertTrue("hz=$hz lone frames replaced ${new.loneReplaced}", new.loneReplaced * 100 <= motions)
-            assertTrue("hz=$hz collided ${new.collided} vs old ${old.collided}", new.collided <= old.collided)
-            assertTrue("hz=$hz late drops ${new.lateDrop} vs old ${old.lateDrop}", new.lateDrop <= old.lateDrop)
             assertTrue("hz=$hz collided ${new.collided} in $motions motions", new.collided * 25 <= motions) // <= 4 %
             assertTrue("hz=$hz gaps ${new.gaps}: at most the transition's repeated vsync", new.gaps <= motions)
         }
@@ -231,15 +214,19 @@ class SparseFrameNoHoldTest {
         // replaces it at the same vsync (newest wins, nothing shown later) and the lock stays centred. Later frames
         // of the motion are not dropped more often than before T-115.
         for (hz in listOf(60, 120)) for (cold in listOf(3 * ms, 6 * ms)) {
-            val new = sweep(hz, true, cold)
-            val old = sweep(hz, false, cold)
+            val new = sweep(hz, cold)
             println("hz=$hz cold first frame +${cold / ms} ms, $motions motions, replaced lone/collided/lateDrop/gaps: " +
-                "new ${new.loneReplaced}/${new.collided}/${new.lateDrop}/${new.gaps}, old ${old.loneReplaced}/${old.collided}/${old.lateDrop}/${old.gaps}")
+                "${new.loneReplaced}/${new.collided}/${new.lateDrop}/${new.gaps}")
             assertTrue("hz=$hz late drops ${new.lateDrop}", new.lateDrop * 100 <= motions)
             assertTrue("hz=$hz lone frames replaced ${new.loneReplaced}", new.loneReplaced <= motions)
-            val laterNew = new.collided - new.loneReplaced
-            val laterOld = old.collided - old.loneReplaced
-            assertTrue("hz=$hz later frames replaced $laterNew vs old $laterOld", laterNew <= laterOld)
+            val later = new.collided - new.loneReplaced
+            println("hz=$hz cold +${cold / ms} ms: later frames replaced $later")
+            // Pinned: lone replaced, collided, lateDrop, gaps (T-303).
+            val pin = mapOf(
+                60 to 3L to listOf(73, 81, 0, 11), 60 to 6L to listOf(204, 212, 0, 11),
+                120 to 3L to listOf(144, 163, 1, 20), 120 to 6L to listOf(398, 417, 1, 20),
+            )[hz to cold / ms]!!
+            assertEquals("hz=$hz cold ${cold / ms} pinned", pin, listOf(new.loneReplaced, new.collided, new.lateDrop, new.gaps))
         }
     }
 
@@ -302,8 +289,8 @@ class SparseFrameNoHoldTest {
     private fun p50(v: MutableList<Double>): Double { v.sort(); return v[v.size / 2] }
 
     /** Lone = first row or capture gap above 3 periods; continuous = capture gap one period (+-1 ms), as in sim.py. */
-    private fun replay(rows: List<Row>, sparseEarly: Boolean): Replay {
-        val p = AdaptivePacer(VsyncClock(120f), rows[0].periodNs).also { it.sparseEarly = sparseEarly }
+    private fun replay(rows: List<Row>): Replay {
+        val p = AdaptivePacer(VsyncClock(120f), rows[0].periodNs)
         var prev = Long.MIN_VALUE
         val loneLat = ArrayList<Double>(); var loneAdd = 0.0
         val contLat = ArrayList<Double>(); var gaps = 0; var drops = 0; var cont = 0
@@ -326,18 +313,16 @@ class SparseFrameNoHoldTest {
         return Replay(loneLat.size, p50(loneLat), loneLat.average(), loneAdd / loneLat.size, cont, gaps, drops, p50(contLat))
     }
 
-    @Test fun traceReplayOldVersusNew() {
-        val rows = trace()
-        val old = replay(rows, sparseEarly = false)
-        val new = replay(rows, sparseEarly = true)
-        println("trace7 old (hold on lone frames): $old")
-        println("trace7 new (T-115):               $new")
-        assertEquals(old.lone, new.lone)
+    @Test fun traceReplayPinned() {
+        val new = replay(trace())
+        println("trace7 (T-115): $new")
         assertEquals(0.0, new.loneAddMeanMs, 1e-9)
-        assertTrue("lone latency", new.loneLatMeanMs < old.loneLatMeanMs && new.loneLatP50Ms <= old.loneLatP50Ms)
-        // The continuous part keeps its smoothness: gaps and drops no worse than half a percent of continuous frames.
-        assertTrue("gaps ${new.contGaps} vs ${old.contGaps}", new.contGaps - old.contGaps <= new.cont / 200)
-        assertTrue("drops ${new.contDrops} vs ${old.contDrops}", new.contDrops <= old.contDrops + new.cont / 200)
-        assertTrue("continuous latency", new.contLatP50Ms <= old.contLatP50Ms + 0.5)
+        // Pinned numbers of the current schedule (T-303).
+        assertEquals(94, new.lone)
+        assertEquals(10.81, new.loneLatP50Ms, 0.02)
+        assertEquals(2728, new.cont)
+        assertEquals(59, new.contGaps)
+        assertEquals(144, new.contDrops)
+        assertEquals(13.16, new.contLatP50Ms, 0.02)
     }
 }

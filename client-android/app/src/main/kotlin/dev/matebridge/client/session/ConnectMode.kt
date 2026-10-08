@@ -21,9 +21,6 @@ object ConnectMode {
     fun transportOf(ep: Endpoint): Transport =
         if (ep.host == USB_HOST || ep.host == "localhost") Transport.USB else Transport.WIFI
 
-    /** NSD discovery may auto-connect only in Wi-Fi mode. */
-    fun autoDiscover(mode: Transport) = mode == Transport.WIFI
-
     /**
      * Show "USB link missing" once the manual USB mode has been trying for [USB_TIMEOUT_MS] without reaching the host
      * (still waiting for the connection, or it dropped/failed) and no session is established. AUTO falls back to
