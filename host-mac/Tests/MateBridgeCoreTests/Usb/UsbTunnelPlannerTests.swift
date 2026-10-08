@@ -155,4 +155,11 @@ final class UsbEventCoalescerTests: XCTestCase {
         c.probeStarted()
         XCTAssertNotNil(c.noteEvent())
     }
+
+    func testResetOnToggleLetsNewEventSchedule() {
+        var c = UsbEventCoalescer()
+        XCTAssertNotNil(c.noteEvent())  // probe pending
+        c.reset()                       // disable/enable transition
+        XCTAssertEqual(c.noteEvent(), UsbEventCoalescer.settleDelay)  // attach after re-enable schedules
+    }
 }

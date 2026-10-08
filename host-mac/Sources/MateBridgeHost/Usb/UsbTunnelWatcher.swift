@@ -36,6 +36,7 @@ public final class UsbTunnelWatcher: @unchecked Sendable {
             guard on != enabled else { return }
             enabled = on
             generation += 1
+            eventCoalescer.reset()  // a stale pending probe exits on the generation mismatch
             if on {
                 planner.reset()
                 let monitor = UsbEventMonitor(queue: queue) { [weak self] in self?.usbEventOccurred() }
@@ -62,8 +63,8 @@ public final class UsbTunnelWatcher: @unchecked Sendable {
         guard let delay = eventCoalescer.noteEvent() else { return }
         let gen = generation
         queue.asyncAfter(deadline: .now() + delay) { [self] in
+            guard enabled, gen == generation else { return }  // stale: setEnabled already reset the coalescer
             eventCoalescer.probeStarted()
-            guard enabled, gen == generation else { return }
             generation += 1  // cancels the pending regular tick; the chain restarts below
             tick()
             guard enabled else { return }
