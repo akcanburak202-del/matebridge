@@ -34,6 +34,10 @@ final class CursorSampler: @unchecked Sendable {
     private static let geometryTtlNs: UInt64 = 250_000_000
 
     private var lastShapeID: UInt32 = 0
+    /// The shape is looked at ~17 Hz at most (57 ms) (T-309); position and visibility are read on every sample.
+    private var shapeGate = CursorShapeCheckGate()
+    /// Shape checks since the start of the run (window deltas are made by `CursorService`).
+    var shapeChecks: Int { shapeGate.checks }
     /// Shape builds in the current one-second window, and the cap.
     private var buildWindowStartNs: UInt64 = 0
     private var buildsInWindow = 0
@@ -59,6 +63,7 @@ final class CursorSampler: @unchecked Sendable {
     func resetSession() {
         lastShapeID = 0
         loggedFlood = false
+        shapeGate.reset()
     }
 
     /// The cursor now, or nil when it cannot be placed (no virtual display, no position).
@@ -71,8 +76,11 @@ final class CursorSampler: @unchecked Sendable {
         guard let geometry, let location = locator.location() else { return nil }
         let position = geometry.normalizedPosition(of: location)
         let hidden = visibility.isHidden()
-        // A hidden cursor needs no new image; the last one stays the shape until it shows again.
-        if !hidden || lastShapeID == 0 { lastShapeID = currentShapeID(nowNs: nowNs) }
+        // Shape work (WindowServer image copy, render, hash) only when the gate allows it; between checks the last
+        // shape stays. A hidden cursor needs no new image until it shows again (the gate knows).
+        if shapeGate.shouldCheck(nowNs: nowNs, hidden: hidden, hasShape: lastShapeID != 0) {
+            lastShapeID = currentShapeID(nowNs: nowNs)
+        }
         return CursorSnapshot(x: position.x, y: position.y, visible: !hidden, shapeID: lastShapeID)
     }
 

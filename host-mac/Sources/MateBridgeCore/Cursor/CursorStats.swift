@@ -11,6 +11,7 @@ public struct CursorStats: Sendable {
     private var shapeBytes = 0
     private var shapesBuilt = 0
     private var shapeFailures = 0
+    private var shapeChecks = 0
     private var samples = 0
     private var sampleFailures = 0
     private var costsUs: [UInt64] = []
@@ -26,6 +27,8 @@ public struct CursorStats: Sendable {
     /// A new shape was rendered and encoded (a cache miss in the tracker, not a send).
     public mutating func recordShapeBuilt() { shapesBuilt += 1 }
     public mutating func recordShapeFailure() { shapeFailures += 1 }
+    /// The cursor image was read to compute the shape id (rate limited, T-309).
+    public mutating func recordShapeCheck() { shapeChecks += 1 }
     /// One poll or injection sample took `costUs`; `ok` false when the cursor could not be read.
     public mutating func recordSample(costUs: UInt64, ok: Bool) {
         samples += 1
@@ -44,14 +47,14 @@ public struct CursorStats: Sendable {
         guard nowUs >= start, nowUs - start >= Self.reportIntervalUs else { return nil }
         defer {
             windowStartUs = nowUs
-            states = 0; shapes = 0; shapeBytes = 0; shapesBuilt = 0; shapeFailures = 0
+            states = 0; shapes = 0; shapeBytes = 0; shapesBuilt = 0; shapeFailures = 0; shapeChecks = 0
             samples = 0; sampleFailures = 0
             costsUs.removeAll(keepingCapacity: true)
             replacedBefore = replaced
         }
         guard states + shapes + samples + shapeFailures > 0 else { return nil }
         return "states=\(states) shapes=\(shapes) shape_bytes=\(shapeBytes) shapes_built=\(shapesBuilt) "
-            + "shape_failed=\(shapeFailures) replaced=\(max(0, replaced - replacedBefore)) samples=\(samples) "
+            + "shape_failed=\(shapeFailures) shape_checks=\(shapeChecks) replaced=\(max(0, replaced - replacedBefore)) samples=\(samples) "
             + "sample_failed=\(sampleFailures) sample_us_p50=\(CadenceWindow.percentile(costsUs, 50)) "
             + "sample_us_p95=\(CadenceWindow.percentile(costsUs, 95))"
     }
