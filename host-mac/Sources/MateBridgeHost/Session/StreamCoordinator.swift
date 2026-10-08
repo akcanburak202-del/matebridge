@@ -147,7 +147,9 @@ public final class StreamCoordinator: @unchecked Sendable {
     private var watchdogTimer: DispatchSourceTimer?
     /// Last resort of the watchdog (stall of `CoordinatorWatchdog.restartUs`, or abandoned stops): the app releases
     /// input synchronously, then relaunches and quits (`StallRestart`). Called on the watchdog queue; may block.
-    public var onStallRestart: (@Sendable () -> Void)?
+    public var onStallRestart: (@Sendable () -> StallRestart.Outcome)?
+    /// Next try of a restart that was skipped because input could not be confirmed released (watchdog lock).
+    private var restartRetryAtUs: UInt64?
     /// From the 10 s step on, the session layer refuses new connections until this is called with false (the loop
     /// recovered). Called on the watchdog queue.
     public var onRefuseSessions: @Sendable (Bool) -> Void = { _ in }
@@ -426,10 +428,23 @@ public final class StreamCoordinator: @unchecked Sendable {
                 onOverflow()
             }
         }
-        // Outside the lock: the restart blocks (input release, terminate wait).
-        guard let fields = restartFields else { return }
-        logger.log(.error, "coordinator_stall_recover", sessionID: 0, generation: 0, fields: "action=restart \(fields)")
-        if let onStallRestart { onStallRestart() }
+        // Outside the lock: the restart blocks (input release, terminate wait). A skipped restart (input not confirmed
+        // released) is tried again every `StallRestart.retryIntervalUs`; sessions stay refused meanwhile.
+        if let fields = restartFields {
+            logger.log(.error, "coordinator_stall_recover", sessionID: 0, generation: 0,
+                       fields: "action=restart \(fields)")
+            runRestart()
+        } else if let due = watchdogLock.withLock({ restartRetryAtUs }), HostClock.nowUs() >= due {
+            runRestart()
+        }
+    }
+
+    private func runRestart() {
+        watchdogLock.withLock { restartRetryAtUs = nil }
+        guard let onStallRestart else { return }
+        if case .skipped = onStallRestart() {
+            watchdogLock.withLock { restartRetryAtUs = HostClock.nowUs() + StallRestart.retryIntervalUs }
+        }
     }
 
     // MARK: Event loop

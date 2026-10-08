@@ -2,6 +2,13 @@ import Foundation
 import Testing
 @testable import MateBridgeCore
 
+private final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var n = 0
+    func bump() { lock.withLock { n += 1 } }
+    var value: Int { lock.withLock { n } }
+}
+
 private final class Recorder: @unchecked Sendable {
     private let lock = NSLock()
     private var steps: [String] = []
@@ -9,10 +16,12 @@ private final class Recorder: @unchecked Sendable {
     var all: [String] { lock.withLock { steps } }
 }
 
-private func steps(_ r: Recorder, release: @escaping @Sendable () -> Void,
+private let clean = InputReleaseReport(owed: 0, mirrorEmpty: true)
+
+private func steps(_ r: Recorder, release: @escaping @Sendable () -> InputReleaseReport = { clean },
                    emergency: @escaping @Sendable () -> Int? = { 3 }) -> StallRestart.Steps {
     StallRestart.Steps(
-        releaseInput: { release(); r.add("release") },
+        releaseInput: { let report = release(); r.add("release"); return report },
         scheduleRelaunch: { r.add("relaunch") },
         requestTerminate: { r.add("terminate") },
         emergencyRelease: { r.add("emergency"); return emergency() },
@@ -20,42 +29,84 @@ private func steps(_ r: Recorder, release: @escaping @Sendable () -> Void,
         log: { r.add("log:\($0)") })
 }
 
+@Suite struct StallRestartDecisionTests {
+    /// The decision table: only a completed release with nothing owed and an empty mirror restarts.
+    @Test func decisionTable() {
+        let cases: [(InputReleaseReport?, StallRestartDecision)] = [
+            (nil, .skip(reason: "input_wedged")),
+            (InputReleaseReport(owed: 0, mirrorEmpty: true), .restart),
+            (InputReleaseReport(owed: 0, mirrorEmpty: false), .skip(reason: "input_held")),
+            (InputReleaseReport(owed: 2, mirrorEmpty: true), .skip(reason: "owed")),
+            (InputReleaseReport(owed: 1, mirrorEmpty: false), .skip(reason: "owed")),
+        ]
+        for (report, expected) in cases {
+            #expect(StallRestartDecision.decide(report: report) == expected)
+        }
+    }
+}
+
 @Suite struct StallRestartTests {
-    @Test func inputIsReleasedBeforeRelaunchTerminateAndExit() {
+    @Test func confirmedReleaseThenRelaunchTerminateAndExit() {
         let r = Recorder()
-        StallRestart.run(steps(r, release: {}), inputTimeout: 1, terminateTimeout: 0.05)
-        #expect(r.all == ["release", "log:input=done", "relaunch", "terminate", "log:terminate=timeout", "exit"])
-    }
-
-    @Test func wedgedInputQueueIsReleasedByTheEmergencyPathBeforeAnyExit() {
-        let r = Recorder()
-        let hang = DispatchSemaphore(value: 0)
-        let outcome = StallRestart.run(steps(r, release: { hang.wait() }), inputTimeout: 0.1, emergencyTimeout: 0.5,
-                                       terminateTimeout: 0.05)
+        let outcome = StallRestart.run(steps(r), attempt: ReleaseAttempt(), inputTimeout: 1, terminateTimeout: 0.05)
         #expect(outcome == .restarted)
-        #expect(r.all == ["emergency", "log:input=emergency released=3", "relaunch", "terminate",
+        #expect(r.all == ["release", "log:input=done outcome=restart", "relaunch", "terminate",
                           "log:terminate=timeout", "exit"])
+    }
+
+    @Test func owedReleasesSkipTheRestart() {
+        let r = Recorder()
+        let outcome = StallRestart.run(steps(r, release: { InputReleaseReport(owed: 1, mirrorEmpty: true) }),
+                                       attempt: ReleaseAttempt(), inputTimeout: 1, terminateTimeout: 0.05)
+        #expect(outcome == .skipped(reason: "owed"))
+        #expect(r.all == ["release", "log:outcome=skipped reason=owed"])
+    }
+
+    @Test func nonEmptyMirrorSkipsTheRestart() {
+        let r = Recorder()
+        let outcome = StallRestart.run(steps(r, release: { InputReleaseReport(owed: 0, mirrorEmpty: false) }),
+                                       attempt: ReleaseAttempt(), inputTimeout: 1, terminateTimeout: 0.05)
+        #expect(outcome == .skipped(reason: "input_held"))
+        #expect(!r.all.contains("terminate") && !r.all.contains("exit") && !r.all.contains("relaunch"))
+    }
+
+    @Test func wedgedQueueTriesTheEmergencyReleaseButNeverRestarts() {
+        let r = Recorder()
+        let hang = DispatchSemaphore(value: 0)
+        let outcome = StallRestart.run(steps(r, release: { hang.wait(); return clean }, emergency: { 3 }),
+                                       attempt: ReleaseAttempt(), inputTimeout: 0.1, emergencyTimeout: 0.5,
+                                       terminateTimeout: 0.05)
+        #expect(outcome == .skipped(reason: "input_wedged"))
+        #expect(r.all == ["emergency", "log:input=emergency released=3 confirmed=0",
+                          "log:outcome=skipped reason=input_wedged"])
         hang.signal()
     }
 
-    @Test func failedEmergencyReleaseNeverTerminatesOrExits() {
+    @Test func failedOrHungEmergencyReleaseStillSkips() {
         let r = Recorder()
         let hang = DispatchSemaphore(value: 0)
-        let outcome = StallRestart.run(steps(r, release: { hang.wait() }, emergency: { nil }), inputTimeout: 0.1,
-                                       emergencyTimeout: 0.5, terminateTimeout: 0.05)
-        #expect(outcome == .inputUnreleased)
-        #expect(r.all == ["emergency", "log:input=unreleased"])
-        hang.signal()
-    }
-
-    @Test func hungEmergencyReleaseIsTreatedAsUnreleased() {
-        let r = Recorder()
-        let hang = DispatchSemaphore(value: 0)
-        let outcome = StallRestart.run(steps(r, release: { hang.wait() }, emergency: { hang.wait(); return 1 }),
-                                       inputTimeout: 0.05, emergencyTimeout: 0.1, terminateTimeout: 0.05)
-        #expect(outcome == .inputUnreleased)
+        let outcome = StallRestart.run(steps(r, release: { hang.wait(); return clean }, emergency: { hang.wait(); return 1 }),
+                                       attempt: ReleaseAttempt(), inputTimeout: 0.05, emergencyTimeout: 0.1,
+                                       terminateTimeout: 0.05)
+        #expect(outcome == .skipped(reason: "input_wedged"))
         #expect(!r.all.contains("terminate") && !r.all.contains("exit"))
         hang.signal(); hang.signal()
+    }
+
+    @Test func retryJoinsTheHangingReleaseAndRestartsOnceItCompletes() {
+        let r = Recorder()
+        let hang = DispatchSemaphore(value: 0)
+        let attempt = ReleaseAttempt()
+        let started = Counter()
+        let s = steps(r, release: { started.bump(); hang.wait(); return clean }, emergency: { nil })
+        let first = StallRestart.run(s, attempt: attempt, inputTimeout: 0.05, emergencyTimeout: 0.05, terminateTimeout: 0.05)
+        #expect(first == .skipped(reason: "input_wedged"))
+        let second = StallRestart.run(s, attempt: attempt, inputTimeout: 0.05, emergencyTimeout: 0.05, terminateTimeout: 0.05)
+        #expect(second == .skipped(reason: "input_wedged"))
+        #expect(started.value == 1)  // no second blocked thread
+        hang.signal()
+        let third = StallRestart.run(s, attempt: attempt, inputTimeout: 1, emergencyTimeout: 0.05, terminateTimeout: 0.05)
+        #expect(third == .restarted)
     }
 
     @Test func relaunchWaitsForTheOldProcess() {
@@ -208,5 +259,37 @@ private final class AsyncGate: @unchecked Sendable {
         let second = w.requestRestart()
         #expect(!lifted)
         #expect(!second)
+    }
+}
+
+@Suite struct StallGateSplitTests {
+    private func k(_ kind: MacKey.Kind, _ code: UInt16) -> MacEvent { .key(MacKey(kind: kind, keyCode: code, flags: [])) }
+
+    /// The stall gate of `InputController` is `HostSleepInputGate.split` while the refusal is up: openings are dropped
+    /// (after the 10 s step nothing new is pressed), closings still pass in order.
+    @Test func opensAreDroppedClosesPassAfterEscalation() {
+        let p = DisplayPoint(x: 1, y: 1)
+        let batch: [MacEvent] = [
+            k(.keyDown, 8), k(.keyUp, 9), k(.modifierDown, 55), k(.modifierUp, 56),
+            .mouse(MacMouse(kind: .down, button: .left, position: p, deltaX: 0, deltaY: 0, clickState: 1)),
+            .mouse(MacMouse(kind: .up, button: .left, position: p, deltaX: 0, deltaY: 0, clickState: 1)),
+            .tabletProximity(tool: .pen, entering: true), .tabletProximity(tool: .pen, entering: false),
+        ]
+        let (pass, dropped) = HostSleepInputGate.split(batch)
+        #expect(dropped.count == 4)
+        #expect(pass.allSatisfy { $0.isClosing })
+        #expect(pass.count == 4)
+    }
+
+    @Test func refusalStepRaisesTheGateAndLiftingClearsIt() {
+        var w = CoordinatorWatchdog()
+        w.begin(kind: "x", nowUs: 0)
+        _ = w.poll(nowUs: 9_000_000)
+        #expect(!w.refusing)  // gate and refusal share this flag: up only from the 10 s step
+        _ = w.poll(nowUs: 10_000_000)
+        #expect(w.refusing)
+        w.end(nowUs: 11_000_000)
+        let lifted = w.liftRefusal()
+        #expect(lifted && !w.refusing)
     }
 }

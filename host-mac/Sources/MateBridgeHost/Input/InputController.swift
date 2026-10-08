@@ -73,6 +73,10 @@ public final class InputController: @unchecked Sendable {
     /// T-325: the mirror of what is held on the Mac. Written on `queue` after each post, read by `emergencyRelease`.
     private let heldLock = NSLock()
     private var held = HeldInputMirror()
+    /// T-325 review round 3: from the coordinator watchdog's 10 s step until the refusal is lifted, opening events are
+    /// dropped like in the host-sleep gate (closing events pass). Set from any thread, read on `queue`.
+    private let stallGateLock = NSLock()
+    private var stallGateClosed = false
 
     // Everything below is touched only on `queue`.
     private var pipeline: InputPipeline
@@ -387,16 +391,30 @@ public final class InputController: @unchecked Sendable {
     /// While sleeping, takes the opening events out of what the pipeline produced (`queue` only). What was dropped
     /// never reached the Mac: the pipeline forgets it, and the machine is released again so it does not hold it.
     private func gate(_ events: [MacEvent], now: UInt64) -> [MacEvent] {
-        guard sleepGate.isSet else { return events }
-        guard sleepGate.isClosed(atAwakeNs: Self.awakeNs()) else {
-            endSleepGate(wake: false)
-            return events
+        var closed = stallGateLock.withLock { stallGateClosed }
+        if sleepGate.isSet {
+            if sleepGate.isClosed(atAwakeNs: Self.awakeNs()) {
+                closed = true
+            } else {
+                endSleepGate(wake: false)
+            }
         }
+        guard closed else { return events }
         let (pass, dropped) = HostSleepInputGate.split(events)
         guard !dropped.isEmpty else { return events }
         sleepDropped += dropped.count
         pipeline.postFailed(dropped, now: now, permitted: true)
         return pass + pipeline.release(.hostSleep, now: now, environment: environment())
+    }
+
+    /// Closes or opens the stall gate (T-325): while closed nothing new can be pressed, closing events still pass.
+    /// Safe from any thread; the stream coordinator's refusal switches it together with the session refusal.
+    public func setStallGate(_ closed: Bool) {
+        let changed = stallGateLock.withLock { () -> Bool in
+            defer { stallGateClosed = closed }
+            return stallGateClosed != closed
+        }
+        if changed { log(.warning, "input_stall_gate", "state=\(closed ? "on" : "off")") }
     }
 
     /// `releaseInput` body; `queue` only. Idempotent, so the host-sleep participant (T-299) and the session-end path
@@ -414,9 +432,13 @@ public final class InputController: @unchecked Sendable {
     /// The host app is quitting: release, then retry whatever is still owed a few times right now (a transient
     /// failure during a normal Quit must not leave input held after the process exits), stop the timers, ignore
     /// everything after. Idempotent. When the permission is missing nothing can be posted: it does not spin, it logs.
-    public func shutdown() {
+    @discardableResult
+    public func shutdown() -> Int {
         queue.sync {
-            guard !stopped else { return }
+            guard !stopped else {
+                // Called again (the stall restart rechecks): the timers are gone, so retry what is still owed here.
+                return drainOwed(attempts: Self.shutdownDrainAttempts, pause: Self.shutdownDrainPause)
+            }
             let now = HostClock.nowUs()
             let events = pipeline.shutdown(now: now, environment: environment())
             flush(events, now: now)
@@ -439,7 +461,15 @@ public final class InputController: @unchecked Sendable {
             endActivity()
             watchdogTimer.cancel()
             pollTimer.cancel()
+            return remaining
         }
+    }
+
+    /// The stall restart's release (T-325 review round 3): `shutdown()` plus what it left, so the caller can confirm
+    /// that nothing is held before the process leaves.
+    public func stallRelease() -> InputReleaseReport {
+        let owed = shutdown()
+        return InputReleaseReport(owed: owed, mirrorEmpty: heldLock.withLock { held.isEmpty })
     }
 
     // MARK: Queue-confined work
@@ -498,23 +528,33 @@ public final class InputController: @unchecked Sendable {
         }
         // T-325: opens are recorded before the post (a post that wedges may still have landed), then the accepted
         // prefix is replayed in order so a close in the same batch wins (the poster returns the failed suffix).
-        heldLock.withLock { for e in events where !e.isClosing { held.posted(e) } }
+        // Only the input queue writes `held`, so the snapshot is exact: a failed open is forgotten again afterwards.
+        let before: HeldInputMirror = heldLock.withLock {
+            let snapshot = held
+            for e in events where !e.isClosing { held.posted(e) }
+            return snapshot
+        }
         let failed = poster.post(events)
-        heldLock.withLock { held.postedBatch(events, failedCount: failed.count) }
+        heldLock.withLock {
+            held = before
+            held.postedBatch(events, failedCount: failed.count)
+        }
         return (failed, true)
     }
 
     /// Independent of `queue` (T-325 review round 2): the stall restart calls this from its own thread when
     /// `shutdown()` did not finish because the input queue is wedged. Posts the closing events of everything the
-    /// mirror says is held, through a poster of its own. Returns how many events were posted, or nil when posting
-    /// failed (then the input may still be held and the host must not exit).
+    /// mirror says is held, through a poster of its own. Best effort only: it never confirms a release (the restart
+    /// still requires `stallRelease()` to report nothing held). Returns how many events were posted, or nil when
+    /// posting was not possible or failed.
     public func emergencyRelease() -> Int? {
         let plan = heldLock.withLock { held.emergencyRelease() }
         guard !plan.isEmpty else { return 0 }
+        // The same fresh check as normal posting: without the permission macOS drops the events silently.
+        guard permission.isTrusted() else { return nil }
         let failed = CGEventPoster().post(plan)
         guard failed.isEmpty else { return nil }
-        heldLock.withLock { held = HeldInputMirror() }
-        return plan.count
+        return plan.count  // the mirror is NOT cleared: only the normal release path confirms
     }
 
     /// Posts what the pipeline produced, tells the pipeline what could not be posted (closing events among those are

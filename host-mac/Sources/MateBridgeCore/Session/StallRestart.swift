@@ -54,68 +54,126 @@ public final class AbandonedStops: @unchecked Sendable {
     }
 }
 
-/// The last resort of the coordinator watchdog (T-325): input is released before anything else, then an orderly
-/// terminate is requested and the relaunch is arranged; only when the process is still alive after the terminate bound
-/// does it exit by force. The steps are injected so the order is testable.
+/// What a completed input release left behind (T-325 review round 3).
+public struct InputReleaseReport: Equatable, Sendable {
+    /// Closing events still owed (posting kept failing).
+    public var owed: Int
+    /// The held-input mirror lists nothing.
+    public var mirrorEmpty: Bool
+
+    public init(owed: Int, mirrorEmpty: Bool) {
+        self.owed = owed
+        self.mirrorEmpty = mirrorEmpty
+    }
+}
+
+/// The restart rule (round 3): the process may only leave when nothing is held, confirmed. Anything else keeps the host
+/// alive in refuse-sessions mode and is rechecked, because a stuck key on the user's only display is worse than a
+/// stalled host.
+public enum StallRestartDecision: Equatable, Sendable {
+    case restart
+    case skip(reason: String)
+
+    /// `report` is nil when the release did not complete within its bound.
+    public static func decide(report: InputReleaseReport?) -> StallRestartDecision {
+        guard let report else { return .skip(reason: "input_wedged") }
+        if report.owed > 0 { return .skip(reason: "owed") }
+        if !report.mirrorEmpty { return .skip(reason: "input_held") }
+        return .restart
+    }
+}
+
+/// One input release at a time. A retry while an earlier call still hangs (wedged queue) waits for that call instead of
+/// piling up another blocked thread.
+public final class ReleaseAttempt: @unchecked Sendable {
+    public static let shared = ReleaseAttempt()
+
+    private let lock = NSLock()
+    private var inFlight = false
+    private var done = DispatchSemaphore(value: 0)
+    private var report: InputReleaseReport?
+
+    public init() {}
+
+    /// Runs `body` (or joins the one still running) and waits up to `timeout`; nil on a timeout.
+    public func run(timeout: TimeInterval, _ body: @escaping @Sendable () -> InputReleaseReport) -> InputReleaseReport? {
+        let (sem, start): (DispatchSemaphore, Bool) = lock.withLock {
+            if inFlight { return (done, false) }
+            inFlight = true
+            report = nil
+            done = DispatchSemaphore(value: 0)
+            return (done, true)
+        }
+        if start {
+            DispatchQueue.global(qos: .userInitiated).async { [self] in
+                let r = body()
+                lock.withLock { report = r; inFlight = false }
+                sem.signal()
+            }
+        }
+        guard sem.wait(timeout: .now() + timeout) == .success else { return nil }
+        return lock.withLock { report }
+    }
+}
+
+/// The last resort of the coordinator watchdog (T-325): input is released and verified before anything else; only a
+/// confirmed release (completed, nothing owed, mirror empty) permits an orderly terminate and the relaunch, with a
+/// forced exit if the process is still alive after the terminate bound. Otherwise nothing is terminated (outcome
+/// `skipped`) and the caller rechecks later. The steps are injected so the order is testable.
 public enum StallRestart {
     public struct Steps: Sendable {
-        /// Synchronous: release everything held and drain the owed releases (`InputController.shutdown`). May hang if
-        /// the input queue is wedged, so it is waited for with a bound.
-        public var releaseInput: @Sendable () -> Void
+        /// Synchronous: release everything held, drain the owed releases, report what is left
+        /// (`InputController.stallRelease`). May hang if the input queue is wedged, so it is waited for with a bound.
+        public var releaseInput: @Sendable () -> InputReleaseReport
         /// Starts the helper that opens a new instance once this process is gone.
         public var scheduleRelaunch: @Sendable () -> Void
         /// Asks the main thread for an orderly terminate (`NSApp.terminate`); returns at once.
         public var requestTerminate: @Sendable () -> Void
-        /// Independent of the input queue: posts the closing events of everything the held-input mirror lists. Returns
-        /// how many events it posted, or nil when posting failed. Only called when `releaseInput` did not finish.
+        /// Best effort only, tried when the release did not complete: posts closing events from the held-input mirror
+        /// from its own thread. Its result is logged and never counts as confirmation.
         public var emergencyRelease: @Sendable () -> Int?
         public var forceExit: @Sendable () -> Void
-        /// Log fields only (`input=done|pending`, `terminate=...`).
+        /// Log fields only.
         public var log: @Sendable (String) -> Void
 
-        public init(releaseInput: @escaping @Sendable () -> Void, scheduleRelaunch: @escaping @Sendable () -> Void,
+        public init(releaseInput: @escaping @Sendable () -> InputReleaseReport,
+                    scheduleRelaunch: @escaping @Sendable () -> Void,
                     requestTerminate: @escaping @Sendable () -> Void,
-                    emergencyRelease: @escaping @Sendable () -> Int? = { 0 },
+                    emergencyRelease: @escaping @Sendable () -> Int? = { nil },
                     forceExit: @escaping @Sendable () -> Void,
                     log: @escaping @Sendable (String) -> Void) {
-            self.emergencyRelease = emergencyRelease
             self.releaseInput = releaseInput
             self.scheduleRelaunch = scheduleRelaunch
             self.requestTerminate = requestTerminate
+            self.emergencyRelease = emergencyRelease
             self.forceExit = forceExit
             self.log = log
         }
     }
 
     public static let inputTimeout: TimeInterval = 1.5
-    public static let terminateTimeout: TimeInterval = 4
-
     public static let emergencyTimeout: TimeInterval = 1
+    public static let terminateTimeout: TimeInterval = 4
+    /// How often a skipped restart is tried again.
+    public static let retryIntervalUs: UInt64 = 5_000_000
 
     public enum Outcome: Equatable, Sendable {
         /// The process was asked to terminate (and force-exited if it did not).
         case restarted
-        /// Input could not be released by any path: nothing was terminated or exited, the host stays up (and, with
-        /// sessions refused, stays harmless). A stuck input on the only display is worse than a stalled host.
-        case inputUnreleased
+        /// Input could not be confirmed released: nothing was terminated or exited, the host stays up.
+        case skipped(reason: String)
     }
 
-    /// Blocks the calling (watchdog) thread: up to `inputTimeout` for the normal release, then (only if that did not
-    /// finish) the emergency release from its own thread, then up to `terminateTimeout` for the process to disappear.
-    /// Without a confirmed release the process neither terminates nor exits.
+    /// Blocks the calling (watchdog) thread: up to `inputTimeout` for the release; if it did not complete, a best-effort
+    /// emergency release (bounded). Then the decision: only a confirmed release restarts, up to `terminateTimeout` for
+    /// the process to disappear.
     @discardableResult
-    public static func run(_ steps: Steps, inputTimeout: TimeInterval = inputTimeout,
+    public static func run(_ steps: Steps, attempt: ReleaseAttempt = .shared,
+                           inputTimeout: TimeInterval = inputTimeout,
                            emergencyTimeout: TimeInterval = emergencyTimeout,
                            terminateTimeout: TimeInterval = terminateTimeout) -> Outcome {
-        let done = DispatchSemaphore(value: 0)
-        DispatchQueue.global(qos: .userInitiated).async {
-            steps.releaseInput()
-            done.signal()
-        }
-        if done.wait(timeout: .now() + inputTimeout) == .success {
-            steps.log("input=done")
-        } else {
-            // The input queue may be wedged: release from here, on a thread of our own.
+        let report = attempt.run(timeout: inputTimeout, steps.releaseInput)
+        if report == nil {
             let box = EmergencyBox()
             let finished = DispatchSemaphore(value: 0)
             DispatchQueue.global(qos: .userInitiated).async {
@@ -124,11 +182,17 @@ public enum StallRestart {
             }
             let completed = finished.wait(timeout: .now() + emergencyTimeout) == .success
             if completed, let n = box.value {
-                steps.log("input=emergency released=\(n)")
+                steps.log("input=emergency released=\(n) confirmed=0")
             } else {
-                steps.log("input=unreleased")
-                return .inputUnreleased
+                steps.log("input=emergency failed=1 confirmed=0")
             }
+        }
+        switch StallRestartDecision.decide(report: report) {
+        case .skip(let reason):
+            steps.log("outcome=skipped reason=\(reason)")
+            return .skipped(reason: reason)
+        case .restart:
+            steps.log("input=done outcome=restart")
         }
         steps.scheduleRelaunch()
         steps.requestTerminate()

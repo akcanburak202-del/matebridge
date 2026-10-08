@@ -14,6 +14,8 @@ files:
   - host-mac/Sources/MateBridgeCore/Session/
   - host-mac/Tests/MateBridgeCoreTests/
   - host-mac/Sources/MateBridgeApp/main.swift  # (orchestrator)
+  - host-mac/Sources/MateBridgeHost/Input/InputController.swift  # (orchestrator, T-325 review)
+  - host-mac/Sources/MateBridgeCore/Input/HeldInputMirror.swift  # (orchestrator, T-325 review)
   - backlog/tasks/T-325-coordinator-stall.md
 ---
 
@@ -83,6 +85,15 @@ Taşma döngüsü: takılı döngü varken her oturum `sessionStarted`/`videoAtt
 - P2, refusal race: refusal/restart flags now live in `CoordinatorWatchdog`, and every transition plus its hook call (`onRefuseSessions`, `onOverflow`) happens inside `watchdogLock`, also the end of an event and `liftRefusal()` (any healthy completion lifts, unless a restart is requested). So a poll cannot apply a step after the event it saw has ended; no separate sequence ids were needed because the state change and its side effect are one critical section. Restart itself runs outside the lock. Core tests cover the interleavings.
 - P2, wrapped age: `AbandonedStops.escalation` treats a stop recorded after `nowUs` was sampled as age 0. Test added.
 - Tests: `HeldInputMirrorTests`, extended `StallRestartTests`. check.sh: ALL OK. Unverified on hardware: the emergency post path itself (`CGEventPoster` from a non-input thread) and that a fresh poster behaves like the controller's.
+
+**Review round 3 (Codex: 3x P1 on the exit path), rule change (orchestrator decision)**
+Instead of patching "exit safely while input may be held" again, the rule is now: **restart only when nothing is held, confirmed.** `StallRestartDecision.decide` (Core): restart only if the release completed within 1.5 s AND reports zero owed releases AND the held-input mirror is empty. Otherwise `E net ev=stall_restart outcome=skipped reason=input_wedged|owed|input_held`, nothing is terminated or exited, sessions stay refused, and the coordinator retries every 5 s (`StallRestart.retryIntervalUs`, a later successful release then allows the restart). A retry joins a still-hanging release (`ReleaseAttempt`) instead of piling up blocked threads.
+- `InputController.shutdown()` now returns the owed count (and drains again when called after stopping, so a retry can succeed); `stallRelease()` returns `InputReleaseReport(owed, mirrorEmpty)`.
+- The emergency release is best effort only: tried when the release did not complete, gated on a fresh Accessibility check (`permission.isTrusted()`), never clears the mirror, never confirms, never permits an exit (logged `input=emergency released=n confirmed=0`).
+- Mirror hygiene: opens are recorded before a post (a wedged post may have landed) but the snapshot is restored after the post and only the accepted prefix is replayed, so an open that failed does not stay "held" forever (that would block every later restart).
+- Stall gate: `InputController.setStallGate(_:)`, switched by the same `onRefuseSessions` hook as the session refusal (10 s step on, lifted with the refusal, never lifted after a restart request). `gate()` drops opening events exactly as the T-299 sleep gate does (shared `HostSleepInputGate.split`), closing events pass; `ev=input_stall_gate state=on|off`.
+- Tests (Core): decision table, outcomes with owed/held mirror/wedged queue/failed emergency, retry joining a hanging release, gate split (opens dropped, closes pass), refusal step/lift. check.sh: ALL OK.
+- Unverified on hardware: the whole restart path, and the 5 s retry loop while sessions are refused. Note: once `stallRelease` ran, input stays stopped until the process restarts (no recovery of input without restart).
 
 ## Open questions
 

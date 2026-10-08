@@ -228,10 +228,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         tabletFiles.attach(link: server)  // Wi-Fi files (T-268): peer address, file keys, FILES_NET
         coordinator.onOverflow = { [server] in server.endSessions() }
         // T-325: a stalled coordinator refuses new sessions; the last resort releases input first, then restarts.
-        coordinator.onRefuseSessions = { [server] in server.setRefusingSessions($0) }
+        coordinator.onRefuseSessions = { [server, input] on in
+            input.setStallGate(on)  // nothing new can be pressed while sessions are refused
+            server.setRefusingSessions(on)
+        }
         coordinator.onStallRestart = { [input] in
             StallRestart.run(.init(
-                releaseInput: { input.shutdown() },  // release-all + bounded drain of owed releases, idempotent
+                // Release-all + bounded drain; reports what is still owed and whether the held-input mirror is empty.
+                releaseInput: { input.stallRelease() },
                 scheduleRelaunch: {
                     // Starts the helper before the terminate; it opens a new instance only after this pid is gone.
                     let path = Bundle.main.bundlePath
@@ -247,7 +251,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                 requestTerminate: {  // applicationWillTerminate runs the full orderly shutdown
                     DispatchQueue.main.async { NSApp.terminate(nil) }
                 },
-                // The input queue did not answer: release from the held-input mirror on a thread of our own.
+                // Best effort when the input queue did not answer; never confirms a release, never permits an exit.
                 emergencyRelease: { input.emergencyRelease() },
                 forceExit: { exit(75) },
                 log: { HostLog.log(.error, component: "net", event: "stall_restart", fields: $0) }))
