@@ -32,8 +32,9 @@ brand="$("$ADB" shell getprop ro.product.brand | tr -d '\r')"
 
 before="$("$ADB" shell dumpsys package "$PKG" | sed -n 's/.*lastUpdateTime=//p' | head -1)"
 log="$(mktemp -t mb-install)"
-# -d: versionCode is the commit count (T-146), so an APK from a branch with fewer commits is a "downgrade"; debug
-# builds allow it and keep app data (never uninstall: that deletes the pairing keys).
+# -d: versionCode is the build minute (T-301), so a freshly built APK always installs over an older one. -d still lets a
+# debuggable installed app take an older APK; a non-debuggable (daily) one refuses (rebuild instead). Never uninstall:
+# that deletes the pairing keys.
 "$ADB" install -r -d "$APK" >"$log" 2>&1 &
 install_pid=$!
 
