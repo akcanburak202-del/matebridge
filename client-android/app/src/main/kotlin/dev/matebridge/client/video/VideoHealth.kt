@@ -272,6 +272,7 @@ class VideoHealth(
             return manualResume(now)
         }
         if (resumes >= MAX_RESUMES) {
+            pendingResumeConn = videoConn // T-294: [tick] resumes for it once the episode is manual and the cooldown is over
             log('I', "video_recover", "step=resume_skipped resumes=$resumes manual=0 vgen=$generation")
             return null
         }
@@ -294,9 +295,9 @@ class VideoHealth(
     fun tick(progress: DecodeProgress.Snapshot?): Action? {
         val now = clock()
         pendingResumeConn?.let { conn ->
-            if (state != State.FAULT || cause != FaultCause.VIDEO_LOST || !manual || conn <= lostConn) {
+            if (state != State.FAULT || cause != FaultCause.VIDEO_LOST || conn <= lostConn) {
                 pendingResumeConn = null // that fault is over or moved on
-            } else {
+            } else if (manual) {
                 val last = lastManualResumeMs
                 if (last == null || now - last >= MANUAL_RESUME_GAP_MS) return manualResume(now)
             }

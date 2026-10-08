@@ -369,6 +369,13 @@ class SessionController(
         mail.mode.setCursor(on)
     }
 
+    /** Non-blocking. T-294: "Yeniden dene" was tapped; the video reopen backoff starts over. Any thread. */
+    fun resetVideoBackoff() {
+        if (terminated.get()) return
+        ensureEngine()
+        events.offer(SessionMachine.Event.ResetVideoBackoff) // a full queue only means the next frame resets it anyway
+    }
+
     /**
      * Non-blocking. T-269: the UI forgot the Mac's open request [requestId] with no server to publish about (sharing was
      * switched off while waiting); the machine drops it if it is still the live one. Any thread.
@@ -1131,6 +1138,7 @@ class SessionController(
             is SessionMachine.Event.SetFiles -> LogLine('I', "files_info_set", "state=${e.info.state} port=${e.info.port}") // never the token
             is SessionMachine.Event.Tick -> null
             is SessionMachine.Event.VideoFirstFrame -> null
+            SessionMachine.Event.ResetVideoBackoff -> null
             is SessionMachine.Event.Migrate -> LogLine(
                 'I', "migrate_request",
                 "host=${e.endpoint.host} port=${e.endpoint.port} transport=${ConnectMode.transportOf(e.endpoint).logName}",

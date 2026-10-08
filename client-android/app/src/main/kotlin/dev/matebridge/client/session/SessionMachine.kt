@@ -170,6 +170,8 @@ class SessionMachine(
         data class VideoClosed(val gen: Int, val gotFrame: Boolean = false) : Event
         /** T-294: video connection [gen] received its first VIDEO_FRAME (reader thread; may arrive before or with its close). */
         data class VideoFirstFrame(val gen: Int) : Event
+        /** T-294: the user tapped "Yeniden dene": clear the empty-close streak and cap a pending video retry at 500 ms. */
+        data object ResetVideoBackoff : Event
         /** Periodic; [videoFrames] is the running count of frames received on video connections. */
         data class Tick(val videoFrames: Long) : Event
         /** T-096: move the accepted session to [endpoint] via takeover (make-before-break); see the class comment. */
@@ -570,6 +572,14 @@ class SessionMachine(
                     // (the close may be the takeover's or an unrelated failure, and the proof may stall until its deadline).
                     // The flag only lets the UI hold back the overlay for a promotion that is about to reconfigure.
                     out += Action.VideoLost(event.gen, duringMigration = candAck != null)
+                }
+            }
+            Event.ResetVideoBackoff -> {
+                videoEmptyCloses = 0
+                if (!videoOpen) videoRetryAtUs = minOf(videoRetryAtUs, nowUs + VIDEO_RETRY_US)
+                if (loggedVideoBackoffUs != VIDEO_RETRY_US) {
+                    loggedVideoBackoffUs = VIDEO_RETRY_US
+                    log('I', "video_retry", "backoff_ms=${VIDEO_RETRY_US / 1000} empty=0")
                 }
             }
             is Event.VideoFirstFrame -> if (event.gen == videoGen && !videoGotFrame) {

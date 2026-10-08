@@ -10,6 +10,7 @@ files:
   - client-android/app/src/main/kotlin/dev/matebridge/client/session/SessionMachine.kt
   - client-android/app/src/main/kotlin/dev/matebridge/client/video/VideoHealth.kt
   - client-android/app/src/main/kotlin/dev/matebridge/client/session/SessionController.kt  # (T-294 review, orchestrator)
+  - client-android/app/src/main/kotlin/dev/matebridge/client/MainActivity.kt  # (T-294 review, orchestrator) only the retry handler call
   - client-android/app/src/test/kotlin/dev/matebridge/client/session/
   - client-android/app/src/test/kotlin/dev/matebridge/client/video/
   - backlog/tasks/T-294-client-video-retry-backoff.md
@@ -64,8 +65,10 @@ T-291 tasarım notu, "Tablet" bölümü (`backlog/tasks/T-291-rebuild-budget-wit
   - P1: `VideoHealth` soğuma süresinde gelen ilk kareyi `pendingResumeConn` olarak hatırlar; `tick()` süre dolunca `RESTART_CODEC` (`step=manual_resume`) döndürür. O/sonraki bağlantının `videoLost`'u, Detached ve kullanım temizler; hâlâ 10 sn'de en çok bir resume.
   - P2: `SessionController` okuyucu iş parçacığı bağlantının ilk karesini görünce `Event.VideoFirstFrame(gen)` gönderir (`videoFirstFrame` posta kutusu, `videoClosed`'dan önce alınır) ve `VideoClosed(gen, gotFrame)` bilgisini kendisi taşır; kare almış bağlantı boş sayılmaz. Tick tabanlı çıkarım kaldırıldı.
   - Testler: ertelenmiş resume, iptal, hız sınırı; kare-sonra-kapanış (4 sn basamaktan 500 ms'ye), bayat ilk-kare olayı.
-  - "Yeniden dene" sıfırlaması hâlâ bağlı değil (`MainActivity` gerekir), Open questions aynen.
+- **Review turu 2:**
+  - P1: resume hakkı bitmişken (manual öncesi) ya da soğuma sürerken atlanan her akan bağlantı `pendingResumeConn` olur; `tick()` manual + soğuma bitince `RESTART_CODEC` döndürür (manual olmadan beklemeye devam eder, hata/kayıp/Detached temizler). Test: 3 kısmi bağlantı, +10 sn'de kararlı bağlantı, +15 sn manual sonrası resume.
+  - P2: "Yeniden dene" tıklaması `controller.resetVideoBackoff()` çağırır (`MainActivity` yalnız tıklama işleyicisi) -> `Event.ResetVideoBackoff`: boş-kapanış sayacı sıfırlanır, bekleyen video yeniden açma en geç şimdi+500 ms'ye çekilir (daha erkense değişmez). SessionMachine düzeyinde test edildi; `MainActivity` bağlantısının kendisi birim testsiz (tablette: kısmen 4 sn basamaktayken düğmeye basınca ~0,5 sn'de yeniden bağlanmalı).
 
 ## Open questions
 
-- "Yeniden dene" backoff sayacını sıfırlamıyor (yukarıya bakın). İstenirse `SessionMachine`'e bir olay ve `MainActivity` bağlantısı gerekir (ayrı kart).
+(yok)

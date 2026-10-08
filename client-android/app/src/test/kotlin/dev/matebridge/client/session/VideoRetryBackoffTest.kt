@@ -106,6 +106,46 @@ class VideoRetryBackoffTest {
     }
 
     /** A first-frame event of an older connection does not mark the current one. */
+    /** T-294 review round 2: "Yeniden dene" clears the streak and pulls a pending retry forward to 500 ms. */
+    @Test fun retryTapResetsTheStreakAndPullsThePendingRetryForward() {
+        streaming()
+        repeat(6) { closeAndWaitReopen() }
+        // Close again: the next reopen is 4 s away. 1 s later the user taps.
+        val before = video
+        step(Event.VideoClosed(video))
+        repeat(10) { step(Event.Tick(frames), 100_000); step(Event.Received(ctl, Pong(0, 0, 0))) }
+        assertEquals(before, video)
+        step(Event.ResetVideoBackoff)
+        assertEquals("I video_retry backoff_ms=500 empty=0", logs.last())
+        var t = 0L
+        while (video == before) {
+            step(Event.Tick(frames), 100_000)
+            step(Event.Received(ctl, Pong(0, 0, 0)))
+            t += 100_000
+            assertTrue("reopen within 1 s", t <= 1_000_000)
+        }
+        assertTrue("at most 500 ms after the tap (+ one tick): $t", t <= 600_000)
+        // The streak starts anew.
+        assertEquals(listOf(500L, 500, 500), (1..3).map { closeAndWaitReopen() / 1000 })
+        assertEquals(1000L, closeAndWaitReopen() / 1000)
+    }
+
+    @Test fun aRetryTapDoesNotDelayAnEarlierRetry() {
+        streaming()
+        val before = video
+        step(Event.VideoClosed(video)) // 500 ms wait
+        step(Event.Tick(frames), 100_000)
+        step(Event.ResetVideoBackoff)
+        var t = 100_000L
+        while (video == before) {
+            step(Event.Tick(frames), 100_000)
+            step(Event.Received(ctl, Pong(0, 0, 0)))
+            t += 100_000
+            assertTrue(t <= 1_000_000)
+        }
+        assertTrue("not later than the original 500 ms: $t", t <= 600_000)
+    }
+
     @Test fun aStaleFirstFrameEventIsIgnored() {
         streaming()
         val old = video

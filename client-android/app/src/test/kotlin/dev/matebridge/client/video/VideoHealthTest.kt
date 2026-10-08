@@ -416,6 +416,43 @@ class VideoHealthTest {
         org.junit.Assert.fail("the deferred resume never fired: $logs")
     }
 
+    /** T-294 review round 2: resumes used up before manual, a stable connection at +10 s; manual at +15 s resumes it. */
+    @Test fun aFlowingConnectionSkippedForExhaustedResumesResumesOnceManual() {
+        healthy(1)
+        val t0 = now
+        lost()
+        repeat(VideoHealth.MAX_RESUMES) { // partial reconnects
+            now += 100
+            assertEquals(Action.RESTART_CODEC, flowing())
+            begin(health.generation + 1)
+            conn++; lost()
+        }
+        var resumedAt = -1L
+        fun drive(untilMs: Long) {
+            while (now - t0 < untilMs && resumedAt < 0) {
+                now += 500
+                when (tick()) {
+                    Action.RESTART_CODEC -> {
+                        if (health.manual) { resumedAt = now - t0 } else begin(health.generation + 1)
+                    }
+                    Action.RECONNECT -> { health.onEvent(Detached(health.generation)); begin(health.generation + 1) }
+                    null -> Unit
+                }
+            }
+        }
+        drive(10_000)
+        assertFalse(health.manual)
+        conn++; lost() // the last generation faulted again
+        assertNull("resumes are used up", flowing()) // the stable connection's one-time notice
+        assertTrue(logs.toString(), logs.any { it.startsWith("I video_recover step=resume_skipped ") && "manual=0" in it })
+        drive(20_000)
+        assertTrue("resumed once manual: $logs", resumedAt >= 15_000)
+        assertTrue(logs.toString(), logs.any { it.startsWith("I video_recover step=manual_resume ") })
+        // At most one per 10 s in manual: nothing is pending any more.
+        now += 1_000
+        assertNull(tick())
+    }
+
     @Test fun aLossBeforeCooldownExpiryCancelsTheDeferredResume() {
         toManual()
         assertEquals(Action.RESTART_CODEC, flowing())
