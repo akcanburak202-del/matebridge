@@ -1,7 +1,7 @@
 ---
 id: T-294
 title: Tablet — kare gelmeyen video bağlantılarında yeniden açma geri çekilmesi; "manual" durumda 10 sn'de bir kendiliğinden dönüş
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-291]

@@ -247,6 +247,8 @@ Yalnız ölçüm, T-142'den beri isteğe bağlı: yalnız `--ez stall_diag true`
 
 - `ev=video_health state=idle|starting|healthy|fault cause=-|give_up|no_output|not_running|stuck|video_lost from=<önceki> vgen=N` (I; fault'ta W). Input yalnız `healthy`'de açık; her `starting` ve `fault` input'u kapatır (`RELEASE_ALL(USER)`). `vgen` decoder kuşağıdır (`gen=` zaten oturum kuşağı). `video_lost` (T-218): akış sırasında video bağlantısı koptu, kontrol oturumu sürse bile.
 - `ev=video_recover step=restart|reconnect|manual|retry|resume|done n=N vgen=N` (W; `done` ve `resume` I): kurtarma adımları, +1 sn ve +3 sn decoder yeniden başlatma, +6 sn oturumu yeniden kurma, +15 sn "Yeniden dene". `resume` (T-218): `video_lost`'tan sonra yeni video bağlantısının ilk karesi geldi. Decoder yeni kuşakla yeniden başlar ve input o kuşağın ilk çözülmüş çıktısında açılır.
+- `ev=video_recover step=manual_resume vgen=N` (I, T-294): "Yeniden dene" durumundayken video geri geldi (host'un devre kesicisi deneme kurulumu yaptı). Decoder en çok 10 sn'de bir yeniden başlar; bekleme sürerken gelen bağlantı saklanır ve süre dolunca kullanılır.
+- `ev=video_retry backoff_ms=500|1000|2000|4000 empty=N` (I, T-294): video yeniden açma beklemesi değişti. Üst üste 3 bağlantı hiç kare almadan kapanınca bekleme 500 ms'den 4 sn'ye kadar ikiye katlanır. İlk kare ya da "Yeniden dene" 500 ms'ye döndürür. Olağan bağlanmada hiç yazılmaz.
   - Bölüm başına en çok 3 `resume` olur. `resume` merdiveni ertelemez.
   - `step=resume_skipped resumes=N manual=0|1` (I): bütçe doldu ya da merdiven el ile aşamasında.
   - `step=resume_stale conn=N lost_conn=N` (I): kaybedilen bağlantıdan yeni olmayan bir bağlantının geç gelen bildirimi düşürüldü.
