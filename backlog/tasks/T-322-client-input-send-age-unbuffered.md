@@ -1,7 +1,7 @@
 ---
 id: T-322
 title: Tablet — girdi gönderim yaşı istatistiği (EN1) ve parmak/trackpad/fare için tamponsuz dağıtım anahtarı (EN3)
-status: review
+status: done
 phase: 7
 owner: android-client-dev
 depends_on: []

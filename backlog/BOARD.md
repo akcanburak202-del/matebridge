@@ -29,7 +29,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-202](tasks/T-202-host-crash-restart-agent.md) | Relaunch the host after a crash (LaunchAgent with KeepAlive) | 6 | mac-host-dev | [T-147, T-148] |
 | [T-320](tasks/T-320-fling-boost-adoption.md) | Fling boost'u benimseme — pil ve ısı bedeli, skip_pct etkisi, hangi modlarda açık (karar + kullanıcı onayı) | 7 | orchestrator | [T-319] |
 | [T-321](tasks/T-321-144hz-wifi-stall.md) | 144 Hz (Yüksek) ekran ayarında tabletin ağ trafiği duruyor; MateBridge ve adb kopuyor — sistem mi, MateBridge yükü mü | 7 | orchestrator | [] |
-| [T-322](tasks/T-322-client-input-send-age-unbuffered.md) | Tablet — girdi gönderim yaşı istatistiği (EN1) ve parmak/trackpad/fare için tamponsuz dağıtım anahtarı (EN3) | 7 | android-client-dev | [] |
 | [T-323](tasks/T-323-host-inject-to-frame.md) | Host — "girdi enjekte edildi → ilk değişen kare" süresi (EN2/HA3), SCK dirty rect ile; yalnız log | 7 | mac-host-dev | [] |
 | [T-324](tasks/T-324-host-usb-watcher-idle.md) | Host — Wi-Fi'deyken USB tünel izleyicisi ~%1,5 işlemci harcıyor (adb yoklaması); kablo yokken yoklamayı seyrek ya da olay tabanlı yap | 7 | mac-host-dev | [] |
 | [T-325](tasks/T-325-coordinator-stall.md) | Host — StreamCoordinator oturum kapanışında takıldı; posta kutusu taştı ve her yeni oturum hemen kapandı (kullanıcı Mac'i zorla kapattı) | 7 | mac-host-dev | [] |
@@ -337,3 +336,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-316](tasks/T-316-ddr-clock-lever.md) | Araştırma — dokunma olmadan Huawei DDR/GPU saatleri düşük kalıyor; uygulamanın kontrol edebileceği bir kaldıraç (çözme 15,4 → 11,4 ms, cap_dec −15 ms) | 7 | orchestrator | [T-310] |
 | [T-317](tasks/T-317-dec-out-park-default.md) | Tablet — dec_out_park varsayılanı on (T-312 A/B kabul); off bir döngü geri dönüş | 7 | android-client-dev | [T-312] |
 | [T-318](tasks/T-318-perf-lever-knob.md) | Tablet — perf_lever dev knobu (T-316 kaldıraç araştırması): sustained / ADPF / KEY_FRAME_RATE / game | 7 | android-client-dev | [T-316] |
+| [T-322](tasks/T-322-client-input-send-age-unbuffered.md) | Tablet — girdi gönderim yaşı istatistiği (EN1) ve parmak/trackpad/fare için tamponsuz dağıtım anahtarı (EN3) | 7 | android-client-dev | [] |
