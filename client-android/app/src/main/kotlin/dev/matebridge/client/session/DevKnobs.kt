@@ -1,5 +1,6 @@
 package dev.matebridge.client.session
 
+import dev.matebridge.client.input.UnbufferedSources
 import dev.matebridge.client.video.PacerTuning
 import java.util.Locale
 
@@ -82,6 +83,11 @@ data class DevKnobs(
     val decOutPark: Boolean = true,
     /** `--ez cursor_predict false` (T-278, decision 0036 v2): the local cursor draws the host's position as in v1. Default on. */
     val cursorPredict: Boolean = true,
+    /**
+     * `--es unbuffered_src off|touch|all` (T-322, EN3): sources besides the pen that ask for unbuffered dispatch.
+     * Unknown or absent = [UnbufferedSources.OFF] (the pen behaviour is unchanged either way).
+     */
+    val unbufferedSrc: UnbufferedSources = UnbufferedSources.OFF,
     /** Keep: `--ez stats_1s true` (T-141). */
     val stats1s: Boolean = false,
     /** Keep: `--ez pace_trace true` (T-069). */
@@ -134,6 +140,7 @@ data class DevKnobs(
             Spec("catch_up", Kind.BOOL, debugOnly = true),
             Spec("dec_out_park", Kind.STRING, debugOnly = true, ids = setOf("off", "on")),
             Spec("cursor_predict", Kind.BOOL, debugOnly = true),
+            Spec("unbuffered_src", Kind.STRING, debugOnly = true, ids = setOf("off", "touch", "all")),
             Spec("stats_1s", Kind.BOOL, debugOnly = false),
             Spec("pace_trace", Kind.BOOL, debugOnly = false),
             Spec("stall_diag", Kind.BOOL, debugOnly = false),
@@ -172,6 +179,7 @@ data class DevKnobs(
                 catchUp = x.bool("catch_up", true),
                 decOutPark = x.string("dec_out_park")?.trim()?.lowercase(Locale.ROOT) != "off",
                 cursorPredict = x.bool("cursor_predict", true),
+                unbufferedSrc = UnbufferedSources.parse(x.string("unbuffered_src")),
                 stats1s = x.bool("stats_1s", false),
                 paceTrace = x.bool("pace_trace", false),
                 stallDiag = x.bool("stall_diag", false),

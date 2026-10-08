@@ -8,7 +8,7 @@ package dev.matebridge.client.input
  * then injects each message back to back, so a drawing app sees bursts instead of evenly spaced points. With the
  * request in place each sample arrives in its own MotionEvent and leaves in its own PEN message.
  *
- * The request (minSdk 31, decision 0037) is logged once (`unbuffered path=...` on `MB/input`):
+ * The request (minSdk 31, decision 0037) is logged once (`unbuffered path=... sources=...` on `MB/input`):
  *  - [Path.SOURCE]: `View.requestUnbufferedDispatch(int source)` for the stylus source, made on a LEAF view
  *    (a ViewGroup recomputes its own source from its children and would overwrite a request stored on the group
  *    itself). It stays in force until it is cleared, and it covers hover, which arrives as generic motion events. It is
@@ -27,6 +27,8 @@ class UnbufferedPenDispatch(
     private val backend: Backend,
     /** Rare-event log hook of `MB/input` (name, key=value fields). */
     private val onEvent: (String, String) -> Unit = { _, _ -> },
+    /** T-322: label of the sources the backend requests (`stylus` alone, or more with `unbuffered_src`); logged with the path. */
+    private val sourcesLabel: String = "stylus",
 ) {
     enum class Path { SOURCE, FAILED }
 
@@ -93,6 +95,6 @@ class UnbufferedPenDispatch(
     private fun logPathOnce() {
         if (logged) return
         logged = true
-        onEvent("unbuffered", "path=source")
+        onEvent("unbuffered", "path=source sources=$sourcesLabel")
     }
 }

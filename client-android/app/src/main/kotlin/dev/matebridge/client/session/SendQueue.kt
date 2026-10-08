@@ -1,5 +1,6 @@
 package dev.matebridge.client.session
 
+import dev.matebridge.client.input.SendAgeStats
 import dev.matebridge.client.protocol.Codec
 import dev.matebridge.client.protocol.Message
 
@@ -12,7 +13,10 @@ import dev.matebridge.client.protocol.Message
  * belongs to the input tasks.
  */
 class SendQueue(private val maxBytes: Int = 256 * 1024, private val maxAgeMs: Long = 1000) {
-    private class Entry(val bytes: ByteArray, val atMs: Long)
+    private class Entry(val bytes: ByteArray, val atMs: Long, val cls: Int, val eventTimeUs: Long)
+
+    /** T-322: one taken frame with its send-age stamp (`cls` -1 = not an input message, nothing to record). */
+    class Stamped(val bytes: ByteArray, val cls: Int, val eventTimeUs: Long)
 
     private val lock = Object()
     private val items = ArrayDeque<Entry>()
@@ -22,27 +26,30 @@ class SendQueue(private val maxBytes: Int = 256 * 1024, private val maxAgeMs: Lo
     private var overflowed = false
 
     /** Returns false when the bound is exceeded (or the queue is closed); nothing is enqueued then. */
-    fun offer(bytes: ByteArray, nowMs: Long): Boolean = synchronized(lock) {
+    fun offer(bytes: ByteArray, nowMs: Long, cls: Int = -1, eventTimeUs: Long = 0L): Boolean = synchronized(lock) {
         if (closing || aborted || overflowed) return false
         val oldest = items.firstOrNull()
         if (queuedBytes + bytes.size > maxBytes || (oldest != null && nowMs - oldest.atMs > maxAgeMs)) {
             overflowed = true
             return false
         }
-        items.addLast(Entry(bytes, nowMs))
+        items.addLast(Entry(bytes, nowMs, cls, eventTimeUs))
         queuedBytes += bytes.size
         lock.notifyAll()
         true
     }
 
     /** Blocks for the next frame. Returns null once aborted, or closed and drained. */
-    fun take(): ByteArray? = synchronized(lock) {
+    fun take(): ByteArray? = takeStamped()?.bytes
+
+    /** [take] with the send-age stamp of the frame (T-322). Single consumer: the control writer thread. */
+    fun takeStamped(): Stamped? = synchronized(lock) {
         while (true) {
             if (aborted) return null
             val e = items.removeFirstOrNull()
             if (e != null) {
                 queuedBytes -= e.bytes.size
-                return e.bytes
+                return Stamped(e.bytes, e.cls, e.eventTimeUs)
             }
             if (closing) return null
             lock.wait()
@@ -80,7 +87,9 @@ class ControlLink(
     private var reported = false
 
     fun send(msg: Message): Boolean {
-        if (queue.offer(Codec.encode(msg), clockMs())) return true
+        val cls = SendAgeStats.classOf(msg)
+        val t = if (cls >= 0) SendAgeStats.eventTimeUs(msg) else 0L
+        if (queue.offer(Codec.encode(msg), clockMs(), cls, t)) return true
         if (queue.isOverflowed()) {
             val first = synchronized(this) { !reported.also { reported = true } }
             if (first) onOverflow()
