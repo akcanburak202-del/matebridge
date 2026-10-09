@@ -31,6 +31,8 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-331](tasks/T-331-host-idle-timers.md) | Host — oturum tiki yalnız bağlantı varken, refine zamanlayıcısı olay güdümlü (boş uyanmaları azalt) | 7 | mac-host-dev | [T-330] |
 | [T-332](tasks/T-332-client-idle-ticker-gating.md) | İstemci — sabit ekranda/girdi yokken inputTicker ve PING seyreltme (pil) | 7 | android-client-dev | [T-330] |
 | [T-333](tasks/T-333-game-encoder-peaks.md) | Oyun 60 — kodlayıcı kare boyutu tepeleri (LLRC/ConstantBitRate, kısa rate penceresi, MaxAllowedFrameQP) EncodeBench karşılaştırması | 7 | mac-host-dev | [T-330] |
+| [T-334](tasks/T-334-dav-copy-put-concurrency.md) | WebDAV — eşzamanlı COPY/MOVE geri alması başka bağlantının başarılı PUT'unu silmesin | 7 | android-client-dev | [T-288] |
+| [T-335](tasks/T-335-host-pipeline-stop-join.md) | Host — pipeline teardown sürerken ikinci stop çağıranı beklesin; hata zamanı teardown'dan önce alınsın | 7 | mac-host-dev | [T-325, T-293] |
 
 ## done
 
@@ -343,4 +345,5 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-326](tasks/T-326-host-explicit-dscp.md) | Host — Wi-Fi öncelik sınıfları kabloda kayboluyor (Ethernet'te DSCP 0); açık IP_TOS anahtarı ve A/B | 7 | mac-host-dev | [] |
 | [T-327](tasks/T-327-core-congestion-controller.md) | Core — saf Wi-Fi tıkanıklık denetleyicisi (uçuştaki bayt bütçesi, hızlı in / yavaş çık), 2026-10-09 Oyun izinden altın tekrar | 7 | mac-host-dev | [] |
 | [T-328](tasks/T-328-host-wifi-adaptive-bitrate.md) | Host — tıkanıklık denetleyicisini video kapısına ve kodlayıcıya bağla (Wi-Fi, anahtar) + canlı bit hızı ayarlayıcısını geri getir | 7 | mac-host-dev | [T-327, T-326] |
+| [T-329](tasks/T-329-astra-xhigh-review.md) | Review — gpt-6-astra (xhigh), T-283'ten (0ff7b86b) bu yana + riskli bölgeler | 7 | orchestrator | [T-283] |
 | [T-330](tasks/T-330-optimization-research-3.md) | Optimizasyon araştırması 3 — boşta enerji, Wi-Fi bit hızı tepeleri, 60 fps çözme | 7 | orchestrator | [T-298] |

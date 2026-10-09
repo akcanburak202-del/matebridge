@@ -1,7 +1,7 @@
 ---
 id: T-329
 title: Review — gpt-6-astra (xhigh), T-283'ten (0ff7b86b) bu yana + riskli bölgeler
-status: in_progress
+status: done
 phase: 7
 owner: orchestrator
 depends_on: [T-283]
@@ -39,5 +39,11 @@ Kullanıcı onayı (2026-10-10 ~00:45): Codex `gpt-6-astra`, `model_reasoning_ef
 Kabul 1–3. Kullanıcı sabaha kadar yok; kod değişikliği yapılmaz, yalnız kartlar.
 
 ## Handoff
+
+- `gpt-6-astra` xhigh, `main` @ `7bf1765e`, ilk denemede başarılı. Çıktı aynen `docs/reviews/2026-10-10/astra-review.md`, üstünde triyaj.
+- Doğrulanan yeni bulgular: T-334 (DAV eşzamanlı COPY/PUT, P1 → P2), T-335 (pipeline stop yarışı P2 + hata zamanı P3).
+- Hâlâ açık ve bilinen: T-200, T-199.
+- Kapananlar: T-288, T-290, T-325 teardown sınırı. T-289 koşullu kapandı (T-335'e bağlı).
+- Girdi takılması, protokol uyumsuzluğu, AEAD ya da `VirtualDisplay` ihlali bulunmadı.
 
 ## Open questions
