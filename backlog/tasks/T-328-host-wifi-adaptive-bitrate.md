@@ -17,6 +17,7 @@ files:
   - host-mac/Sources/MateBridgeCore/Video/SocketVideoTransport.swift
   - host-mac/Sources/MateBridgeCore/Video/EncoderSubmitOrder.swift
   - host-mac/Sources/MateBridgeCore/Session/WifiAdaptation.swift
+  - host-mac/Sources/MateBridgeCore/Session/CongestionController.swift
   - host-mac/Tests/MateBridgeCoreTests/Video/
   - docs/LOGGING.md
   - backlog/tasks/T-328-host-wifi-adaptive-bitrate.md
@@ -79,6 +80,9 @@ Riskler: (1) VideoToolbox `fast` profilinde `AverageBitRate` canlı değişimi i
   - Kare başına `admit()` `getsockopt` maliyeti (host CPU) ve kapının gereksiz kısması: `admits_blocked`, `blocked_ms`, `queue_drops`, keyframe sayısı (bütçeden büyük keyframe sonrası kapı kapanır; kuyruk taşması keyframe isteği doğurabilir; T-176 birleştirici bunu yumuşatır).
   - Kapalı döngü davranış (hedef iner mi, 5 s sonra tavana döner mi, durağan metin netliği), denetleyici sabitlerinin başka WLAN'da uygunluğu.
   - Hiçbir cihaz testi çalıştırılmadı; çalışan host uygulamasına dokunulmadı.
+- **Codex düzeltmeleri (tur 1):**
+  - **P1 (taşma/crash):** `admit()` zaman damgasını kilitten önce okuyor; `takeLogWindow()` açık engel başlangıcını ilerletince `now &- since` sarıyor ve `windowBlockedUs +=` trap edebilirdi. Artık her geçen süre `WifiAdaptation.elapsed(now, since:)` ile (since sonra ise 0) hesaplanıyor, birikim tek yerde (`accrueBlockedLocked`, `&+=`), başlangıç geriye gitmiyor; örnek tazeliği kontrolü de aynı yardımcıyı kullanıyor. Test: `testStaleTimestampNeverWrapsTheBlockedAccounting` (eski saat okumasıyla admit/tick/takeLogWindow).
+  - **P2 (kalıcı engellemede iniş yok):** kapı reddi sırasındaki kuyruk düşüşlerinin bastırılması kaldı (keyframe taşması iniş doğurmasın), ama sınırlandı: son 20 tick'te (2 s) kapı süresinin >= %60'ı kapalıysa **ve** o aralıkta host kuyruk düşüşü varsa yeni `CongestionController.Trigger.blocked` (`blockedTooLong(nowUs:)`, T-327 dosyasına küçük ek; aynı x0,7 ve en az max(srtt,250 ms) aralığı) hedefi düşürür; kanıt silinir, bir sonraki iniş için yeniden 2 s gerekir. Eşik gerekçesi `WifiAdaptation.sustainedTicks` yorumunda: gözlenen en büyük keyframe'ler 240-680 KB, 12 Mbps tabanda 0,45 s boşalır; 1 MB bile 0,67 s = aralığın %33'ü; %60 = 1,2 s = tabanda 1,8 MB keyframe. Testler: `testOneOversizedKeyframeNeverLowersTheTarget` (1 s engel, düşüş yok), `testSustainedBlockingOnAnUnderCapacityLinkLowersTheTargetOncePerSpan` (2 s aralık başına bir iniş, hedef 60000 -> 29500), `testBlockingWithoutQueueDropsIsNotACongestionSignal`. `ev=adapt_step trigger=blocked` LOGGING.md'de.
 - **Cihaz A/B'de loga bakılacaklar:** `video ev=adapt` (saniyelik: `target_kbps`, `sbbytes_p95`, `srtt_ms`, `admits_blocked`, `blocked_ms`, `queue_drops`, `down_steps`), `video ev=adapt_step` (inişlerde `trigger=`), `video ev=bitrate_set` (`avg_status=0 limits_status=0`, `aux_status`), `net ev=tcp` (video `sndbuf_bytes`, `retx_pkts_delta`, kontrol srtt p95), `video ev=cadence` (`queue_drops`), tablet tarafı fps/ses kesintisi. USB oturumunda hiç `adapt*` satırı çıkmamalı.
 
 ## Open questions

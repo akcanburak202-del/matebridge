@@ -27,6 +27,15 @@ public final class WifiAdaptation: @unchecked Sendable {
     public static let sampleFreshUs: UInt64 = 2_000
     public static let retryFirstUs: UInt64 = 4_000
     public static let retryMaxUs: UInt64 = 20_000
+    /// Sustained blocking (P2): the gate was closed for at least `sustainedBlockedPercent` of the last
+    /// `sustainedTicks` ticks (2 s at 100 ms) and the host queue dropped frames in that span. One keyframe cannot
+    /// reach this: the largest keyframes seen are 240-680 KB (T-327 trace), which drain in 0.45 s at the 12 Mbps floor
+    /// and less at any higher target, and keyframes are at least a coalescing window apart; even 1 MB at the floor
+    /// closes the gate for 0.67 s, 33 % of the span. 60 % of 2 s is 1.2 s of blocking, i.e. a 1.8 MB keyframe at the
+    /// floor. A link that cannot carry the target keeps the gate closed for most of every second. After the decrease
+    /// the evidence is cleared, so the next one needs another full span (0.7x per 2 s at most).
+    static let sustainedTicks = 20
+    static let sustainedBlockedPercent: UInt64 = 60
     /// Bound of the `sbbytes` samples kept for one log window.
     static let maxWindowSamples = 2_048
 
@@ -84,6 +93,10 @@ public final class WifiAdaptation: @unchecked Sendable {
 
     // Tick state.
     private var lastDropsTotal: Int?
+    private var lastTickUs: UInt64?
+    private var tickBlockedUs: UInt64 = 0
+    /// The last `sustainedTicks` ticks: time blocked, time covered, queue drops.
+    private var recent: [(blockedUs: UInt64, spanUs: UInt64, drops: Int)] = []
 
     // Log window.
     private var samples: [UInt32] = []
@@ -189,6 +202,20 @@ public final class WifiAdaptation: @unchecked Sendable {
                 result.reportedDrops = drops
                 if controller.queueDropped(nowUs: now), trigger == nil { trigger = .queueDrop }
             }
+
+            // Sustained blocking: the suppression above stops a keyframe from lowering the target, this stops it
+            // from hiding a link that cannot carry the target.
+            accrueBlockedLocked(at: now)
+            if let last = lastTickUs {
+                recent.append((tickBlockedUs, Self.elapsed(now, since: last), drops))
+                if recent.count > Self.sustainedTicks { recent.removeFirst(recent.count - Self.sustainedTicks) }
+            }
+            lastTickUs = max(lastTickUs ?? 0, now)
+            tickBlockedUs = 0
+            if sustainedBlockingLocked() {
+                recent.removeAll()
+                if controller.blockedTooLong(nowUs: now), trigger == nil { trigger = .blocked }
+            }
             if trigger != nil { windowDownSteps += 1 }
 
             result.trigger = trigger
@@ -205,11 +232,8 @@ public final class WifiAdaptation: @unchecked Sendable {
     public func takeLogWindow() -> LogWindow {
         let now = nowUs()
         return lock.withLock {
-            var blockedUs = windowBlockedUs
-            if let since = blockedSinceUs {
-                blockedUs += now &- since  // the episode still open counts up to now
-                blockedSinceUs = now
-            }
+            accrueBlockedLocked(at: now)  // the episode still open counts up to now
+            let blockedUs = windowBlockedUs
             windowBlockedUs = 0
             let sorted = samples.sorted()
             let p95 = sorted.isEmpty ? 0 : sorted[min(sorted.count - 1, (sorted.count * 95 + 99) / 100 - 1)]
@@ -232,7 +256,8 @@ public final class WifiAdaptation: @unchecked Sendable {
     private func freshSendBuffer(at now: UInt64, force: Bool) -> UInt32? {
         if !force {
             let cached: UInt32? = lock.withLock {
-                guard let c = cachedBytes, now &- cachedAtUs < Self.sampleFreshUs else { return nil }
+                // `now` may be older than a sample another thread took meanwhile: that sample is fresh.
+                guard let c = cachedBytes, Self.elapsed(now, since: cachedAtUs) < Self.sampleFreshUs else { return nil }
                 return c
             }
             if let cached { return cached }
@@ -247,13 +272,36 @@ public final class WifiAdaptation: @unchecked Sendable {
         return read
     }
 
+    /// `now - since`, 0 when `since` is later: timestamps are taken on different threads before the lock, so one can
+    /// be older than a value another thread stored meanwhile. A wrapped difference must never reach an accumulator.
+    static func elapsed(_ now: UInt64, since: UInt64) -> UInt64 { now > since ? now - since : 0 }
+
+    /// Must hold `lock`. Adds the time the open refusal has lasted since it was last counted to the log window and to
+    /// the current tick, and moves its start to `now` (never backwards).
+    private func accrueBlockedLocked(at now: UInt64) {
+        guard let since = blockedSinceUs else { return }
+        let e = Self.elapsed(now, since: since)
+        windowBlockedUs &+= e
+        tickBlockedUs &+= e
+        blockedSinceUs = max(since, now)
+    }
+
     /// Must hold `lock`. The refusal ended: the time it lasted goes into the window.
     private func closeEpisodeLocked(at now: UInt64) {
-        if let since = blockedSinceUs {
-            windowBlockedUs += now &- since
+        if blockedSinceUs != nil {
+            accrueBlockedLocked(at: now)
             blockedSinceUs = nil
         }
         retryDelayUs = Self.retryFirstUs
+    }
+
+    /// Must hold `lock`. Whether the last `sustainedTicks` ticks show the gate closed for most of the time while the
+    /// host queue was dropping frames.
+    private func sustainedBlockingLocked() -> Bool {
+        guard recent.count >= Self.sustainedTicks else { return false }
+        var blocked: UInt64 = 0, span: UInt64 = 0, drops = 0
+        for r in recent { blocked &+= r.blockedUs; span &+= r.spanUs; drops += r.drops }
+        return drops > 0 && span > 0 && blocked * 100 >= span * Self.sustainedBlockedPercent
     }
 
     /// Must hold `lock`. The delay to arm the retry with; nil when one is armed already or the object is stopped.

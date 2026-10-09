@@ -96,6 +96,8 @@ public struct CongestionController: Equatable, Sendable {
         case retransmit
         case queueDelay = "queue_delay"
         case sendBuffer = "send_buffer"
+        /// The owner's gate stayed closed for most of a long window while frames kept dropping (T-328).
+        case blocked
     }
 
     public let config: Config
@@ -156,6 +158,16 @@ public struct CongestionController: Equatable, Sendable {
     public mutating func queueDropped(nowUs: UInt64) -> Bool {
         advance(to: nowUs)
         return trigger(.queueDrop, factor: Self.downFactor, nowUs: max(nowUs, lastUpdateUs)) != nil
+    }
+
+    /// The owner's admission gate was closed for most of a long window with host queue drops throughout, and no other
+    /// trigger fired (T-328 `WifiAdaptation`: a link slower than the target keeps the send buffer between one and
+    /// three budgets, so neither the buffer, the RTT nor the retransmit trigger sees it). Same decrease and
+    /// minimum interval as any trigger. Returns true when the target went down.
+    @discardableResult
+    public mutating func blockedTooLong(nowUs: UInt64) -> Bool {
+        advance(to: nowUs)
+        return trigger(.blocked, factor: Self.downFactor, nowUs: max(nowUs, lastUpdateUs)) != nil
     }
 
     /// Feeds one TCP reading. Returns the trigger that lowered the target, nil when it did not go down (no trigger,

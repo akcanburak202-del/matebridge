@@ -25,6 +25,9 @@ final class WifiAdaptationTests: XCTestCase {
         var pendingTimers: Int { lock.withLock { _timers.count } }
         var armedDelays: [UInt64] { lock.withLock { _delays } }
 
+        /// A reading taken on another thread before it got the lock: older than what was stored meanwhile.
+        func setNow(_ us: UInt64) { lock.withLock { _now = us } }
+
         func read() -> UInt32? { lock.withLock { _reads += 1; return _sendBuffer } }
         func wake() { lock.withLock { _wakes += 1 } }
         func schedule(_ afterUs: UInt64, _ fire: @escaping @Sendable () -> Void) {
@@ -249,6 +252,78 @@ final class WifiAdaptationTests: XCTestCase {
         XCTAssertTrue(r.changed)
         XCTAssertEqual(r.targetKbps, 42_000)
         XCTAssertFalse(a.tick(report: report(retx: 0), queueDropsTotal: 0).changed, "no change, no apply")
+    }
+
+    // MARK: Sustained blocking (P2)
+
+    /// One tick of the closed-loop picture: the sender asks while the gate is closed, 100 ms pass, the tick runs.
+    private func blockedTick(_ a: WifiAdaptation, _ w: World, drops: inout Int, dropsPerTick: Int = 3,
+                             blocked: Bool) -> WifiAdaptation.TickResult {
+        w.sendBuffer = blocked ? 400_000 : 0
+        _ = a.admit()
+        w.advance(us: 100_000)
+        drops += dropsPerTick
+        return a.tick(report: report(), queueDropsTotal: drops)
+    }
+
+    func testOneOversizedKeyframeNeverLowersTheTarget() {
+        let (a, w) = make()
+        var drops = 0
+        _ = a.tick(report: report(), queueDropsTotal: 0)
+        // 1.0 s of blocking behind a keyframe, queue overflowing the whole time, inside a 2 s span: 50 % < 60 %.
+        for i in 0..<60 {
+            let r = blockedTick(a, w, drops: &drops, dropsPerTick: i < 10 ? 3 : 0, blocked: i < 10)
+            XCTAssertNil(r.trigger, "tick \(i)")
+        }
+        XCTAssertEqual(a.targetKbps, 60_000)
+    }
+
+    func testSustainedBlockingOnAnUnderCapacityLinkLowersTheTargetOncePerSpan() {
+        let (a, w) = make()
+        var drops = 0
+        _ = a.tick(report: report(), queueDropsTotal: 0)
+        var triggers: [Int] = []
+        for i in 0..<45 {
+            let r = blockedTick(a, w, drops: &drops, blocked: true)
+            if r.trigger == .blocked { triggers.append(i) }
+            XCTAssertEqual(r.reportedDrops, 0, "the gate refused: these drops are never reported as queue drops")
+        }
+        XCTAssertEqual(triggers.count, 2, "one decrease per full 2 s span, not one per tick")
+        XCTAssertGreaterThanOrEqual(triggers[0], 19)
+        XCTAssertGreaterThanOrEqual(triggers[1] - triggers[0], 20)
+        XCTAssertEqual(a.targetKbps, 29_500, "60 Mbps x 0.7 x 0.7 in 250 kbps steps")
+    }
+
+    func testBlockingWithoutQueueDropsIsNotACongestionSignal() {
+        let (a, w) = make()
+        var drops = 0
+        _ = a.tick(report: report(), queueDropsTotal: 0)
+        for _ in 0..<45 { _ = blockedTick(a, w, drops: &drops, dropsPerTick: 0, blocked: true) }
+        XCTAssertEqual(a.targetKbps, 60_000)
+    }
+
+    // MARK: Timestamps (P1)
+
+    func testStaleTimestampNeverWrapsTheBlockedAccounting() {
+        let (a, w) = make()
+        w.sendBuffer = 400_000
+        XCTAssertFalse(a.admit())              // episode opens at 1.000 s
+        w.advance(us: 500_000)
+        _ = a.takeLogWindow()                  // moves the open episode's start to 1.500 s
+        w.sendBuffer = 0
+        w.advance(us: 30_000)                  // the retry reads the drained buffer (cached at about 1.53 s)
+        // A sender thread that read the clock at 1.200 s and got the lock afterwards:
+        w.setNow(1_200_000)
+        XCTAssertTrue(a.admit(), "the budget is fine; the stale timestamp must not trap")
+        w.advance(us: 1_000_000)
+        let win = a.takeLogWindow()
+        XCTAssertLessThan(win.blockedMs, 1_000, "no wrapped difference in the window")
+        // The tick path with an old clock reading, too.
+        w.setNow(1_000_000)
+        _ = a.tick(report: report(), queueDropsTotal: 0)
+        w.setNow(900_000)
+        _ = a.tick(report: report(), queueDropsTotal: 0)
+        XCTAssertLessThan(a.takeLogWindow().blockedMs, 1_000)
     }
 
     // MARK: Log window

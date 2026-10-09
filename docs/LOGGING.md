@@ -409,7 +409,7 @@ Yalnız `MATEBRIDGE_WIFI_ADAPT=1` ve `transport=wifi` oturumunda (varsayılan ka
   - `srtt_ms`: son 100 ms tick'inin video soketi `tcpi_srtt` değeri.
   - `admits_blocked`: kapının açıktan kapalıya geçiş sayısı (engel *bölümü*; aynı bölümdeki tekrar sorgular sayılmaz). `blocked_ms`: o saniyede kapının kapalı kaldığı toplam süre (süren bölüm şimdiye kadar sayılır).
   - `budget_bytes`: uçuştaki bayt bütçesi (hedef x 20 ms, en az bir ortalama kare). `retx_pkts`: yeniden gönderilen paket. `queue_drops`: host yeni-kare-kazanır kuyruğunda düşen kare (kapının yol açtıkları dahil; denetleyiciye hepsi bildirilmez). `down_steps`: hedefi düşüren tick sayısı.
-- `I video ev=adapt_step from_kbps=<n> to_kbps=<n> trigger=retransmit|queue_delay|send_buffer|queue_drop|other|up`: hedef kodlayıcıya uygulandı (iniş `I`, çıkış `D`). `trigger` yalnız iniş için neden; çıkışta `up`. Çıkışlar kodlayıcıya 500 ms'de bir uygulanır.
+- `I video ev=adapt_step from_kbps=<n> to_kbps=<n> trigger=retransmit|queue_delay|send_buffer|queue_drop|blocked|other|up`: hedef kodlayıcıya uygulandı (iniş `I`, çıkış `D`). `trigger` yalnız iniş için neden; çıkışta `up`. Çıkışlar kodlayıcıya 500 ms'de bir uygulanır.
 - Kapının kendi reddi denetleyiciye `queue_drop` diye **bildirilmez**; yalnız kapının son iki tick penceresinde hiç reddetmediği gerçek kuyruk düşüşleri bildirilir (`WifiAdaptation`).
 - Bağlantı ya da kodlayıcı kapanırken kodlayıcı tavana geri alınır (`ev=bitrate_set` ile görünür).
 
