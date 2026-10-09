@@ -28,3 +28,11 @@ Benimsemeden önce:
 ## Handoff
 
 ## Open questions
+
+## Not (2026-10-10, T-330)
+
+C1 önerisi (`docs/research/2026-10-10-optimization.md`):
+- Fling 2–3 sn aralıkla atılsın; DDR tutma süresi ölçülsün.
+- Uyarlamalı olsun: yalnız `dec_p50 > ~13 ms` ya da `skip_pct` yüksekken açık, Çizim 120'de ve dokunmada kapalı.
+- Bluetooth trackpad/fare girdisinin DDR'ı yükseltip yükseltmediği ölçülsün.
+- Pil kolu T-332 ile birlikte koşabilir.

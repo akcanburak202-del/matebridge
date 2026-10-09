@@ -28,6 +28,9 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-202](tasks/T-202-host-crash-restart-agent.md) | Relaunch the host after a crash (LaunchAgent with KeepAlive) | 6 | mac-host-dev | [T-147, T-148] |
 | [T-320](tasks/T-320-fling-boost-adoption.md) | Fling boost'u benimseme — pil ve ısı bedeli, skip_pct etkisi, hangi modlarda açık (karar + kullanıcı onayı) | 7 | orchestrator | [T-319] |
 | [T-321](tasks/T-321-144hz-wifi-stall.md) | 144 Hz (Yüksek) ekran ayarında tabletin ağ trafiği duruyor; MateBridge ve adb kopuyor — sistem mi, MateBridge yükü mü | 7 | orchestrator | [] |
+| [T-331](tasks/T-331-host-idle-timers.md) | Host — oturum tiki yalnız bağlantı varken, refine zamanlayıcısı olay güdümlü (boş uyanmaları azalt) | 7 | mac-host-dev | [T-330] |
+| [T-332](tasks/T-332-client-idle-ticker-gating.md) | İstemci — sabit ekranda/girdi yokken inputTicker ve PING seyreltme (pil) | 7 | android-client-dev | [T-330] |
+| [T-333](tasks/T-333-game-encoder-peaks.md) | Oyun 60 — kodlayıcı kare boyutu tepeleri (LLRC/ConstantBitRate, kısa rate penceresi, MaxAllowedFrameQP) EncodeBench karşılaştırması | 7 | mac-host-dev | [T-330] |
 
 ## done
 
@@ -340,3 +343,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-326](tasks/T-326-host-explicit-dscp.md) | Host — Wi-Fi öncelik sınıfları kabloda kayboluyor (Ethernet'te DSCP 0); açık IP_TOS anahtarı ve A/B | 7 | mac-host-dev | [] |
 | [T-327](tasks/T-327-core-congestion-controller.md) | Core — saf Wi-Fi tıkanıklık denetleyicisi (uçuştaki bayt bütçesi, hızlı in / yavaş çık), 2026-10-09 Oyun izinden altın tekrar | 7 | mac-host-dev | [] |
 | [T-328](tasks/T-328-host-wifi-adaptive-bitrate.md) | Host — tıkanıklık denetleyicisini video kapısına ve kodlayıcıya bağla (Wi-Fi, anahtar) + canlı bit hızı ayarlayıcısını geri getir | 7 | mac-host-dev | [T-327, T-326] |
+| [T-330](tasks/T-330-optimization-research-3.md) | Optimizasyon araştırması 3 — boşta enerji, Wi-Fi bit hızı tepeleri, 60 fps çözme | 7 | orchestrator | [T-298] |
