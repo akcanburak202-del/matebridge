@@ -391,6 +391,37 @@ final class BsdTcpSocketTests: XCTestCase {
         }
     }
 
+    /// T-326: the explicit TOS is applied to accepted sockets (IPv4 and IPv6 peers of the dual-stack listener). On an
+    /// `AF_INET6` socket `IP_TOS` is `EINVAL` (macOS 27), so the value is read back through `IPV6_TCLASS`. It coexists
+    /// with `SO_NET_SERVICE_TYPE` in either order: neither call changes the other's value.
+    func testExplicitIpTosIsAppliedAlongsideServiceType() throws {
+        let cases: [(TrafficClass?, UInt8?, Int32)] = [(.interactiveVoice, 0xB8, NET_SERVICE_TYPE_VO),
+                                                       (.interactiveVideo, 0x88, NET_SERVICE_TYPE_VI),
+                                                       (nil, 0xC0, NET_SERVICE_TYPE_BE),
+                                                       (.interactiveVoice, nil, NET_SERVICE_TYPE_VO),
+                                                       (nil, nil, NET_SERVICE_TYPE_BE)]
+        for v4 in [false, true] {
+            for (serviceClass, tos, serviceType) in cases {
+                let server = try Server(bind: v4 ? .loopbackV4Mapped : .loopbackV6,
+                                        options: BsdTcpOptions(serviceClass: serviceClass, ipTos: tos))
+                let client = connectClient(port: server.listener.port, v4: v4)
+                let c = try XCTUnwrap(server.waitAccepted())
+                let label = "v4=\(v4) class=\(String(describing: serviceClass)) tos=\(String(describing: tos))"
+                XCTAssertNil(c.ipTosFailure, label)
+                let fd = try XCTUnwrap(findSocket(localPort: server.listener.port, remotePort: c.remotePort ?? 0))
+                XCTAssertEqual(intOption(fd, IPPROTO_IPV6, IPV6_TCLASS), Int32(tos ?? 0), label)
+                XCTAssertEqual(intOption(fd, SOL_SOCKET, SO_NET_SERVICE_TYPE), serviceType, label)
+                // Setting the service type again afterwards (the other order) leaves the TOS alone.
+                var again = NET_SERVICE_TYPE_VO
+                XCTAssertEqual(setsockopt(fd, SOL_SOCKET, SO_NET_SERVICE_TYPE, &again, 4), 0, label)
+                XCTAssertEqual(intOption(fd, IPPROTO_IPV6, IPV6_TCLASS), Int32(tos ?? 0), label)
+                c.cancel()
+                server.listener.cancel()
+                close(client)
+            }
+        }
+    }
+
     func testPeerCloseFailsPendingWriteAndClosesOnce() throws {
         let server = try Server(options: BsdTcpOptions(notSentLowatBytes: 128 * 1024))
         let client = connectClient(port: server.listener.port, receiveBuffer: 16 * 1024)

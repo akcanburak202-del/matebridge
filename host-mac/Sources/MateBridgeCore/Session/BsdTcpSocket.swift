@@ -23,6 +23,8 @@ public struct BsdTcpOptions: Equatable, Sendable {
     public var notSentLowatBytes: Int?
     /// `SO_NET_SERVICE_TYPE` (best effort, like `NWParameters.serviceClass`). nil: unset.
     public var serviceClass: TrafficClass?
+    /// Explicit IP TOS byte (DSCP << 2, T-326), set after the service type so it wins. nil: unset. Best effort.
+    public var ipTos: UInt8?
     /// Bound of the user-space write queue (records the kernel has not fully taken yet): a `write` that would exceed
     /// either limit is refused (`completion(false)`, the connection stays open). The video sender keeps at most one
     /// record queued, so it never reaches these; they stop a misbehaving caller from queueing without bound.
@@ -34,12 +36,14 @@ public struct BsdTcpOptions: Equatable, Sendable {
     public static let defaultMaxPendingBytes = ProtocolConstants.maxVideoPayload + 64 * 1024
 
     public init(noDelay: Bool = true, keepAlive: Bool = false, notSentLowatBytes: Int? = nil,
-                serviceClass: TrafficClass? = nil, maxPendingRecords: Int = BsdTcpOptions.defaultMaxPendingRecords,
+                serviceClass: TrafficClass? = nil, ipTos: UInt8? = nil,
+                maxPendingRecords: Int = BsdTcpOptions.defaultMaxPendingRecords,
                 maxPendingBytes: Int = BsdTcpOptions.defaultMaxPendingBytes) {
         self.noDelay = noDelay
         self.keepAlive = keepAlive
         self.notSentLowatBytes = notSentLowatBytes
         self.serviceClass = serviceClass
+        self.ipTos = ipTos
         self.maxPendingRecords = maxPendingRecords
         self.maxPendingBytes = maxPendingBytes
     }
@@ -59,6 +63,24 @@ private func setOption(_ fd: Int32, _ level: Int32, _ name: Int32, _ value: Int3
     guard setsockopt(fd, level, name, &v, socklen_t(MemoryLayout<Int32>.size)) == 0 else {
         throw BsdSocketError(call, errno)
     }
+}
+
+/// Sets the explicit IP TOS byte (T-326). The accepted sockets belong to a dual-stack `AF_INET6` listener, and on those
+/// macOS answers `IP_TOS` with `EINVAL` (also for an IPv4 peer, measured on macOS 27) while `IPV6_TCLASS` is accepted,
+/// so both are tried and either one succeeding counts. Returns nil on success, else the errno of the `IPV6_TCLASS`
+/// attempt.
+private func applyIpTos(_ fd: Int32, _ tos: UInt8) -> Int32? {
+    var firstErrno: Int32?
+    var applied = false
+    for (level, name) in [(IPPROTO_IP, IP_TOS), (IPPROTO_IPV6, IPV6_TCLASS)] {
+        do {
+            try setOption(fd, level, name, Int32(tos), "IP_TOS")
+            applied = true
+        } catch let e as BsdSocketError {
+            firstErrno = e.errno  // the last failure wins: the IPV6_TCLASS one
+        } catch {}
+    }
+    return applied ? nil : (firstErrno ?? EINVAL)
 }
 
 private func setNonBlockingCloExec(_ fd: Int32) throws {
@@ -281,6 +303,9 @@ public final class BsdTcpConnection: @unchecked Sendable {
     public let peerHost: String?
     public let localPort: UInt16?
     public let remotePort: UInt16?
+    /// errno when `BsdTcpOptions.ipTos` was set but the kernel refused it (`IP_TOS` and `IPV6_TCLASS` both failed);
+    /// nil when it was applied or not asked for (T-326). Not fatal: the connection works with the default TOS.
+    public let ipTosFailure: Int32?
 
     private let lock = NSLock()
     private let fd: Int32
@@ -310,6 +335,7 @@ public final class BsdTcpConnection: @unchecked Sendable {
 
     /// Configures an accepted socket and wraps it. On failure the descriptor is closed.
     public static func adopt(_ fd: Int32, options: BsdTcpOptions) -> Result<BsdTcpConnection, BsdSocketError> {
+        var tosFailure: Int32?
         do {
             try setNonBlockingCloExec(fd)
             try setOption(fd, SOL_SOCKET, SO_NOSIGPIPE, 1, "SO_NOSIGPIPE")
@@ -322,6 +348,9 @@ public final class BsdTcpConnection: @unchecked Sendable {
                 try? setOption(fd, SOL_SOCKET, SO_NET_SERVICE_TYPE, BsdTcpOptions.netServiceType(c),
                                "SO_NET_SERVICE_TYPE")
             }
+            // After the service type, so an explicit value is never overwritten by it (measured: the service type
+            // leaves an earlier or later TOS alone; T-326). Best effort, reported through `ipTosFailure`.
+            if let tos = options.ipTos { tosFailure = applyIpTos(fd, tos) }
         } catch let e as BsdSocketError {
             close(fd)
             return .failure(e)
@@ -329,11 +358,12 @@ public final class BsdTcpConnection: @unchecked Sendable {
             close(fd)
             return .failure(BsdSocketError("adopt", EINVAL))
         }
-        return .success(BsdTcpConnection(fd: fd, options: options))
+        return .success(BsdTcpConnection(fd: fd, options: options, ipTosFailure: tosFailure))
     }
 
-    private init(fd: Int32, options: BsdTcpOptions) {
+    private init(fd: Int32, options: BsdTcpOptions, ipTosFailure: Int32?) {
         self.fd = fd
+        self.ipTosFailure = ipTosFailure
         maxPendingRecords = options.maxPendingRecords
         maxPendingBytes = options.maxPendingBytes
         let peer = Self.address(fd, getpeername)

@@ -79,6 +79,58 @@ final class TransportKnobsTests: XCTestCase {
                        "service_class=signaling video_class=interactiveVideo control_class=interactiveVoice")
     }
 
+    // MARK: Explicit IP TOS (T-326)
+
+    func testIpTosDefaultsToOff() {
+        for d in [nil, "", "  ", "off", "OFF", " Off "] { XCTAssertEqual(IpTosKnob.parse(d), .off, "\(String(describing: d))") }
+        XCTAssertEqual(IpTosKnob.parse([:]), .off)
+        XCTAssertEqual(IpTosKnob.parse(["OTHER": "ef"]), .off)
+        XCTAssertTrue(IpTosKnob.off.isOff)
+        XCTAssertNil(IpTosKnob.off.warning)
+        XCTAssertEqual(IpTosKnob.off.logFields, "ip_tos=off")
+    }
+
+    func testIpTosPresets() {
+        let ef = IpTosKnob.parse(["MATEBRIDGE_IP_TOS": "ef"])
+        XCTAssertEqual(ef.video, 0x88)
+        XCTAssertEqual(ef.control, 0xB8)
+        XCTAssertEqual(ef.logFields, "ip_tos=video=0x88,control=0xb8")
+        let cs6 = IpTosKnob.parse(" CS6 ")
+        XCTAssertEqual(cs6.video, 0x88)
+        XCTAssertEqual(cs6.control, 0xC0)
+        XCTAssertEqual(cs6.logFields, "ip_tos=video=0x88,control=0xc0")
+        XCTAssertNil(ef.warning)
+        XCTAssertFalse(ef.isOff)
+    }
+
+    func testIpTosExplicitValues() {
+        let k = IpTosKnob.parse("video=0x88,control=0xb8")
+        XCTAssertEqual(k, IpTosKnob(video: 0x88, control: 0xB8))
+        // Decimal, any order, spaces, upper case; the two ECN bits are cleared.
+        XCTAssertEqual(IpTosKnob.parse("Control=184, VIDEO=0X8B"), IpTosKnob(video: 0x88, control: 0xB8))
+        XCTAssertEqual(IpTosKnob.parse("control=0xff"), IpTosKnob(video: nil, control: 0xFC))
+        XCTAssertEqual(IpTosKnob.parse("control=255").logFields, "ip_tos=control=0xfc")
+        // Either listener may be left out; 0 is a value (DSCP 0 explicitly), not "unset".
+        XCTAssertEqual(IpTosKnob.parse("video=0x88"), IpTosKnob(video: 0x88, control: nil))
+        XCTAssertEqual(IpTosKnob.parse("video=0,control=3"), IpTosKnob(video: 0, control: 0))
+        XCTAssertEqual(IpTosKnob.parse("video=0").logFields, "ip_tos=video=0x00")
+        XCTAssertEqual(IpTosKnob.parse("video=0x88,control=0xb8").logFields, "ip_tos=video=0x88,control=0xb8")
+    }
+
+    func testIpTosInvalidFallsBackToOffWithWarning() {
+        for bad in ["ef,cs6", "af41", "video=256", "control=0x100", "video=-1", "video=", "video", "=5", "control=zz",
+                    "video=1,video=2", "audio=0x88", "video=0x88,", ",", "0x88"] {
+            let k = IpTosKnob.parse(bad)
+            XCTAssertTrue(k.isOff, bad)
+            XCTAssertNotNil(k.warning, bad)
+            XCTAssertTrue(k.logFields.hasPrefix("ip_tos=off ip_tos_invalid="), bad)
+        }
+        XCTAssertEqual(IpTosKnob.parse("video=256").logFields, "ip_tos=off ip_tos_invalid=video=256")
+        // The echoed text is log-safe: odd characters become `_`, and it is cut.
+        XCTAssertEqual(IpTosKnob.parse("a b;c\\td").warning, "a_b_c_td")
+        XCTAssertEqual(IpTosKnob.parse(String(repeating: "x", count: 100)).warning?.count, 40)
+    }
+
     // MARK: Send-queue log
 
     func testSendQueueLogKnob() {
