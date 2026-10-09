@@ -98,3 +98,5 @@ Riskler: (1) VideoToolbox `fast` profilinde `AverageBitRate` canlı değişimi i
 - **Kapsam sapması:** `files:` listesi güncellendi (yukarıda). Kart yolu `MateBridgeHost/Session/SocketVideoTransport.swift` yanlıştı.
 - F A-4 (kontrol H->C trafiği alçak su işaretini yok sayar): düzeltilmedi, kapsam dışı.
 - Denetleyici tek-iki paket retx'te (< 4/pencere) yalnız x0,9 uyguluyor; 100 ms tick'te bir olay iki tick'e bölünürse "hafif" sayılabilir (kalibrasyon 1 s tick'ti). Cihazda `down_steps` ve `trigger=retransmit` sıklığına bakılmalı; gerekirse sürücü retx'i 1 s kayan pencerede toplayacak şekilde değiştirilir.
+
+- **Cihaz testi (2026-10-09):** yapılmadı; kullanıcı kararıyla ertelendi, anahtar varsayılan kapalı. Bkz. NOTES 2026-10-09 akşam.

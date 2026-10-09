@@ -1892,3 +1892,12 @@ Host release, `main`. Tablette ölçüm için debug APK kullanıldı; sonunda da
 - FileVault off, auto-login on (also checked via `com.apple.loginwindow`), guest login off. `pmset`: `autorestart 0` (no power-fail restart), `womp 1`.
 - Versions: macOS 27.0.1 (26A434); tablet `ro.build.display.id` MRDI-W09 4.3.0.145(C432E1R1P2); host SHA `ba964b63` (from `ev=profile sha=`; the `app_start` line had already rotated out of host.log), APK `versionName` 0.1-ba964b63 (installed 2026-10-08 20:55). Running host bundle build id 20261008205442. Only docs changed in git after `ba964b63`.
 - Nothing from T-147 steps 2–9 was performed. `docs/RECOVERY.md` marks every scenario "henüz prova edilmedi".
+
+## 2026-10-09 akşam — T-326/T-328 birleşti, cihaz testi YAPILMADI
+
+- Host `61718882` kuruldu (APK değişmedi, `ba964b63`). `MATEBRIDGE_IP_TOS` ve `MATEBRIDGE_WIFI_ADAPT` varsayılan kapalı (kullanıcı kararı); `ev=listening ... ip_tos=off`.
+- Yapılmayanlar (başka zamana):
+  1. tcpdump: `IPV6_TCLASS` ile yazılan değerin IPv4 başlığına ulaştığı (`sudo tcpdump -i en0 -n -v host <tablet>`, ayar kapalı ve `ef`). Ulaşmıyorsa ayrı `AF_INET` dinleyici gerekir.
+  2. Oyun 60 Mbps Wi-Fi A/B: `MATEBRIDGE_WIFI_ADAPT` kapalı/açık (VideoToolbox canlı bit hızını izliyor mu: `video ev=bitrate_set`, `ev=adapt`, `adapt_step trigger=`; boşta 5 s içinde tavana dönüş). Taban: 2026-10-09 16:50 oturumu.
+  3. T-320 fling pil testi (`task/T-320-fling-measure`, `tools/measure/t320-fling-battery.sh`), tablet ≥ %60 ve şarjsız.
+  4. T-147 kurtarma provaları; önce Parsec'in Mac'te gerçekten çalıştığı (2026-10-09 17:45 kontrolünde host süreci yoktu; SSH ve Ekran Paylaşımı kapalı).

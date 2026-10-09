@@ -78,3 +78,5 @@ Riskler: IPV6_TCLASS'ın v4-mapped bağlantıda IPv4 başlığına yansıyıp ya
 
 - `StreamProfileLog.knobAllowList` (`EncoderKnobs.swift`, kartın dosya listesinde yok) `MATEBRIDGE_IP_TOS`'u içermiyor; `ev=profile knobs=`'ta görünmesi istenirse orkestratör eklemeli (A/B'de `ev=listening ip_tos=` yeterli).
 - Tcpdump `IPV6_TCLASS`'ın v4-mapped bağlantıda TOS'a yansımadığını gösterirse IPv4 için ayrı `AF_INET` dinleyici (ya da başka çözüm) gerekir; ayrı kart.
+
+- **Cihaz testi (2026-10-09):** yapılmadı; kullanıcı kararıyla ertelendi, anahtar varsayılan kapalı. Bkz. NOTES 2026-10-09 akşam.
