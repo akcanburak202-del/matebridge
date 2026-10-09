@@ -1,7 +1,7 @@
 ---
 id: T-327
 title: Core — saf Wi-Fi tıkanıklık denetleyicisi (uçuştaki bayt bütçesi, hızlı in / yavaş çık), 2026-10-09 Oyun izinden altın tekrar
-status: review
+status: done
 phase: 7
 owner: mac-host-dev
 depends_on: []
