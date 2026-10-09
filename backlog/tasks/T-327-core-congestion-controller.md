@@ -37,7 +37,14 @@ files:
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur.)_
+1. `CongestionController` (saf değer tipi, `Sendable`, G/Ç/saat/log yok; zaman µs argüman). Girdiler: `frameWritten(bytes:)` (ortalama kare EWMA), `tick(CongestionTick)` (nowUs, srttMs, sendBufferBytes = `tcpi_snd_sbbytes`, retransmitPacketsDelta; `TcpInfoReport` köprüsü var), `queueDropped(nowUs:)`. Çıktılar: `mayWrite(sendBufferBytes:)` (kabul), `budgetBytes`, `targetKbps` [taban, tavan] (250 kbps adımına nicemlenir).
+2. Tetikleyiciler (herhangi biri hızlı in): yeniden gönderim deltası > 0; srtt - pencereli min srtt >= 20 ms; sbbytes > 3 x bütçe; host kuyruk düşüşü. Hızlı in x0,7, iki iniş arası en az max(srtt, 250 ms) (kart: "srtt başına en çok bir"; 250 ms alt sınır 100 ms tick'te art arda inişi önler). Her tetikleyici sessizlik sayacını sıfırlar (inişe dönüşmese de).
+3. Yavaş çıkış: son tetikleyiciden 2 s sonra tavanın %5'i/s (dt ile sürekli). Hiç tetikleyici yokken hedef = tavan, salınım yok.
+4. Bütçe = max(hedef x 20 ms, ortalama kare); sbbytes <= bütçe ise kabul. `unackedBytesEstimate` kullanılmaz.
+5. Taban 12 Mbps (min(12000, tavan)): bir keyframe taşınabilmeli. Oyun izinde keyframe 240-680 KB; 12 Mbps'te 8 Mbit/12 = ~0,3-0,45 s'de boşalır (tavanda 0,07 s). Taban altı keyframe/aralık bütçesi bozulur, üstü temiz gün/kötü gün farkını (30 Mbps temiz, 60 Mbps kuyruk) kapsar. srtt taban penceresi 30 s (10 s değil: oyun başı yoğun dönem 9 s sürüyor, 10 s'de taban kayardı).
+6. Altın tekrar: ham log commit edilmez; 2026-10-09 Oyun izinden 1 s çözünürlüklü yalnız sayılar (srtt, rttcur, sbbytes, retx, sent_frames, sent_kbps, queue_drops) `CongestionReplayTrace.swift`'e Swift literal; beklenen hedef dizisi testte saklı. Tavan 60000 kbps. Replay açık döngü (iz denetleyicisiz kaydedildi): denetleyici düşüş anlarında inmeli, son düşüşsüz 60 s'de tavana dönmeli.
+7. Testler (swift-testing, projenin biçimi; kartta "XCTest" yazıyor ama paket Testing kullanıyor): adım tepkisi, sınırlar, salınımsızlık, kabul/bütçe, düşüşte srtt başına tek iniş, retx tetikleyici, altın tekrar.
+Riskler: tek paketlik retx'ler (iz boyunca ~10 s'de bir) tavandan sürekli küçük inişler yaratabilir; altın tekrarda ölçülür, gerekirse küçük-retx için hafif iniş çarpanı.
 
 ## Handoff
 
