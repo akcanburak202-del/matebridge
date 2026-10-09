@@ -404,6 +404,8 @@ Tanı ayarı (varsayılan kapalı, karar 0026; docs/KNOBS.md #42, T-298 EN9 öl�
 Yalnız `MATEBRIDGE_WIFI_ADAPT=1` ve `transport=wifi` oturumunda (varsayılan kapalı; USB'de hiçbir şey yazılmaz, denetleyici kurulmaz). Hepsi yalnız sayı; metin ya da tuş yok.
 - `I video ev=adapt_start ceiling_kbps=<n> floor_kbps=<n> tick_ms=100`: video bağlantısı denetime alındı (video bağlantısı başına bir kez; tavan oturumun yapılandırılmış bit hızı).
 - `I video ev=adapt target_kbps=<n> sbbytes_p95=<bayt> srtt_ms=<n> admits_blocked=<n> blocked_ms=<n> budget_bytes=<n> retx_pkts=<n> queue_drops=<n> down_steps=<n>`: saniyede bir.
+  - Boşta toparlanma (T-328 tur 2): son tetikleyiciden `quietMs` (2 s) sonra, son ~1 s'de yazılan video hızı hedefin %50'sinden azsa (durağan ekran) ve kapı o pencerede reddetmediyse hedef doğrudan tavana atlar (`ev=adapt_step trigger=up`, tek adımda tavan). Yük altında 5 %/s eğim sürer.
+  - Send-buffer tetikleyicisi tek örnekle değil, tamponun 3 bütçenin üstünde **400 ms boyunca sürmesiyle** tetiklenir (bir keyframe patlaması geçicidir).
   - `target_kbps`: denetleyicinin hedefi (250 kbps adımı; tavan ile taban 12000 arasında). Kodlayıcıya inişte hemen, çıkışta en çok 500 ms'de bir uygulanır; gerçek kodlayıcı değeri için `ev=bitrate_set`.
   - `sbbytes_p95`: kapının o saniyede okuduğu `tcpi_snd_sbbytes` örneklerinin p95'i (kare başına en çok her 2 ms'de bir okuma; hiç okuma yoksa 0).
   - `srtt_ms`: son 100 ms tick'inin video soketi `tcpi_srtt` değeri.

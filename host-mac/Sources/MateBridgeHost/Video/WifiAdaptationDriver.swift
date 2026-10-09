@@ -12,13 +12,12 @@ import MateBridgeCore
 /// per-second `net ev=tcp` meter (that one's window base never moves). The per-frame admission reads the send buffer
 /// on its own, at most every 2 ms (`WifiAdaptation.sampleFreshUs`).
 ///
-/// Encoder rate. A lower target is applied at once; a higher one at most every `upApplyIntervalUs`, because the
+/// Encoder rate. A lower target is applied at once, so is the ceiling (idle recovery jumps there); other higher ones at most every `WifiAdaptation.upApplyIntervalUs`, because the
 /// controller climbs in 250 kbps steps several times a second and every apply reconfigures the VideoToolbox session.
 /// `stop()` puts the encoder back at the ceiling: the next connection starts a new controller there.
 final class WifiAdaptationDriver: @unchecked Sendable {
     static let tickMs = 100
     static let logEveryTicks = 10
-    static let upApplyIntervalUs: UInt64 = 500_000
 
     let adaptation: WifiAdaptation
     private let link: VideoLink
@@ -90,7 +89,8 @@ final class WifiAdaptationDriver: @unchecked Sendable {
         let now = HostClock.nowUs()
         if result.targetKbps != appliedKbps {
             let down = result.targetKbps < appliedKbps
-            if down || now &- lastUpApplyUs >= Self.upApplyIntervalUs || result.targetKbps == adaptation.ceilingKbps {
+            if WifiAdaptation.shouldApply(target: result.targetKbps, applied: appliedKbps,
+                                          ceiling: adaptation.ceilingKbps, nowUs: now, lastUpApplyUs: lastUpApplyUs) {
                 logger.log(down ? .info : .debug, "adapt_step", sessionID: sessionID, generation: configID,
                            fields: "from_kbps=\(appliedKbps) to_kbps=\(result.targetKbps) "
                                + "trigger=\(result.trigger?.rawValue ?? (down ? "other" : "up"))")

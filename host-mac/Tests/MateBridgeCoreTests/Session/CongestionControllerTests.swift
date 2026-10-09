@@ -15,12 +15,20 @@ private func tick(_ nowUs: UInt64, srtt: UInt32 = 8, sb: UInt32 = 60_000, retx: 
     CC.Tick(nowUs: nowUs, srttMs: srtt, sendBufferBytes: sb, retransmitPacketsDelta: retx)
 }
 
-/// Runs `seconds` of clean 100 ms ticks starting at `fromUs` and returns the end time.
+/// 100 ms of video as the sender would have written it: six frames, `fraction` of the current target's rate.
+private func feed(_ c: inout CC, fraction: Double = 1.0) {
+    let bytes = Int(Double(c.targetKbps) * 12.5 * fraction)
+    for _ in 0..<6 where bytes >= 6 { c.frameWritten(bytes: bytes / 6) }
+}
+
+/// Runs `seconds` of clean 100 ms ticks starting at `fromUs` and returns the end time. `demand`: the written video
+/// rate as a fraction of the target (1 = a busy scene that fills it, small = a static screen).
 @discardableResult
-private func runClean(_ c: inout CC, fromUs: UInt64, seconds: Int, srtt: UInt32 = 8) -> UInt64 {
+private func runClean(_ c: inout CC, fromUs: UInt64, seconds: Int, srtt: UInt32 = 8, demand: Double = 1.0) -> UInt64 {
     var t = fromUs
     for _ in 0..<(seconds * 10) {
         t += 100 * ms
+        feed(&c, fraction: demand)
         c.tick(tick(t, srtt: srtt))
     }
     return t
@@ -47,6 +55,7 @@ private func runClean(_ c: inout CC, fromUs: UInt64, seconds: Int, srtt: UInt32 
         let spikeEnd = t
         for _ in 0..<400 {
             t += 100 * ms
+            feed(&c)  // a busy scene: the slope applies
             c.tick(tick(t))
             let now = c.targetKbps
             if t - spikeEnd < UInt64(CC.quietMs) * ms { heldUntilQuiet = heldUntilQuiet && now == previous }
@@ -176,15 +185,67 @@ private func runClean(_ c: inout CC, fromUs: UInt64, seconds: Int, srtt: UInt32 
         #expect(c.targetKbps == 29_500 || c.targetKbps == 29_250 || c.targetKbps == 29_400)
     }
 
-    @Test func sendBufferFarOverBudgetLowersTarget() {
+    /// A backlog over three budgets that lasts `sendBufferSustainMs` lowers the target; one reading, or a backlog that
+    /// drains first, does not.
+    @Test func sendBufferFarOverBudgetForLongLowersTarget() {
         var c = controller()
-        let t = runClean(&c, fromUs: 0, seconds: 3)
+        var t = runClean(&c, fromUs: 0, seconds: 3)
         let limit = UInt32(CC.sendBufferTriggerFactor * c.budgetBytes)
-        var probe = c
-        let r14 = probe.tick(tick(t + 100 * ms, sb: limit))
-        #expect(r14 == nil)
-        let r15 = c.tick(tick(t + 100 * ms, sb: limit + 1))
-        #expect(r15 == .sendBuffer)
+        // At the threshold is not over it.
+        t += 100 * ms
+        #expect(c.tick(tick(t, sb: limit)) == nil)
+        // Over it: 100, 200, 300 ms in nothing happens, at 400 ms it does.
+        var results: [CC.Trigger?] = []
+        for _ in 0..<5 {
+            t += 100 * ms
+            feed(&c)
+            results.append(c.tick(tick(t, sb: limit + 1)))
+        }
+        #expect(results == [nil, nil, nil, nil, .sendBuffer])
+        #expect(c.targetKbps < ceiling)
+    }
+
+    /// A 680 KB keyframe at 60 Mbps: the send buffer is read over the limit once, then it drains in about 90 ms.
+    @Test func oneKeyframeBurstInTheSendBufferIsNotCongestion() {
+        var c = controller()
+        var t = runClean(&c, fromUs: 0, seconds: 3)
+        for sb in [680_000, 60_000, 40_000, 60_000] as [UInt32] {
+            t += 100 * ms
+            feed(&c)
+            #expect(c.tick(tick(t, sb: sb)) == nil)
+        }
+        #expect(c.targetKbps == ceiling)
+        // Even three readings in a row (a keyframe that drains slower than a 60 Mbps link would) are under 400 ms.
+        for _ in 0..<3 {
+            t += 100 * ms
+            feed(&c)
+            #expect(c.tick(tick(t, sb: 680_000)) == nil)
+        }
+        t += 100 * ms
+        #expect(c.tick(tick(t, sb: 100_000)) == nil)
+        #expect(c.targetKbps == ceiling)
+    }
+
+    /// The over-limit streak is broken by any reading below it, and its length is time: 1 s ticks need the second one.
+    @Test func sendBufferStreakNeedsConsecutiveReadingsAcrossTheSustainTime() {
+        var c = controller()
+        var t = runClean(&c, fromUs: 0, seconds: 3)
+        t += second
+        #expect(c.tick(tick(t, sb: 700_000)) == nil)
+        t += second
+        #expect(c.tick(tick(t, sb: 700_000)) == .sendBuffer)
+
+        var d = controller()
+        t = runClean(&d, fromUs: 0, seconds: 3)
+        for _ in 0..<8 {
+            t += 300 * ms
+            feed(&d)
+            #expect(d.tick(tick(t, sb: 700_000)) == nil)
+            t += 100 * ms
+            feed(&d)
+            #expect(d.tick(tick(t, sb: 10_000)) == nil)  // breaks the streak
+        }
+        #expect(d.targetKbps == ceiling, "over, below, over, below never adds up to 400 ms in a row")
     }
 
     @Test func triggerInsideTheIntervalStillRestartsTheQuietPeriod() {
@@ -197,6 +258,7 @@ private func runClean(_ c: inout CC, fromUs: UInt64, seconds: Int, srtt: UInt32 
         t += 200 * ms
         for _ in 0..<19 {
             t += 100 * ms
+            feed(&c)
             c.tick(tick(t))
         }
         #expect(c.targetKbps == low)
@@ -210,6 +272,89 @@ private func runClean(_ c: inout CC, fromUs: UInt64, seconds: Int, srtt: UInt32 
         let report = meter.take(snap)
         let tick = CC.Tick(nowUs: 5, report: report)
         #expect(tick.srttMs == 12 && tick.sendBufferBytes == 99 && tick.retransmitPacketsDelta == 7)
+    }
+}
+
+@Suite struct CongestionControllerRecoveryTests {
+    /// Cuts the target to the floor with queue drops and returns the time of the last trigger.
+    private func cutToFloor(_ c: inout CC) -> UInt64 {
+        var t = runClean(&c, fromUs: 0, seconds: 3)
+        for _ in 0..<10 {
+            t += 300 * ms
+            feed(&c)
+            c.queueDropped(nowUs: t)
+        }
+        #expect(c.targetKbps == CC.defaultFloorKbps)
+        return t
+    }
+
+    /// Static text: tiny frames. The last trigger is followed by the quiet period; the first full demand window after
+    /// it shows almost no traffic, and the target is back at the ceiling by 5 s, not after the 16 s slope.
+    @Test func staticSceneJumpsToTheCeilingWithinFiveSeconds() {
+        var c = controller()
+        let lastTrigger = cutToFloor(&c)
+        var t = lastTrigger
+        var reachedAt: UInt64?
+        for _ in 0..<100 {
+            t += 100 * ms
+            feed(&c, fraction: 0.02)  // 2 % of the floor: a still screen
+            c.tick(tick(t))
+            if c.targetKbps == ceiling, reachedAt == nil { reachedAt = t - lastTrigger }
+        }
+        let took = Double(reachedAt ?? UInt64.max) / Double(second)
+        #expect(took >= Double(CC.quietMs) / 1_000, "never before the quiet period is over")
+        #expect(took <= 5)
+    }
+
+    /// A busy scene keeps the slope: no jump, the rise per second stays at the configured fraction of the ceiling.
+    @Test func busySceneKeepsTheSlope() {
+        var c = controller()
+        let lastTrigger = cutToFloor(&c)
+        var t = lastTrigger
+        var previous = c.targetKbps
+        let slope = Double(ceiling) * CC.upFractionPerSecond
+        for _ in 0..<100 {
+            t += 100 * ms
+            feed(&c, fraction: 0.9)
+            c.tick(tick(t))
+            #expect(Double(c.targetKbps - previous) <= slope * 0.1 + Double(CC.quantumKbps))
+            previous = c.targetKbps
+        }
+        // 10 s after the cut: 8 s of slope above the floor, nowhere near the ceiling.
+        #expect(c.targetKbps < ceiling)
+        #expect(c.targetKbps > CC.defaultFloorKbps)
+    }
+
+    /// Written bytes that are low because the owner's gate was refusing are not a still screen.
+    @Test func demandIsNotTrustedWhileTheGateRefuses() {
+        var c = controller()
+        let lastTrigger = cutToFloor(&c)
+        var t = lastTrigger
+        for _ in 0..<50 {
+            t += 100 * ms
+            feed(&c, fraction: 0.02)
+            c.tick(CC.Tick(nowUs: t, srttMs: 8, sendBufferBytes: 60_000, retransmitPacketsDelta: 0, gateRefused: true))
+        }
+        #expect(c.targetKbps < ceiling, "slope only: 5 s after the cut it is at most 12 + 3 s of slope")
+    }
+
+    /// A trigger in the demand window postpones the jump: it is judged by what happens after the last trigger.
+    @Test func aNewTriggerRestartsTheQuietPeriodBeforeTheJump() {
+        var c = controller()
+        var t = cutToFloor(&c)
+        for _ in 0..<15 {
+            t += 100 * ms
+            feed(&c, fraction: 0.02)
+            c.tick(tick(t))
+        }
+        c.queueDropped(nowUs: t)
+        let after = c.targetKbps
+        for _ in 0..<19 {
+            t += 100 * ms
+            feed(&c, fraction: 0.02)
+            c.tick(tick(t))
+        }
+        #expect(c.targetKbps == after, "held for the quiet period after the new trigger")
     }
 }
 
@@ -267,11 +412,17 @@ private func runClean(_ c: inout CC, fromUs: UInt64, seconds: Int, srtt: UInt32 
         var c = controller(ceilingKbps: CongestionReplayTrace.ceilingKbps)
         var out: [Int] = []
         var decreased: [Bool] = []
+        var lastFrames = 0
+        var lastBytes = 0
         for (i, row) in CongestionReplayTrace.rows.enumerated() {
             let t = UInt64(i + 1) * second
+            // The written demand of the second: every frame of the stats line, the previous line's rate when none fell
+            // into this second.
             if row.sentFrames > 0 {
-                c.frameWritten(bytes: row.sentKbps * 125 / row.sentFrames)
+                lastFrames = row.sentFrames
+                lastBytes = row.sentKbps * 125 / row.sentFrames
             }
+            for _ in 0..<lastFrames { c.frameWritten(bytes: lastBytes) }
             // The cadence window of `queueDrops` ended about 0.6 s before the tcp tick.
             var down = false
             if row.queueDrops > 0 { down = c.queueDropped(nowUs: t - 600 * ms) }
@@ -283,14 +434,14 @@ private func runClean(_ c: inout CC, fromUs: UInt64, seconds: Int, srtt: UInt32 
         return (out, decreased)
     }
 
-    /// The target after each second of the trace (ceiling 60 000 kbps, floor 12 000), stored from the first accepted run.
+    /// The target after each second of the trace (ceiling 60 000 kbps, floor 12 000), stored from the first accepted run; re-recorded by T-328 (sustained send-buffer trigger, idle recovery, per-frame demand in the replay).
     /// A change to a constant of `CongestionController` shows up here; re-record it deliberately.
     static let expectedTargets: [Int] = [
         60000, 29500, 20500, 14500, 12000, 12000, 12000, 12000, 12000, 12000, 12000, 12000, 12000, 12000, 12000,  // 0
-        15000, 18000, 21000, 24000, 27000, 30000, 33000, 25250, 25250, 25250, 28250, 31250, 34250, 37250, 40250,  // 15
-        43250, 46250, 49250, 52250, 55250, 58250, 42000, 29500, 29500, 26500, 26500, 26500, 29500, 29250, 29250,  // 30
+        60000, 60000, 60000, 60000, 60000, 60000, 60000, 42000, 42000, 42000, 45000, 48000, 60000, 60000, 60000,  // 15
+        60000, 60000, 60000, 60000, 60000, 60000, 42000, 29500, 29500, 26500, 26500, 26500, 29500, 29250, 29250,  // 30
         26250, 23750, 16500, 12000, 12000, 13750, 16750, 17750, 12000, 12000, 12000, 13750, 16750, 19750, 22750,  // 45
-        25750, 28750, 31750, 34750, 37750, 40750, 43750, 46750, 49750, 52750, 55750, 58750, 60000, 60000, 60000,  // 60
+        25750, 28750, 31750, 34750, 37750, 40750, 43750, 46750, 49750, 60000, 60000, 60000, 60000, 60000, 60000,  // 60
         60000, 60000, 60000, 54000, 54000, 54000, 57000, 60000, 42000, 42000, 43750, 46750, 49750, 52750, 55750,  // 75
         58750, 60000, 54000, 54000, 54000, 57000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000,  // 90
         60000, 60000, 60000, 60000, 54000, 54000, 54000, 57000, 60000, 60000, 60000, 60000, 60000, 60000, 60000,  // 105
@@ -308,12 +459,12 @@ private func runClean(_ c: inout CC, fromUs: UInt64, seconds: Int, srtt: UInt32 
         60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000,  // 285
         60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000,  // 300
         60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000,  // 315
-        60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 54000, 54000, 48500, 48500, 48500, 51500, 54500,  // 330
-        57500, 60000, 60000, 60000, 54000, 54000, 54000, 57000, 60000, 60000, 60000, 60000, 60000, 54000, 54000,  // 345
-        48500, 48500, 48500, 51500, 54500, 57500, 60000, 54000, 54000, 54000, 57000, 60000, 60000, 60000, 60000,  // 360
+        60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 54000, 54000, 48500, 48500, 60000, 60000, 60000,  // 330
+        60000, 60000, 60000, 60000, 54000, 54000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 54000, 54000,  // 345
+        48500, 48500, 60000, 60000, 60000, 60000, 60000, 54000, 54000, 60000, 60000, 60000, 60000, 60000, 60000,  // 360
         60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000,  // 375
         60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000,  // 390
-        60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000,  // 405
+        60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000,  // 405,
     ]
 
     /// The seconds with a host queue-drop burst of 9: tablet 16:51:00, 16:54:19 and 16:54:26.

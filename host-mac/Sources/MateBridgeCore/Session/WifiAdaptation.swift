@@ -36,6 +36,18 @@ public final class WifiAdaptation: @unchecked Sendable {
     /// the evidence is cleared, so the next one needs another full span (0.7x per 2 s at most).
     static let sustainedTicks = 20
     static let sustainedBlockedPercent: UInt64 = 60
+    /// Higher targets reach the encoder at most this often (every apply reconfigures the VideoToolbox session).
+    public static let upApplyIntervalUs: UInt64 = 500_000
+
+    /// Whether the encoder should be set to `target` now. A lower target always; the ceiling always (the idle
+    /// recovery jump must not wait: the card wants a static screen sharp again within 5 s); any other higher one when
+    /// `upApplyIntervalUs` has passed since the last higher one.
+    public static func shouldApply(target: Int, applied: Int, ceiling: Int, nowUs: UInt64, lastUpApplyUs: UInt64) -> Bool {
+        guard target != applied else { return false }
+        if target < applied || target >= ceiling { return true }
+        return elapsed(nowUs, since: lastUpApplyUs) >= upApplyIntervalUs
+    }
+
     /// Bound of the `sbbytes` samples kept for one log window.
     static let maxWindowSamples = 2_048
 
@@ -187,13 +199,14 @@ public final class WifiAdaptation: @unchecked Sendable {
         var result = TickResult(targetKbps: 0, changed: false, trigger: nil, reportedDrops: 0)
         var wakeNow: (@Sendable () -> Void)?
         lock.withLock {
+            let gateRefusedNow = refusedThisWindow || blockedSinceUs != nil
             let gateRefusedRecently = refusedThisWindow || refusedLastWindow
             refusedLastWindow = refusedThisWindow
             refusedThisWindow = false
 
             latestSrttMs = report.snapshot.srttMs
             windowRetx += report.retransmitPacketsDelta
-            var trigger = controller.tick(.init(nowUs: now, report: report))
+            var trigger = controller.tick(.init(nowUs: now, report: report, gateRefused: gateRefusedNow))
 
             let drops = lastDropsTotal.map { max(0, queueDropsTotal - $0) } ?? 0
             lastDropsTotal = queueDropsTotal

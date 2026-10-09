@@ -256,26 +256,43 @@ final class WifiAdaptationTests: XCTestCase {
 
     // MARK: Sustained blocking (P2)
 
-    /// One tick of the closed-loop picture: the sender asks while the gate is closed, 100 ms pass, the tick runs.
+    /// One tick of the closed-loop picture: the sender asks while the kernel buffer reads `sb`, 100 ms pass, the tick
+    /// runs with the same reading (admission and tick see the same buffer).
     private func blockedTick(_ a: WifiAdaptation, _ w: World, drops: inout Int, dropsPerTick: Int = 3,
-                             blocked: Bool) -> WifiAdaptation.TickResult {
-        w.sendBuffer = blocked ? 400_000 : 0
+                             sb: UInt32) -> WifiAdaptation.TickResult {
+        w.sendBuffer = sb
         _ = a.admit()
         w.advance(us: 100_000)
         drops += dropsPerTick
-        return a.tick(report: report(), queueDropsTotal: drops)
+        return a.tick(report: report(sendBuffer: sb), queueDropsTotal: drops)
     }
 
+    /// A 680 KB keyframe on a slow link (6.4 Mbps of drain): the gate stays closed for most of a second, the queue
+    /// overflows, and the buffer is over three budgets (450 KB) for only 3 ticks. Admission and tick readings match.
+    /// Neither the send-buffer trigger (400 ms of backlog needed) nor the sustained-blocking trigger (60 % of 2 s)
+    /// may fire.
     func testOneOversizedKeyframeNeverLowersTheTarget() {
         let (a, w) = make()
         var drops = 0
         _ = a.tick(report: report(), queueDropsTotal: 0)
-        // 1.0 s of blocking behind a keyframe, queue overflowing the whole time, inside a 2 s span: 50 % < 60 %.
+        let keyframe: [UInt32] = [680_000, 600_000, 520_000, 440_000, 360_000, 280_000, 200_000, 120_000, 40_000, 0]
         for i in 0..<60 {
-            let r = blockedTick(a, w, drops: &drops, dropsPerTick: i < 10 ? 3 : 0, blocked: i < 10)
+            let sb = i < keyframe.count ? keyframe[i] : 0
+            let r = blockedTick(a, w, drops: &drops, dropsPerTick: i < 8 ? 3 : 0, sb: sb)
             XCTAssertNil(r.trigger, "tick \(i)")
         }
         XCTAssertEqual(a.targetKbps, 60_000)
+    }
+
+    /// A backlog that does not drain (three budgets and more for 400 ms) is congestion on the first tick past that.
+    func testSustainedBacklogLowersTheTarget() {
+        let (a, w) = make()
+        var drops = 0
+        _ = a.tick(report: report(), queueDropsTotal: 0)
+        var triggers: [CongestionController.Trigger?] = []
+        for _ in 0..<6 { triggers.append(blockedTick(a, w, drops: &drops, dropsPerTick: 0, sb: 700_000).trigger) }
+        XCTAssertEqual(triggers, [nil, nil, nil, nil, .sendBuffer, nil])  // the sixth is inside the minimum interval
+        XCTAssertLessThan(a.targetKbps, 60_000)
     }
 
     func testSustainedBlockingOnAnUnderCapacityLinkLowersTheTargetOncePerSpan() {
@@ -284,7 +301,7 @@ final class WifiAdaptationTests: XCTestCase {
         _ = a.tick(report: report(), queueDropsTotal: 0)
         var triggers: [Int] = []
         for i in 0..<45 {
-            let r = blockedTick(a, w, drops: &drops, blocked: true)
+            let r = blockedTick(a, w, drops: &drops, sb: 160_000)
             if r.trigger == .blocked { triggers.append(i) }
             XCTAssertEqual(r.reportedDrops, 0, "the gate refused: these drops are never reported as queue drops")
         }
@@ -298,7 +315,7 @@ final class WifiAdaptationTests: XCTestCase {
         let (a, w) = make()
         var drops = 0
         _ = a.tick(report: report(), queueDropsTotal: 0)
-        for _ in 0..<45 { _ = blockedTick(a, w, drops: &drops, dropsPerTick: 0, blocked: true) }
+        for _ in 0..<45 { _ = blockedTick(a, w, drops: &drops, dropsPerTick: 0, sb: 160_000) }
         XCTAssertEqual(a.targetKbps, 60_000)
     }
 
@@ -324,6 +341,24 @@ final class WifiAdaptationTests: XCTestCase {
         w.setNow(900_000)
         _ = a.tick(report: report(), queueDropsTotal: 0)
         XCTAssertLessThan(a.takeLogWindow().blockedMs, 1_000)
+    }
+
+    // MARK: Encoder apply policy
+
+    func testEncoderApplyPolicyNeverDelaysDecreasesOrTheCeilingJump() {
+        let ceil = 60_000
+        // Decrease: at once.
+        XCTAssertTrue(WifiAdaptation.shouldApply(target: 42_000, applied: 60_000, ceiling: ceil, nowUs: 10, lastUpApplyUs: 10))
+        // The idle recovery jump to the ceiling: at once, even right after a slope step.
+        XCTAssertTrue(WifiAdaptation.shouldApply(target: 60_000, applied: 12_000, ceiling: ceil, nowUs: 100_000,
+                                                 lastUpApplyUs: 90_000))
+        // A slope step: only every 500 ms.
+        XCTAssertFalse(WifiAdaptation.shouldApply(target: 15_000, applied: 12_000, ceiling: ceil, nowUs: 1_400_000,
+                                                  lastUpApplyUs: 1_000_000))
+        XCTAssertTrue(WifiAdaptation.shouldApply(target: 15_000, applied: 12_000, ceiling: ceil, nowUs: 1_500_000,
+                                                 lastUpApplyUs: 1_000_000))
+        XCTAssertFalse(WifiAdaptation.shouldApply(target: 12_000, applied: 12_000, ceiling: ceil, nowUs: 9_000_000,
+                                                  lastUpApplyUs: 0))
     }
 
     // MARK: Log window
