@@ -42,8 +42,9 @@ Her süreç başlangıcında tam olarak bir satır. Hangi build'in çalıştığ
 
 ## Taşıma ve dinleyici olayları (Mac, `session`)
 
-- `ev=listening control_port=… video_port=… service_class=signaling|video|off [video_class=… control_class=…] video_socket=bsd notsent_lowat_kb=<n> control_socket=bsd tcp_log=auto|on|off profile=all|usb_only`: dinleyiciler hazır. `profile=usb_only` ise iki dinleyici de yalnız `127.0.0.1`'e bağlıdır ve Bonjour yayını yoktur (T-189, karar 0027).
+- `ev=listening control_port=… video_port=… service_class=signaling|video|off [video_class=… control_class=…] ip_tos=off|video=0x..,control=0x.. [ip_tos_invalid=<metin>] video_socket=bsd notsent_lowat_kb=<n> control_socket=bsd tcp_log=auto|on|off profile=all|usb_only`: dinleyiciler hazır. `profile=usb_only` ise iki dinleyici de yalnız `127.0.0.1`'e bağlıdır ve Bonjour yayını yoktur (T-189, karar 0027).
   - `service_class` → `MATEBRIDGE_SERVICE_CLASS` (T-088). Varsayılan T-124'ten beri `signaling`: `video_class=interactiveVideo control_class=interactiveVoice` (Wi-Fi'de video AC_VI, kontrol/ses AC_VO). `off` sınıfları ayarlamaz (T-088 öncesi davranış) ve yalnızca `service_class=off` yazar. Tanınmayan değer varsayılana düşer. USB'de (adb tüneli) etkisizdir.
+  - `ip_tos` → `MATEBRIDGE_IP_TOS` (T-326, varsayılan `off`): dinleyicilerin açık IP TOS baytı (DSCP << 2), örn. `ip_tos=video=0x88,control=0xb8`; ayarlanmayan dinleyici yazılmaz. Geçersiz değer `ip_tos=off ip_tos_invalid=<temizlenmiş metin>` olur.
   - `video_socket` ve `control_socket` T-186'dan beri hep `bsd` (çekirdek soketi). Network.framework (`nw`) soketleri kaldırıldı (karar 0026); `MATEBRIDGE_VIDEO_SOCKET`/`MATEBRIDGE_CONTROL_SOCKET` artık okunmaz. Alanlar log ayrıştırıcıları kırılmasın diye sabit olarak kalır.
   - `tcp_log` → `MATEBRIDGE_TCP_LOG` (T-126), bkz. aşağıda "Kontrol ve video soketlerinin TCP durumu".
 - `ev=bonjour_registered port=…`: `bsd` kontrol dinleyicisinin `_matebridge._tcp` kaydı yapıldı. Ad loglanmaz.
@@ -51,6 +52,7 @@ Her süreç başlangıcında tam olarak bir satır. Hangi build'in çalıştığ
 - `ev=control_accept_paused errno=…` / `ev=video_accept_paused errno=…`: tanımlayıcı/tampon tükendi, kabul 1 sn duraklar.
 - `ev=control_listener_socket_error error=…` / `ev=video_listener_socket_error error=…`: dinleme soketi açılamadı ya da bozuldu. Dinleyiciler yeniden başlatılır.
 - `ev=connection_refused video=true|false reason=too_many_unauthenticated|socket_setup|profile [profile=usb_only]`: bağlantı reddedildi. `reason=profile`: "Yalnız USB" modunda loopback olmayan eş.
+- `W net ev=ip_tos_failed video=true|false errno=<n>` (T-326): açık TOS istendi ama çekirdek reddetti (`IP_TOS` ve `IPV6_TCLASS` ikisi de başarısız); bağlantı başına bir kez, bağlantı varsayılan TOS ile çalışır.
 - `ev=network_profile profile=all|usb_only from=… action=restart|deferred` (T-189): mod değişti. `restart`: canlı oturum yokken dinleyiciler kapanıp (kapanış beklenir) yeniden açıldı; `deferred`: oturum bitince uygulanacak.
 - `ev=port_fallback … after=profile_switch` (E): mod değişiminden sonraki yeniden başlatmada sabit port (47001/47002) alınamadı. USB (adb reverse) sabit portlara gittiği için hatadır.
 - `ev=send_backlog [reason=write_refused]`: kontrol bağlantısı yazılamıyor (eş okumuyor ya da bağlantı kapandı). Bağlantı kapatılır ve girdi bırakılır.

@@ -67,6 +67,93 @@ public enum ServiceClassKnob: String, Equatable, Sendable, CaseIterable {
     }
 }
 
+/// `MATEBRIDGE_IP_TOS=off|ef|cs6|video=<v>,control=<v>` (T-326, default `off`): an explicit DSCP for the packets the
+/// host sends, independent of `SO_NET_SERVICE_TYPE`. With `qosmarking mode: none` on the wired interface (the Mac on
+/// Ethernet, `ifconfig -v en0`) the service type writes no DSCP, so a Wi-Fi access point sees video, audio and
+/// control all as best effort. `ef` is video AF41 (0x88) and control EF (0xB8); `cs6` is video AF41 and control CS6
+/// (0xC0). `video=` / `control=` take 0..255 (`0x..` hex or decimal); either may be left out (that listener stays
+/// unset). The low two bits (ECN) are cleared. Anything unparsable falls back to `off` and sets `warning`.
+public struct IpTosKnob: Equatable, Sendable {
+    public static let videoAF41: UInt8 = 0x88
+    public static let controlEF: UInt8 = 0xB8
+    public static let controlCS6: UInt8 = 0xC0
+
+    /// IP TOS byte (DSCP << 2) of the video listener's sockets; nil: unset.
+    public var video: UInt8?
+    /// IP TOS byte of the control listener's sockets (input, BYE, AUDIO_FRAME); nil: unset.
+    public var control: UInt8?
+    /// The rejected text (made log-safe) when the value could not be parsed.
+    public var warning: String?
+
+    public static let off = IpTosKnob(video: nil, control: nil, warning: nil)
+
+    public init(video: UInt8?, control: UInt8?, warning: String? = nil) {
+        self.video = video
+        self.control = control
+        self.warning = warning
+    }
+
+    public var isOff: Bool { video == nil && control == nil }
+
+    public static func parse(_ env: [String: String]) -> IpTosKnob { parse(env["MATEBRIDGE_IP_TOS"]) }
+
+    public static func parse(_ text: String?) -> IpTosKnob {
+        guard let raw = text?.trimmingCharacters(in: .whitespaces), !raw.isEmpty else { return .off }
+        let t = raw.lowercased()
+        switch t {
+        case "off": return .off
+        case "ef": return IpTosKnob(video: videoAF41, control: controlEF)
+        case "cs6": return IpTosKnob(video: videoAF41, control: controlCS6)
+        default: break
+        }
+        var video: UInt8?
+        var control: UInt8?
+        for part in t.split(separator: ",", omittingEmptySubsequences: false) {
+            let kv = part.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            guard kv.count == 2, let v = parseByte(String(kv[1]).trimmingCharacters(in: .whitespaces)) else {
+                return invalid(raw)
+            }
+            switch kv[0].trimmingCharacters(in: .whitespaces) {
+            case "video" where video == nil: video = v & 0xFC
+            case "control" where control == nil: control = v & 0xFC
+            default: return invalid(raw)
+            }
+        }
+        return IpTosKnob(video: video, control: control)
+    }
+
+    /// `off` plus the rejected text, reduced to `[A-Za-z0-9=,]` (anything else `_`) and cut to 40 characters.
+    private static func invalid(_ raw: String) -> IpTosKnob {
+        let safe = String(raw.unicodeScalars.prefix(40).map { c -> Character in
+            let ch = Character(c)
+            return c.isASCII && (ch.isLetter || ch.isNumber || ch == "=" || ch == ",") ? ch : "_"
+        })
+        return IpTosKnob(video: nil, control: nil, warning: safe)
+    }
+
+    /// Decimal or `0x` hex, 0...255.
+    private static func parseByte(_ s: String) -> UInt8? {
+        if s.hasPrefix("0x") { return UInt8(s.dropFirst(2), radix: 16) }
+        return UInt8(s)
+    }
+
+    /// Log fields: `ip_tos=off`, `ip_tos=video=0x88,control=0xb8`, `ip_tos=video=0x88` (control unset), and
+    /// ` ip_tos_invalid=<text>` after `ip_tos=off` when the value was rejected.
+    public var logFields: String {
+        var parts: [String] = []
+        if let video { parts.append("video=0x" + Self.hex(video)) }
+        if let control { parts.append("control=0x" + Self.hex(control)) }
+        var out = "ip_tos=" + (parts.isEmpty ? "off" : parts.joined(separator: ","))
+        if let warning { out += " ip_tos_invalid=\(warning)" }
+        return out
+    }
+
+    private static func hex(_ v: UInt8) -> String {
+        let h = String(v, radix: 16)
+        return h.count == 1 ? "0" + h : h
+    }
+}
+
 /// Whether the video connection's kernel send queue is sampled and logged (`ev=sendq`, T-088):
 /// `MATEBRIDGE_SENDQ_LOG=1` or `MATEBRIDGE_LAT_TRACE=1`.
 public enum SendQueueLogKnob {

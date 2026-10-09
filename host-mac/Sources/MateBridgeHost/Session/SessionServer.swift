@@ -251,6 +251,8 @@ public final class SessionServer: @unchecked Sendable {
     /// T-088 knobs, read once. The service class defaults to `signaling` since T-124 (control AC_VO, video AC_VI on
     /// Wi-Fi); `MATEBRIDGE_SERVICE_CLASS=off` leaves both unset.
     static let serviceClass = ServiceClassKnob.parse(ProcessInfo.processInfo.environment)
+    /// T-326: `MATEBRIDGE_IP_TOS`, an explicit DSCP per listener, default off. Set after the service type.
+    static let ipTos = IpTosKnob.parse(ProcessInfo.processInfo.environment)
     static let sampleSendQueue = SendQueueLogKnob.isEnabled(ProcessInfo.processInfo.environment)
     /// T-126: `MATEBRIDGE_TCP_LOG=0|1`, default on for Wi-Fi sessions only.
     static let tcpInfoLog = TcpInfoLogKnob.parse(ProcessInfo.processInfo.environment)
@@ -269,6 +271,7 @@ public final class SessionServer: @unchecked Sendable {
     static let controlSocketOptions = BsdTcpOptions(noDelay: true, keepAlive: false,
                                                     notSentLowatBytes: controlNotSentLowatBytes,
                                                     serviceClass: serviceClass.controlClass,
+                                                    ipTos: ipTos.control,
                                                     maxPendingRecords: maxInflightBytes,
                                                     maxPendingBytes: maxInflightBytes)
     /// How long a closing control connection may take to write its last messages (BYE) before it is cut.
@@ -475,7 +478,7 @@ public final class SessionServer: @unchecked Sendable {
         let fixed = plan.lastWasPreferred
         let nextPlan = plan
         let options = BsdTcpOptions(notSentLowatBytes: Self.videoNotSentLowatKB * 1024,
-                                    serviceClass: Self.serviceClass.videoClass)
+                                    serviceClass: Self.serviceClass.videoClass, ipTos: Self.ipTos.video)
         let listener: BsdTcpListener
         do {
             listener = try BsdTcpListener(port: port, bind: networkProfile.bindAddress, options: options, queue: queue)
@@ -957,6 +960,7 @@ public final class SessionServer: @unchecked Sendable {
         restartAttempts = 0
         logger.log(.info, "listening", sessionID: 0, generation: 0,
                    fields: "control_port=\(port) video_port=\(videoPort) " + Self.serviceClass.logFields + " "
+                       + Self.ipTos.logFields + " "
                        // The connections are always kernel BSD sockets since T-186 (the `nw` stack and its
                        // `MATEBRIDGE_VIDEO_SOCKET`/`_CONTROL_SOCKET` knobs are gone, decision 0026); the fields stay
                        // constant so log parsers keep working.
@@ -1033,7 +1037,15 @@ public final class SessionServer: @unchecked Sendable {
     /// A video connection from the video listener (T-091). Bounded: refused while too many have not yet authenticated
     /// (VIDEO_HELLO). Reads arrive on `queue`; `onClosed` arrives on `queue` once the socket closed for any reason (end
     /// of stream, error, or our own `cancel()`).
+    /// T-326: the explicit TOS was asked for but the kernel refused it; once per connection, never fatal.
+    private func logIpTosFailure(_ connection: BsdTcpConnection, video: Bool) {
+        guard let errno = connection.ipTosFailure else { return }
+        netLogger.log(.warning, "ip_tos_failed", sessionID: currentSessionID, generation: currentConfigID,
+                      fields: "video=\(video) errno=\(errno)")
+    }
+
     private func acceptVideo(_ connection: BsdTcpConnection) {
+        logIpTosFailure(connection, video: true)
         guard !refusing(connection, video: true) else { return }
         guard admitted(connection, video: true) else { return }
         guard machine.pendingVideoCount < Self.maxUnauthenticated else {
@@ -1060,6 +1072,7 @@ public final class SessionServer: @unchecked Sendable {
     /// reason (end of stream, half close, error, our own `cancel()`): `transportClosed` then tells the machine, which
     /// releases all input (PROTOCOL.md 7).
     private func acceptControl(_ connection: BsdTcpConnection) {
+        logIpTosFailure(connection, video: false)
         guard !refusing(connection, video: false) else { return }
         guard admitted(connection, video: false) else { return }
         guard machine.awaitingHelloCount < Self.maxUnauthenticated else {
