@@ -1,7 +1,7 @@
 ---
 id: T-326
 title: Host — Wi-Fi öncelik sınıfları kabloda kayboluyor (Ethernet'te DSCP 0); açık IP_TOS anahtarı ve A/B
-status: review
+status: done
 phase: 7
 owner: mac-host-dev
 depends_on: []

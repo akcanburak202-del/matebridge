@@ -1,7 +1,7 @@
 ---
 id: T-193
 title: Rewrite the README to the current state; refresh PLAN status; record the version pair
-status: todo
+status: done
 phase: 6
 owner: orchestrator
 depends_on: [T-145, T-146, T-147]

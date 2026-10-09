@@ -20,7 +20,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-179](tasks/T-179-pen-wifi-rhythm-measurement.md) | Measure Wi-Fi pen arrival rhythm after T-111 across 3 topologies | 6 | orchestrator | [T-171, T-127] |
 | [T-180](tasks/T-180-pen-keyboard-validation-matrix.md) | Run the pen and keyboard device validation matrix | 6 | orchestrator | [] |
 | [T-192](tasks/T-192-host-settings-reset.md) | Add "Ayarları sıfırla" to the menu (approvals kept) | 6 | mac-host-dev | [T-167, T-189] |
-| [T-193](tasks/T-193-readme-plan-refresh.md) | Rewrite the README to the current state; refresh PLAN status; record the version pair | 6 | orchestrator | [T-145, T-146, T-147] |
 | [T-194](tasks/T-194-soak-8h-week.md) | Run the 8 h soak, then one week of real use, with resource trends | 6 | user | [T-173, T-157, T-164, T-167, T-193] |
 | [T-197](tasks/T-197-client-ctl-lowat-knob.md) | Experiment knob: TCP_NOTSENT_LOWAT on the client control socket | 6 | android-client-dev | [T-127, T-171] |
 | [T-198](tasks/T-198-host-pen-playout-experiment.md) | Experimental bounded pen playout on Wi-Fi (knob, default off) | 6 | mac-host-dev | [T-179, T-171] |
@@ -29,7 +28,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-202](tasks/T-202-host-crash-restart-agent.md) | Relaunch the host after a crash (LaunchAgent with KeepAlive) | 6 | mac-host-dev | [T-147, T-148] |
 | [T-320](tasks/T-320-fling-boost-adoption.md) | Fling boost'u benimseme — pil ve ısı bedeli, skip_pct etkisi, hangi modlarda açık (karar + kullanıcı onayı) | 7 | orchestrator | [T-319] |
 | [T-321](tasks/T-321-144hz-wifi-stall.md) | 144 Hz (Yüksek) ekran ayarında tabletin ağ trafiği duruyor; MateBridge ve adb kopuyor — sistem mi, MateBridge yükü mü | 7 | orchestrator | [] |
-| [T-326](tasks/T-326-host-explicit-dscp.md) | Host — Wi-Fi öncelik sınıfları kabloda kayboluyor (Ethernet'te DSCP 0); açık IP_TOS anahtarı ve A/B | 7 | mac-host-dev | [] |
 | [T-327](tasks/T-327-core-congestion-controller.md) | Core — saf Wi-Fi tıkanıklık denetleyicisi (uçuştaki bayt bütçesi, hızlı in / yavaş çık), 2026-10-09 Oyun izinden altın tekrar | 7 | mac-host-dev | [] |
 | [T-328](tasks/T-328-host-wifi-adaptive-bitrate.md) | Host — tıkanıklık denetleyicisini video kapısına ve kodlayıcıya bağla (Wi-Fi, anahtar) + canlı bit hızı ayarlayıcısını geri getir | 7 | mac-host-dev | [T-327, T-326] |
 
@@ -220,6 +218,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-189](tasks/T-189-host-usb-only-profile.md) | Add a "Yalnız USB" network profile | 6 | mac-host-dev | [] |
 | [T-190](tasks/T-190-client-share-folder-scope.md) | Share a chosen folder (optional read-only) instead of all storage | 6 | android-client-dev | [T-153] |
 | [T-191](tasks/T-191-client-settings-reset.md) | Add "Varsayılanlara dön" (settings + learned audio state; pairing kept) | 6 | android-client-dev | [T-185] |
+| [T-193](tasks/T-193-readme-plan-refresh.md) | Rewrite the README to the current state; refresh PLAN status; record the version pair | 6 | orchestrator | [T-145, T-146, T-147] |
 | [T-195](tasks/T-195-core-congestion-controller.md) | Write a pure Wi-Fi congestion controller (in-flight budget, fast-down/slow-up) | 6 | mac-host-dev | [T-127] |
 | [T-196](tasks/T-196-host-wifi-adaptive-send.md) | Wire the congestion controller into the video gate and the encoder (Wi-Fi, knob) | 6 | mac-host-dev | [T-177, T-195] |
 | [T-201](tasks/T-201-host-chroma-bench.md) | Add an RGB-referenced chroma metric and test patterns to SharpnessBench | 6 | mac-host-dev | [T-188, T-204] |
@@ -340,3 +339,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-323](tasks/T-323-host-inject-to-frame.md) | Host — "girdi enjekte edildi → ilk değişen kare" süresi (EN2/HA3), SCK dirty rect ile; yalnız log | 7 | mac-host-dev | [] |
 | [T-324](tasks/T-324-host-usb-watcher-idle.md) | Host — Wi-Fi'deyken USB tünel izleyicisi ~%1,5 işlemci harcıyor (adb yoklaması); kablo yokken yoklamayı seyrek ya da olay tabanlı yap | 7 | mac-host-dev | [] |
 | [T-325](tasks/T-325-coordinator-stall.md) | Host — StreamCoordinator oturum kapanışında takıldı; posta kutusu taştı ve her yeni oturum hemen kapandı (kullanıcı Mac'i zorla kapattı) | 7 | mac-host-dev | [] |
+| [T-326](tasks/T-326-host-explicit-dscp.md) | Host — Wi-Fi öncelik sınıfları kabloda kayboluyor (Ethernet'te DSCP 0); açık IP_TOS anahtarı ve A/B | 7 | mac-host-dev | [] |
