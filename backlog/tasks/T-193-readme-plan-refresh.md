@@ -72,7 +72,16 @@ Source: external architecture review 2026-10-03 (L01, P1, D9; audit PF5 residual
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+_(2026-10-09, taslak ajanı; kart orkestratöre aittir. Dal `task/T-193-readme-plan-refresh`, `task/T-147-recovery-runbook` üstünde.)_
+
+Kart 2026-10-03'te yazıldı; o günden beri çok şey değişti, bu yüzden her iddia güncel koda, NOTES'a ve kararlara karşı yeniden doğrulanır:
+
+1. README: "Phase 0" ifadesi gider. Güncel durum: kararlar 0030 (üç mod: Günlük / Çizim / Oyun; kartta geçen "beş mod" ve Netlik/Akıcı/Performans adları artık yok), 0032 HDR10, 0033/0034 keskin ve tam renk, 0036 yerel imleç, 0035 Wi-Fi dosyaları, 0037 minSdk 31 ve günlük (debug olmayan) derleme, ses, pano, uyku ve WoL, "Yalnız USB". Layout bloğu `tools/` (chroma-test, dav-repro, measure, pacing, soak), `probes/`, `.github/`, ve betikler (`install-apk.sh`, `usb-mode.sh`, `bundle-host.sh`, `device-smoke.sh`) ile tamamlanır.
+2. Bilinen sınırlar güncel kaynaktan: Wi-Fi ~40 ms ↔ USB ~24 ms (NOTES 2026-10-01), Wi-Fi'de Oyun 60 Mbps WLAN kapasitesine yakın (NOTES 2026-10-08/09), 10 sn sanal ekran bekletme (T-165; T-167 bekliyor), decoder arızasında girdi kapısı birleşti (T-159) ama cihaz hata enjeksiyonu açık (T-164), panel dokunmasız 60 Hz (karar 0016; T-319/T-320 açık), 144 Hz paneli ağ durması (T-321 açık).
+3. Mod rehberi: kartın "Netlik 60 / Oyun 60" önerisi 0030 sonrası "Günlük/Oyun + Kare hızı: 60" olarak yeniden yazılır ve 0016'ya atıf yapar.
+4. "Son doğrulanan" bloğu T-147 sürüm çiftinden (`ba964b63`, macOS 27.0.1 (26A434), HarmonyOS 4.3.0.145) ve `docs/RECOVERY.md` bağlantısından.
+5. PLAN.md: satır 9 (başsız 1920×1080 yer tutucu, fiziksel monitör değil, T-147 bulguları), satır 10 (MatePad Pro 12.2 (2025), 2800×1840), Aşama 4 kutuları (NOTES/BOARD'a göre), "Bitti" açık kalır, Aşama 5'teki "~90 fps / 13-15 ms" NOTES 1100-1113 ve 273'e atıfla düzeltilir.
+6. Seri numarası, IP/MAC ve kişisel veri yazılmaz. Kod değişikliği yok. Aşama 6 bölümüne dokunulmaz (kartın dışında); bayat satırlar Handoff'ta bildirilir.
 
 ## Handoff
 
