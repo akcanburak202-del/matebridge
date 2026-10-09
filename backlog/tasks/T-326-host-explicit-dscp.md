@@ -54,7 +54,11 @@ Bu kart: (1) kabloda DSCP'yi doğrula, (2) host'a açık `IP_TOS` anahtarı ekle
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+1. `TransportKnobs.swift`: yeni `IpTosKnob` (`MATEBRIDGE_IP_TOS`): `off` (varsayılan; boş/yok da `off`), `ef` (video 0x88, kontrol 0xB8), `cs6` (video 0x88, kontrol 0xC0), `video=<v>,control=<v>` (biri eksik olabilir = o dinleyici ayarsız; 0x.. ya da ondalık). 0-255 sınırı, `& 0xFC` (ECN bitleri sıfır). Geçersiz değer -> `off` + `warning` alanı (log: `ip_tos_invalid=<temizlenmiş değer>`). `logFields`: `ip_tos=off` ya da `ip_tos=video=0x88,control=0xb8`.
+2. `BsdTcpSocket.swift`: `BsdTcpOptions.ipTos: UInt8?`; `adopt()` servis türünden SONRA ayarlar (açık değer kazansın). Ölçüm (scratch, macOS 27): AF_INET6 (çift yığınlı) soketlerde `setsockopt(IPPROTO_IP, IP_TOS)` EINVAL veriyor (v4-mapped eşte de); `IPV6_TCLASS` kabul ediliyor ve geri okunuyor. Bu yüzden adopt hem `IP_TOS` hem `IPV6_TCLASS` dener (best effort); biri başarılıysa ayar başarılı sayılır. Bağlantı `ipTosFailure: Int32?` (errno) taşır; hata fatal değil.
+3. `SessionServer.swift`: dinleyici seçeneklerine `ipTos` (video/kontrol), `listening` satırına `ip_tos=` alanı, `acceptVideo/acceptControl` içinde bağlantı başına bir kez `W net ev=ip_tos_failed errno=`.
+4. Testler: knob ayrıştırma (off/ef/cs6/özel, sınırlar, ECN, geçersiz), gerçek loopback soket çiftinde `getsockopt(IPV6_TCLASS)` beklenen değer, servis türüyle birlikte (ikisi de ayarlı) geri okuma, `off`'ta 0. KNOBS.md satır 47, LOGGING.md alanı.
+Riskler: IPV6_TCLASS'ın v4-mapped bağlantıda IPv4 başlığına yansıyıp yansımadığı yalnızca tcpdump ile doğrulanır (orkestratör). Yansımıyorsa çözüm AF_INET dinleyici (kapsam dışı, Open questions).
 
 ## Handoff
 
