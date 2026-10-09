@@ -6,8 +6,8 @@
 
 | Donanım | Durum |
 |---|---|
-| Mac mini, Apple M6, macOS 27.0.1 | ✅ doğrulandı. Şu an 1920×1080 bir monitör bağlı. |
-| Huawei MatePad Pro, HarmonyOS 4.3 | Android APK çalışır. Google Play yok. Model/çözünürlük: **?** |
+| Mac mini, Apple M6, macOS 27.0.1 | ✅ doğrulandı. Başsız: fiziksel monitör ve HDMI dummy yok. macOS'un gösterdiği tek ekran, MateBridge sanal ekranı yokken 1920×1080 başsız yer tutucu ekran (`v0x756e6b6e/m0x76697274`, NOTES 2026-09-30, 2026-10-09). Uzak yol yalnız Parsec; SSH ve Ekran Paylaşımı kapalı; FileVault kapalı, otomatik giriş açık (`docs/RECOVERY.md`). |
+| Huawei MatePad Pro 12.2 (2025), HarmonyOS 4.3 | Android APK çalışır. Google Play yok. Panel 2800×1840 (AGENTS.md, NOTES 2026-09-30). |
 | Huawei klavye + trackpad, M-Pencil | Aşama 0'da probe ile ölçülecek |
 
 ---
@@ -164,19 +164,19 @@ Her aşamanın sonunda **çalışan** bir şey olur. "Bitti" kontrol listesi ge�
 
 - [x] Mac: menü çubuğu uygulaması, oturum açılışında otomatik başlama. (T-039; yeniden başlatmada doğrulanacak)
 - [x] Tablet uygulaması açılınca kendiliğinden bağlanır, ekran uyumaz. USB tünelleri host tarafından kendiliğinden kurulur (T-039).
-- [ ] Mac kilit/uyku/uyanma sonrası toparlanır. Sanal ekran yeniden oluşturulur.
-- [ ] Ayarlar: çözünürlük/ölçek, FPS, bitrate, codec, Ctrl↔Cmd, kalem tuşu eylemi.
-- [ ] Mod seçimi: tablet = ikinci ekran / tablet = ana ekran (monitörsüz) / ekran yansıtma.
+- [x] Mac kilit/uyku/uyanma sonrası toparlanır. Sanal ekran yeniden oluşturulur. (T-128…T-134, karar 0020 ile T-165 bekletilen ekran; cihazda: NOTES 2026-10-02, T-081 ve T-128 karanlık uyanma.)
+- [x] Ayarlar paneli (karar 0013, T-105): bağlantı, görüntü modu, kare hızı, oyun çözünürlüğü, bit hızı, HDR, renk, imleç, ses, hızlar, dosyalar, pano. Codec seçimi, Ctrl↔Cmd ayarı ve kalem yan tuşu eylemi yapılmadı (karar 0008, 0006: yan tuş yok).
+- [x] Mod seçimi: tablet = ana ekran (monitörsüz) günlük kullanım. İkinci ekran / yansıtma ayrı mod olarak yapılmadı. Görüntü modları Günlük / Çizim / Oyun (karar 0030).
 - [x] Oturum şifrelemesi (eşleşmede paylaşılan anahtar). Protokol v1, karar 0010, T-041/T-042; cihazda doğrulandı.
 - [x] Log dosyası (`~/Library/Logs/MateBridge/`) ve menüde "logları aç". (T-039)
 
-**Bitti:** Bir hafta boyunca günlük iş için kullanılıyor, "yeniden başlatmam gerekti" türünden sorun kalmıyor.
+**Bitti:** Bir hafta boyunca günlük iş için kullanılıyor, "yeniden başlatmam gerekti" türünden sorun kalmıyor. _(Açık: T-194 geçene kadar işaretlenmez.)_
 
 ### Aşama 5 — İsteğe bağlı iyileştirmeler (ihtiyaç oldukça)
 
 - **Akıcılık: kare zamanlaması (frame pacing).** Kullanıcı kararı, 2026-09-29. Faz 1 sonunda Mac 60,0 fps düzenli gönderiyor, USB'de geç kare çoğu saniye 0. Ama iki bağımsız 60 Hz saat (Mac sanal ekranı ve tablet paneli) yüzünden periyodik takılma kalıyor. Kullanıcıya göre **Parsec aynı tablette daha az takılıyor**, yani iyileştirme payı var. Hedef: Parsec'le göz karşılaştırmasında en az eşit. Denenmiş olanlar: T-016 (zamanlı `releaseOutputBuffer`), T-018 (GL yolu), T-019 (GL titreşim tamponu, park edildi). Bulgular NOTES 2026-09-29.
 - 4:4:4 renk deneyi (yazı/ince çizgi netliği)
-- Tabletin yüksek yenileme hızı (90/120 Hz). Engeller: HarmonyOS video ve GL yüzeyini 60 Hz'de tutuyor, decoder kapasitesi "4K@60" (2800×1840'ta kabaca ~90 fps), Mac'te kare başına kodlama ~13–15 ms. Önce 60 fps akıcılığı. Kalem için 120 Hz gerekmez (kalem 330 Hz örnekleniyor ve ekran hızından bağımsız gönderiliyor).
+- Tabletin yüksek yenileme hızı (90/120 Hz). **Yapıldı** (Günlük/Çizim/Oyun, karar 0016, 0030): 2800×1840'ta 120 fps çizimde `overflows=0`, host `enc_ms` p50 ~7,2 ms (NOTES 2026-10-03 ~00:40, T-144 taraması); kodlayıcı 120 fps'e yetişiyor (NOTES 2026-10-02, T-047). Eski "decoder ~90 fps, kodlama ~13–15 ms" varsayımı çürütüldü. Kalan sınır: HarmonyOS paneli dokunma, kalem, fare ya da trackpad yokken 60 Hz'de tutuyor (karar 0016; T-319/T-320 açık). Kalem için 120 Hz gerekmez (kalem 330 Hz örnekleniyor ve ekran hızından bağımsız gönderiliyor).
 - Kalem için tahmini ink (local prediction)
 - **Wi-Fi'de kalem örneklerini zamana yayma (host).** Kullanıcı kararı, 2026-09-30: acelesi yok, en sona. Ölçüm (NOTES aynı tarih): USB'de kalem olayları Mac'e 2,8 ms aralıkla düzgün ulaşıyor; Wi-Fi'de aynı ~362 olay/sn öbekleniyor (aralık medyan 0,5–1,1 ms, %95 ~10 ms, en çok 10–14 ms) ve Krita'da hızlı eğriler köşeli görünüyor. Çözüm fikri: host örnekleri tabletin zaman damgasına göre enjekte eder (Wi-Fi'de tahminen 8–12 ms ek gecikme, USB'de ~0; kalem kalkışı ve release-all beklemeyi anında boşaltır). Kullanıcı çizim ve oyun için USB kullanacağını söyledi.
 - Ses aktarımı, pano paylaşımı
