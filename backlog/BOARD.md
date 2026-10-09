@@ -28,7 +28,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-202](tasks/T-202-host-crash-restart-agent.md) | Relaunch the host after a crash (LaunchAgent with KeepAlive) | 6 | mac-host-dev | [T-147, T-148] |
 | [T-320](tasks/T-320-fling-boost-adoption.md) | Fling boost'u benimseme — pil ve ısı bedeli, skip_pct etkisi, hangi modlarda açık (karar + kullanıcı onayı) | 7 | orchestrator | [T-319] |
 | [T-321](tasks/T-321-144hz-wifi-stall.md) | 144 Hz (Yüksek) ekran ayarında tabletin ağ trafiği duruyor; MateBridge ve adb kopuyor — sistem mi, MateBridge yükü mü | 7 | orchestrator | [] |
-| [T-328](tasks/T-328-host-wifi-adaptive-bitrate.md) | Host — tıkanıklık denetleyicisini video kapısına ve kodlayıcıya bağla (Wi-Fi, anahtar) + canlı bit hızı ayarlayıcısını geri getir | 7 | mac-host-dev | [T-327, T-326] |
 
 ## done
 
@@ -340,3 +339,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-325](tasks/T-325-coordinator-stall.md) | Host — StreamCoordinator oturum kapanışında takıldı; posta kutusu taştı ve her yeni oturum hemen kapandı (kullanıcı Mac'i zorla kapattı) | 7 | mac-host-dev | [] |
 | [T-326](tasks/T-326-host-explicit-dscp.md) | Host — Wi-Fi öncelik sınıfları kabloda kayboluyor (Ethernet'te DSCP 0); açık IP_TOS anahtarı ve A/B | 7 | mac-host-dev | [] |
 | [T-327](tasks/T-327-core-congestion-controller.md) | Core — saf Wi-Fi tıkanıklık denetleyicisi (uçuştaki bayt bütçesi, hızlı in / yavaş çık), 2026-10-09 Oyun izinden altın tekrar | 7 | mac-host-dev | [] |
+| [T-328](tasks/T-328-host-wifi-adaptive-bitrate.md) | Host — tıkanıklık denetleyicisini video kapısına ve kodlayıcıya bağla (Wi-Fi, anahtar) + canlı bit hızı ayarlayıcısını geri getir | 7 | mac-host-dev | [T-327, T-326] |

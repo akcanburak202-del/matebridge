@@ -1,7 +1,7 @@
 ---
 id: T-328
 title: Host — tıkanıklık denetleyicisini video kapısına ve kodlayıcıya bağla (Wi-Fi, anahtar) + canlı bit hızı ayarlayıcısını geri getir
-status: review
+status: done
 phase: 7
 owner: mac-host-dev
 depends_on: [T-327, T-326]
