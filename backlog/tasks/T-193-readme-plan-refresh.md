@@ -72,14 +72,34 @@ Source: external architecture review 2026-10-03 (L01, P1, D9; audit PF5 residual
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+_(2026-10-09, taslak ajanı; kart orkestratöre aittir. Dal `task/T-193-readme-plan-refresh`, `task/T-147-recovery-runbook` üstünde.)_
+
+Kart 2026-10-03'te yazıldı; o günden beri çok şey değişti, bu yüzden her iddia güncel koda, NOTES'a ve kararlara karşı yeniden doğrulanır:
+
+1. README: "Phase 0" ifadesi gider. Güncel durum: kararlar 0030 (üç mod: Günlük / Çizim / Oyun; kartta geçen "beş mod" ve Netlik/Akıcı/Performans adları artık yok), 0032 HDR10, 0033/0034 keskin ve tam renk, 0036 yerel imleç, 0035 Wi-Fi dosyaları, 0037 minSdk 31 ve günlük (debug olmayan) derleme, ses, pano, uyku ve WoL, "Yalnız USB". Layout bloğu `tools/` (chroma-test, dav-repro, measure, pacing, soak), `probes/`, `.github/`, ve betikler (`install-apk.sh`, `usb-mode.sh`, `bundle-host.sh`, `device-smoke.sh`) ile tamamlanır.
+2. Bilinen sınırlar güncel kaynaktan: Wi-Fi ~40 ms ↔ USB ~24 ms (NOTES 2026-10-01), Wi-Fi'de Oyun 60 Mbps WLAN kapasitesine yakın (NOTES 2026-10-08/09), 10 sn sanal ekran bekletme (T-165; T-167 bekliyor), decoder arızasında girdi kapısı birleşti (T-159) ama cihaz hata enjeksiyonu açık (T-164), panel dokunmasız 60 Hz (karar 0016; T-319/T-320 açık), 144 Hz paneli ağ durması (T-321 açık).
+3. Mod rehberi: kartın "Netlik 60 / Oyun 60" önerisi 0030 sonrası "Günlük/Oyun + Kare hızı: 60" olarak yeniden yazılır ve 0016'ya atıf yapar.
+4. "Son doğrulanan" bloğu T-147 sürüm çiftinden (`ba964b63`, macOS 27.0.1 (26A434), HarmonyOS 4.3.0.145) ve `docs/RECOVERY.md` bağlantısından.
+5. PLAN.md: satır 9 (başsız 1920×1080 yer tutucu, fiziksel monitör değil, T-147 bulguları), satır 10 (MatePad Pro 12.2 (2025), 2800×1840), Aşama 4 kutuları (NOTES/BOARD'a göre), "Bitti" açık kalır, Aşama 5'teki "~90 fps / 13-15 ms" NOTES 1100-1113 ve 273'e atıfla düzeltilir.
+6. Seri numarası, IP/MAC ve kişisel veri yazılmaz. Kod değişikliği yok. Aşama 6 bölümüne dokunulmaz (kartın dışında); bayat satırlar Handoff'ta bildirilir.
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
+_(Taslak ajanı, 2026-10-09; kart orkestratöre ait, durum `todo` olarak bırakıldı. Kabul kutuları orkestratör gözden geçirince işaretlenir.)_
 
-- **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
-- **Açık sorular:**
+- **Commit:** dal `task/T-193-readme-plan-refresh` (`task/T-147-recovery-runbook` üstünde); plan `6a25be3e`, README + PLAN + bu Handoff sonraki commit (`git log task/T-193-readme-plan-refresh`). `./scripts/check.sh`: ALL OK (bu dalda, gradle daemon'ları sonra durduruldu).
+- **Dokunulan dosyalar:** `README.md` (baştan yazıldı), `docs/PLAN.md` (satır 9-10 donanım tablosu, Aşama 4 üç kutu, Aşama 4 "Bitti" notu, Aşama 5 yüksek yenileme maddesi), bu kart.
+- **Kartın bayat kalan kısımları (kodla/NOTES ile yeniden doğrulandı, farklı yazıldı):**
+  - "Beş akış modu" ve "Netlik 60 / Oyun 60" önerisi: karar 0030 (T-223) ile üç mod var (Günlük / Çizim / Oyun), kare hızı ayrı ayar, Performans kalktı. README'de bu şekilde; 0016'ya atıf korundu (panelin dokunmasız 60 Hz kuralı ve 60↔120'nin ekranı yeniden kurması hâlâ geçerli).
+  - Görüntü bekletme: 10 sn, T-165 ile "park" (yakalama hemen durur, `MATEBRIDGE_DISPLAY_KEEP_S`); T-167 (kalıcı süre ayarı) hâlâ açık; karar 0020 hâlâ "önerildi".
+  - Decoder-gap: T-159 birleşti (girdi kapısı + hata katmanı); cihaz hata enjeksiyonu T-164 açık, README'de ikisi de yazıldı.
+  - SDR/4:2:0 sınırı: T-188 bitti, ama 0034 ile Günlük 60'ta tam renk (4:4:4) ve 0032 ile HDR10 var; sınır "4:4:4 yalnız Günlük 60" olarak yazıldı.
+  - "~90 fps / 13-15 ms": NOTES 1100-1113 ve 273 satırları hâlâ doğru, PLAN'da düzeltildi.
+  - Wi-Fi ~40 ms ↔ USB ~24 ms (NOTES 2026-10-01 tablosu) korunup tarihiyle yazıldı; 2026-10-08/09'daki "Oyun 60 Mbps WLAN kapasitesine yakın" sınırı eklendi.
+  - Layout bloğuna `tools/` (measure, soak, pacing, chroma-test, dav-repro), `.github/`, `scripts/device-smoke.sh` ve `docs/KNOBS.md`, `RECOVERY.md`, `research/`, `reviews/` eklendi; T-173 araçları birleşmiş durumda.
+- **Varsayımlar:** "Son doğrulanan" bloğu T-147 sürüm çiftiyle aynı (`ba964b63`, macOS 27.0.1 (26A434), HarmonyOS 4.3.0.145); 5 dakikalık kontrol o çift için henüz koşulmadı ve README bunu söylüyor. "Kalem ~360 örnek/sn" `docs/research/2026-10-08-pen-path.md`'den. PLAN Aşama 4 "Mod seçimi" kutusu: tablet ana ekran günlük kullanımı yeterli sayıldı (kartın önerisi); ikinci ekran/yansıtma yapılmadı ve öyle yazıldı. Ayarlar kutusu: codec seçimi, Ctrl↔Cmd ayarı ve kalem tuşu eylemi panelde yok (katalog kontrol edildi), bu da PLAN'da açıkça yazıldı.
+- **Test edilmeyenler / cihazda doğrulanacaklar:** yalnız doküman; kod ve cihaz dokunulmadı. README'deki her iddia koddan/NOTES'tan okunarak doğrulandı, cihazda yeniden denenmedi. Tablet "Sürüm" satırı ile Mac menüsü "Sürüm" satırının aynı SHA'yı gösterdiği bu oturumda görülmedi (APK sürümü `dumpsys package`, host SHA `ev=profile sha=` ile okundu).
+- **Açık sorular (kapsam dışı, dokunulmadı):**
+  - `docs/PLAN.md` Aşama 6 bölümü bayat: "Kararlar 0018–0028 (hepsi önerildi)" yanlış (çoğu kabul); bölüm 7 ve 8 "Şifreleme Aşama 4'te gelir" gibi eski ifadeler içeriyor. Kart Aşama 6'yı kapsam dışı bıraktığı için bırakıldı.
+  - `docs/decisions/README.md` tablosunda 0034-0037 satırları yok (tablo 0033'te bitiyor); ayrıca 0020 hâlâ "önerildi" ve README'deki "bekletilen ekran" ona dayanıyor.
+  - Karttaki "T-173 araçları birleşince" koşulu sağlandı; kabul kriterinin "T-147 NOTES kaydıyla eşleşme" maddesi yalnız build kimlikleri için sağlanabildi (provalar henüz yok).

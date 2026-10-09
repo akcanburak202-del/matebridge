@@ -1883,3 +1883,12 @@ Host release, `main`. Tablette ölçüm için debug APK kullanıldı; sonunda da
 - MateBridge glitch only once, at 16:50:49–52 (quiet intro, ≈ −57 dBFS): control RTT 70 ms, owd max 87 ms → 2 underruns, one 64 ms drop. Same Wi-Fi spike pattern as 2026-10-06/08.
 - For the remaining ~300 s every counter was clean: host capture 100 pkt/s, dropped=0, send gaps=0, control socket retx=0; tablet underruns unchanged, buffer floor ≥ 27 ms, owd max 37 ms, no AudioFlinger/AAudio xruns. Video socket had queue_drops at 60 Mbps (WLAN capacity), but audio was unaffected.
 - Conclusion: continuous crackle was already in the audio the emulator produced (the tap passes it through as-is). The Mac output is muted while tapped (`mutedWhenTapped`), so A/B = same scene on Mac speakers without a session.
+
+## 2026-10-09 17:45 — T-147: remote-access facts and version pair (read-only queries, nothing restarted)
+
+- Remote Login (SSH): **off** (`launchctl print system/com.openssh.sshd` finds no service; port 22 closed on loopback). Screen Sharing: **off** (no `com.apple.screensharing` service loaded; port 5900 closed). Remote path is Parsec only, as answered 2026-10-03.
+- Parsec.app is installed and listed in the login items, but at check time no Parsec host process was running (only Apple's unrelated `parsecd`). Whether it starts at login and runs at the login window is **not verified**; T-147 rehearsal must check it first.
+- Physical displays: `system_profiler SPDisplaysDataType` lists only the 1920×1080 @ 60 Hz headless placeholder (no HDMI dummy, no monitor).
+- FileVault off, auto-login on (also checked via `com.apple.loginwindow`), guest login off. `pmset`: `autorestart 0` (no power-fail restart), `womp 1`.
+- Versions: macOS 27.0.1 (26A434); tablet `ro.build.display.id` MRDI-W09 4.3.0.145(C432E1R1P2); host SHA `ba964b63` (from `ev=profile sha=`; the `app_start` line had already rotated out of host.log), APK `versionName` 0.1-ba964b63 (installed 2026-10-08 20:55). Running host bundle build id 20261008205442. Only docs changed in git after `ba964b63`.
+- Nothing from T-147 steps 2–9 was performed. `docs/RECOVERY.md` marks every scenario "henüz prova edilmedi".
