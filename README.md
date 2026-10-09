@@ -23,6 +23,8 @@ scripts/           check.sh (build+test all), board.sh, codex-review.sh
 AGENTS.md          rules for every coding agent (CLAUDE.md imports it)
 ```
 
+Tablet shows nothing and the Mac is headless? See [docs/RECOVERY.md](docs/RECOVERY.md) (recovery runbook, Turkish).
+
 ## Develop
 
 ```bash
