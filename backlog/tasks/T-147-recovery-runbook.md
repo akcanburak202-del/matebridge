@@ -74,10 +74,13 @@ Riskler: taslaktaki bazı beklentiler (örn. Parsec'in giriş ekranında çalı�
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
+_(Taslak ajanı, 2026-10-09; kart orkestratöre ait, durum `in-progress` kalır, cihaz kabul kutuları işaretlenmedi.)_
 
-- **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
+- **Commit:** dal `task/T-147-recovery-runbook`; plan `7d91fd12`, rehber + NOTES + README bağlantısı `e95512fc`, ardından sürüm tablosu ve bu Handoff'un commit'i (`git log task/T-147-recovery-runbook`).
+- **Dokunulan dosyalar:** `docs/RECOVERY.md` (yeniden yazıldı), `docs/NOTES.md` (2026-10-09 17:45 girdisi), `README.md` (tek satır bağlantı), bu kart.
+- **Varsayımlar:** rehber HEAD `2c84c5de` koduna göre. Uzak yol gerçekleri salt okunur sorgularla alındı: SSH ve Ekran Paylaşımı kapalı, yalnız Parsec; Parsec.app kurulu ve giriş öğesi ama kontrol anında süreç çalışmıyordu; fiziksel ekran/dummy yok; FileVault kapalı, otomatik giriş açık. Sürüm çifti: macOS 27.0.1 (26A434), HarmonyOS 4.3.0.145(C432E1R1P2), host ve APK `ba964b63`. `check.sh`: ALL OK.
+- **Test edilmeyenler / cihazda doğrulanacaklar:** kart adım 2-10'un hiçbiri (host Quit/kill -9, tablet force-stop, Wi-Fi kesme, izin geri alma, yeniden başlatma, oturum kapatma-açma, 5 dakikalık kontrol). Parsec'in giriş ekranında ve oturum açılışında çalışıp çalışmadığı. T-325 kendi kendine yeniden başlatma yolu hiç denenmedi. 5 dakikalık kontrol bu çift için henüz yapılmadı.
 - **Açık sorular:**
+  - Kartın eski olguları güncellendi: 10 sn bekletme hâlâ geçerli ama T-165 ile "park" (yakalama hemen durur); T-148 birleşti; T-224 tek kopya kuralı var ve takılı host'ta `open` işe yaramıyor (rehberde senaryo 3); T-325 bekçisi 30 sn'de kendini yeniden başlatabilir (donanımda denenmedi).
+  - Parsec host'u kontrol anında çalışmıyordu: kurtarma yolunun tek ayağı. Giriş öğesi olarak başladığı ve oturumsuz açılışta (login window) gelip gelmediği doğrulanmalı; gerekirse ikinci yol (Ekran Paylaşımı) kararı kullanıcıya.
+  - Aday kod kartı: T-202 (çökme sonrası yeniden başlatma) kapalı; provada 2. senaryo sonucu belirler.

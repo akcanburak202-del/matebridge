@@ -93,6 +93,6 @@ Ekran kurulamıyorsa (özel API `CGVirtualDisplay` değişmiş olabilir) sonucu 
 
 | Tarih | macOS | HarmonyOS | Host SHA | APK SHA | `check.sh` |
 |---|---|---|---|---|---|
-| 2026-10-09 | 27.0.1 (26A434) | 4.3.0.145 (C432E1R1P2) | `ba964b63` | `ba964b63` | CHECK_RESULT_PLACEHOLDER |
+| 2026-10-09 | 27.0.1 (26A434) | 4.3.0.145 (C432E1R1P2) | `ba964b63` | `ba964b63` | ALL OK (2026-10-09, `task/T-147-recovery-runbook`; swift 1082 test, gradle, fixture ve kripto vektörleri) |
 
-Sürüm çifti 2026-10-08 20:55'ten beri tablette/Mac'te kurulu olan çifttir; kullanıcı onayı ve 5 dakikalık kontrol bu tarih için henüz yapılmadı. Bu SHA'dan sonraki tek değişiklik docs/NOTES.md'dir. Güncelleme sonrası satırı yenisiyle değiştirme, altına ekle.
+Sürüm çifti 2026-10-08 20:55'ten beri tablette/Mac'te kurulu olan çifttir; kullanıcı onayı ve 5 dakikalık kontrol bu tarih için henüz yapılmadı. `check.sh` docs-only bir dalda koşuldu (`ba964b63`'ten sonra yalnız NOTES ve bu rehber değişti), yani kod `ba964b63` ile aynı. Güncelleme sonrası satırı yenisiyle değiştirme, altına ekle.
