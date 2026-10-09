@@ -1,7 +1,7 @@
 ---
 id: T-328
 title: Host — tıkanıklık denetleyicisini video kapısına ve kodlayıcıya bağla (Wi-Fi, anahtar) + canlı bit hızı ayarlayıcısını geri getir
-status: todo
+status: review
 phase: 7
 owner: mac-host-dev
 depends_on: [T-327, T-326]
@@ -64,6 +64,28 @@ Riskler: (1) VideoToolbox `fast` profilinde `AverageBitRate` canlı değişimi i
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
+- **Commit:** kod `395d85ce`, test düzeltmesi `80b6d88f` (dal `task/T-328-host-wifi-adaptive-bitrate`; plan `f1a2fe9b`, Handoff ayrı commit). `./scripts/check.sh` -> ALL OK (host swift test 678 XCTest + 1105 swift-testing, gradle, fixtures, crypto, measurement kit).
+- **Dokunulan dosyalar:**
+  - Yeni: `MateBridgeCore/Session/WifiAdaptation.swift`, `MateBridgeHost/Video/WifiAdaptationDriver.swift`, `Tests/.../Session/WifiAdaptationTests.swift`, `Tests/.../Video/LiveBitrateTests.swift` (T-177'den geri, bilgi bölümü kırpıldı).
+  - Değişen: `TransportKnobs.swift` (`WifiAdaptKnob`), `Core/Video/SocketVideoTransport.swift` (`setAdmission`, `notifyReady`), `Core/Video/EncoderSubmitOrder.swift` (T-177 ayarlayıcı geri: `1fe10249^` sürümü), `SessionServer.swift` (`VideoLink.attachAdaptation/sendBufferBytes/tcpConnectionInfo`, `frameWritten` kancası, `cancel` -> adaptation.stop), `StreamCoordinator.swift` (sürücü başlat/durdur), `HEVCEncoder.swift` (`setTargetBitrate`, `applyBitrate`, `Backend.setBitrate`, `initialBitrateKbps`), `PackedAuxEncoder.swift` (`setBitrate`), `VideoPipeline.swift` (`setTargetBitrate`), `BsdTcpSocketTests.swift`, `EncoderSubmitOrderTests.swift` (T-177 testleri geri + keyframe'siz test), `docs/LOGGING.md`.
+- **Tick ve düşüş kablolaması:**
+  - Tick kaynağı: `WifiAdaptationDriver` kendi 100 ms `DispatchSourceTimer`'ı (oturum kuyruğundan ve 1 s `ev=tcp` ölçerinden bağımsız). Her tick'te video soketinden `TCP_CONNECTION_INFO` okur (kendi `TcpInfoMeter`'ı, retx deltası 100 ms pencere), `adaptation.tick(report:, queueDropsTotal: pipeline.frames.droppedCount)` çağırır. Kare yolunda `getsockopt` yok denebilir: kapı için `admit()` gerekirse en çok 2 ms'de bir `tcpi_snd_sbbytes` okur (anahtar kapalıyken sıfır maliyet).
+  - Düşüşler: kapının reddi asla `queueDropped` olmaz. `VideoFrameQueue.droppedCount` artışı (gerçek yeni-kare-kazanır düşüşü) tick başına en çok bir `queueDropped` olur, ama o tick'te ya da bir önceki tick'te kapı en az bir kez reddettiyse sayılmaz (kapının yol açtığı taşma, ör. bütçeden büyük keyframe, kendi kendini besleyen iniş olmasın diye). Uzun süren kapı engellemesi denetleyicinin kendi tetikleyicilerine (sbbytes 3x bütçe, srtt +20 ms, retx) kalır.
+  - Kapı: yalnız `SocketVideoTransport.canSend` içinde (yazılabilirlik kapısından sonra). `sendFrame` içinde değil: sender'ın zaten aldığı kareyi reddetmek kareyi kaybettirir ve keyframe ister. Reddedilen kabul üç yoldan yeniden denenir: soketin yazılabilirlik olayı (mevcut), her tick (açık reddi varsa sender'ı uyandırır), 4->20 ms geri çekilmeli yeniden deneme zamanlayıcısı (yazılabilirlik olayı bütçe aşımında hiç gelmez, çünkü soket yazılabilir kalır).
+  - Kodlayıcı: iniş hemen, çıkış en çok 500 ms'de bir uygulanır (kuantum 250 kbps, saniyede ~12 adım olurdu). Sürücü başlarken ve dururken kodlayıcıyı tavana alır. Paketlenmiş 4:4:4'te yardımcı oturum `AuxBitratePolicy` ile aynı sahip kuyruğunda ayarlanır.
+- **Varsayımlar:** kart `files:` listesindeki `MateBridgeHost/Session/SocketVideoTransport.swift` yolu yanlış (gerçek: `MateBridgeCore/Video/`); Core/Video'daki iki dosya, yeni Core/Session dosyası ve `Tests/.../Video/` kart `files:` listesine eklendi. Tavan = `pipeline.settings.bitrateKbps`, fps = `pipeline.settings.fps`; taban T-327 varsayılanı (12 Mbps). Packed 4:4:4'te `BitrateRequest` aralığı (5-150 Mbps) ana oturum içindir; yardımcı oturum `AuxBitratePolicy` tabanı (1 Mbps) ile. T-177 testleri kartın "XCTest" maddesini XCTest ile karşılıyor (EncoderSubmitOrderTests XCTest).
+- **Test edilmeyenler / cihazda doğrulanacaklar:**
+  - **VideoToolbox `fast` profilinin canlı `AverageBitRate`/`DataRateLimits` değişimini izleyip izlemediği** (T-177 cihaz kontrolü hiç yapılmadı): `video ev=bitrate_set` durumları 0 mı, `sent_kbps`/`net ev=tcp` bayt hızı hedefi izliyor mu. İzlemiyorsa yalnız kapı etkili olur.
+  - Kare başına `admit()` `getsockopt` maliyeti (host CPU) ve kapının gereksiz kısması: `admits_blocked`, `blocked_ms`, `queue_drops`, keyframe sayısı (bütçeden büyük keyframe sonrası kapı kapanır; kuyruk taşması keyframe isteği doğurabilir; T-176 birleştirici bunu yumuşatır).
+  - Kapalı döngü davranış (hedef iner mi, 5 s sonra tavana döner mi, durağan metin netliği), denetleyici sabitlerinin başka WLAN'da uygunluğu.
+  - Hiçbir cihaz testi çalıştırılmadı; çalışan host uygulamasına dokunulmadı.
+- **Cihaz A/B'de loga bakılacaklar:** `video ev=adapt` (saniyelik: `target_kbps`, `sbbytes_p95`, `srtt_ms`, `admits_blocked`, `blocked_ms`, `queue_drops`, `down_steps`), `video ev=adapt_step` (inişlerde `trigger=`), `video ev=bitrate_set` (`avg_status=0 limits_status=0`, `aux_status`), `net ev=tcp` (video `sndbuf_bytes`, `retx_pkts_delta`, kontrol srtt p95), `video ev=cadence` (`queue_drops`), tablet tarafı fps/ses kesintisi. USB oturumunda hiç `adapt*` satırı çıkmamalı.
 
 ## Open questions
+
+- **KNOBS.md satırı (orkestratör ekler):** `MATEBRIDGE_WIFI_ADAPT=1` | varsayılan kapalı | `TransportKnobs.swift` (`WifiAdaptKnob`), `StreamCoordinator.swift` (`onVideoAttached`), `WifiAdaptationDriver.swift` | T-328 | yalnızca geliştirici (A/B sonrası varsayılan kararı) | Wi-Fi'de gönderim kapısı + canlı bit hızı; yalnız `transport=wifi`. KNOBS satır 41 (BITRATE_STEP) kaldırılmış kalır.
+- **PROTOCOL §0x03 `bitrate_kbps`** "tavan; host tıkanıklıkta altında kodlayabilir" metni orkestratörün; bayt/fixture değişmedi.
+- **`StreamProfileLog.knobAllowList`** (`ev=profile knobs=`) `MATEBRIDGE_WIFI_ADAPT`'i listelemiyor (dosya kart kapsamında değil); A/B'de anahtar açık/kapalı oturumları `ev=adapt_start` varlığından ayırt edilir. İstenirse küçük bir takip kartı.
+- **Kapsam sapması:** `files:` listesi güncellendi (yukarıda). Kart yolu `MateBridgeHost/Session/SocketVideoTransport.swift` yanlıştı.
+- F A-4 (kontrol H->C trafiği alçak su işaretini yok sayar): düzeltilmedi, kapsam dışı.
+- Denetleyici tek-iki paket retx'te (< 4/pencere) yalnız x0,9 uyguluyor; 100 ms tick'te bir olay iki tick'e bölünürse "hafif" sayılabilir (kalibrasyon 1 s tick'ti). Cihazda `down_steps` ve `trigger=retransmit` sıklığına bakılmalı; gerekirse sürücü retx'i 1 s kayan pencerede toplayacak şekilde değiştirilir.
