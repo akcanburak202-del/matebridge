@@ -1876,3 +1876,10 @@ Host release, `main`. Tablette ölçüm için debug APK kullanıldı; sonunda da
 - After switching to 30 Mbps at 22:45:21: tablet ping avg 3–5 ms, max ≤78 ms, no network stall, no disconnect.
 - Conclusion: today the WLAN hop to the tablet runs near capacity at Oyun's 60 Mbps (queueing delay), and earlier collapses happened under that load (one at 30 Mbps in Günlük). Before ~19:00 today the same rates were fine → capacity loss in the WLAN environment, not a code change.
 - Also seen: 22:41:17–25 host capture fell to 3–14 fps while another session ran Blender (132% CPU) + Hades II on the Mac; client frame drops 5–25/s at 22:41:28–47 and 22:56 with healthy network (tablet decode/pacing, cf. T-310/T-320).
+
+## 2026-10-09 16:50–16:56 — Astris (TotK) audio crackle: source side, not MateBridge
+
+- Session: Wi-Fi, Oyun 1400×920@60, 60 Mbps; game audio on host 16:50:39–16:55:53 (tablet clock; host mono ≈ +5.1 s).
+- MateBridge glitch only once, at 16:50:49–52 (quiet intro, ≈ −57 dBFS): control RTT 70 ms, owd max 87 ms → 2 underruns, one 64 ms drop. Same Wi-Fi spike pattern as 2026-10-06/08.
+- For the remaining ~300 s every counter was clean: host capture 100 pkt/s, dropped=0, send gaps=0, control socket retx=0; tablet underruns unchanged, buffer floor ≥ 27 ms, owd max 37 ms, no AudioFlinger/AAudio xruns. Video socket had queue_drops at 60 Mbps (WLAN capacity), but audio was unaffected.
+- Conclusion: continuous crackle was already in the audio the emulator produced (the tap passes it through as-is). The Mac output is muted while tapped (`mutedWhenTapped`), so A/B = same scene on Mac speakers without a session.
