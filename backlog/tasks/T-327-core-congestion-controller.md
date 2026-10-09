@@ -1,7 +1,7 @@
 ---
 id: T-327
 title: Core — saf Wi-Fi tıkanıklık denetleyicisi (uçuştaki bayt bütçesi, hızlı in / yavaş çık), 2026-10-09 Oyun izinden altın tekrar
-status: todo
+status: review
 phase: 7
 owner: mac-host-dev
 depends_on: []
@@ -48,6 +48,16 @@ Riskler: tek paketlik retx'ler (iz boyunca ~10 s'de bir) tavandan sürekli küç
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
+- **Commit:** (aşağıdaki commit; SHA orkestratör raporunda)
+- **Dokunulan dosyalar:** `host-mac/Sources/MateBridgeCore/Session/CongestionController.swift`, `host-mac/Tests/MateBridgeCoreTests/Session/CongestionControllerTests.swift`, `host-mac/Tests/MateBridgeCoreTests/Session/CongestionReplayTrace.swift`, bu kart. (Kartın `files:` listesindeki yol `Session/`; T-195'teki `Video/` değil.)
+- **API:** `CongestionController(config: .init(ceilingKbps:floorKbps:framesPerSecond:))`; `frameWritten(bytes:)`, `tick(.init(nowUs:srttMs:sendBufferBytes:retransmitPacketsDelta:))` (veya `Tick(nowUs:report: TcpInfoReport)`), `queueDropped(nowUs:)` -> Bool; çıktılar `targetKbps` (250 kbps adım), `budgetBytes`, `mayWrite(sendBufferBytes:)`, `baselineSrttMs`. `tick`/`queueDropped` inişin nedenini (`Trigger`) / Bool döner, T-328 logu için.
+- **Sabitler (hepsi `static let`, gerekçeli):** taban 12 Mbps (min(12000, tavan)); hızlı in x0,7; en çok max(srtt, 250 ms)'te bir iniş; sessizlik 2 s, sonra tavanın %5'i/s; srtt tetikleyici = pencereli min + 20 ms; sbbytes tetikleyici = 3 x bütçe; bütçe = max(hedef x 20 ms, ortalama kare); srtt taban penceresi 30 s (1 s kovalar); tek-iki paketlik retx (< 4 paket/pencere) yalnız x0,9.
+- **Varsayımlar / karttan sapmalar:**
+  - Kart "retx delta > 0 hızlı in tetikler" diyor; tetikler, ama iz boyunca 10-20 s'de bir görülen 1-3 paketlik tek retx'ler (sağlıklı RTT'de Wi-Fi kuyruk kaybı) x0,7 ile tavandan %30'luk testere dişi yaratıyordu (ilk tekrar). 4 paketten azında x0,9 kullanıldı; 385 paketlik patlama tam x0,7. Sabit `mildRetransmitPackets`/`mildDownFactor`; sıfıra çekilirse kart metnine birebir döner.
+  - Kartta "XCTest" yazıyor; pakette swift-testing kullanılıyor, testler onunla.
+  - Altın tekrar açık döngü (iz denetleyicisiz kaydedildi) ve 1 s çözünürlüklü; `sent_frames/sent_kbps` ile `net ev=stats` saatleri tcp tick'ine göre kayıyor, bu yüzden ortalama kare boyutu yaklaşık (yalnız bütçe tabanını etkiler). Beklenen dizi `CongestionReplayTests.expectedTargets` içinde; sabit değişirse bilerek yeniden kaydedilir.
+  - `queueDropped` hangi düşüşleri raporlayacağı T-328'in kararı: kapının kendi reddettiği kareler raporlanırsa kendi kendini besleyen bir iniş döngüsü olur.
+- **Test edilmeyenler / cihazda doğrulanacaklar:** hiçbir şey cihazda çalışmadı (saf mantık). Kapalı döngü davranış (hedef düşünce iz gerçekten düzelir mi, 100 ms tick'lerde srtt için 250 ms alt sınırı, bütçenin kapıyı gereksiz kısması) yalnız T-328 bağlandıktan sonra tablette A/B ile görülür. Sabitler 2026-10-09 tek oturumundan kalibre; başka WLAN'da ayar gerekebilir.
+- **Açık sorular:** yok.
 
 ## Open questions
