@@ -462,6 +462,7 @@ final class EncoderSubmitOrderTests: XCTestCase {
         order.offer(bypassGate: true) { _ in FakeFrame(stamp: 2, gateUs: 2_000) }
         drain(order)
         XCTAssertEqual(order.setBitrate(kbps: 60_000), .apply(60_000))
+        drain(order)
         XCTAssertFalse(order.keyframePending)
         XCTAssertFalse(order.isStopped)
         XCTAssertEqual(backend.events, [.encode(stamp: 1, key: true, token: 1), .setBitrate(20_000),
