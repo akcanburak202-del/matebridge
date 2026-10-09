@@ -240,6 +240,44 @@ final class BsdTcpSocketTests: XCTestCase {
         server.listener.cancel()
     }
 
+    /// T-328: the extra admission closes `canSend` on an otherwise idle, writable socket, `notifyReady` wakes the
+    /// sender, and clearing it restores the plain gate. A frame the sender already took is not refused by it.
+    func testAdmissionGatesCanSendOnlyAndWakesThroughNotifyReady() throws {
+        let server = try Server(options: BsdTcpOptions(notSentLowatBytes: 128 * 1024))
+        let client = connectClient(port: server.listener.port)
+        defer { close(client) }
+        let c = try XCTUnwrap(server.waitAccepted())
+        let t = SocketVideoTransport(connection: c, sealer: RecordSealer(key: key,
+                                                                           maxPayload: ProtocolConstants.maxVideoPayload))
+        XCTAssertTrue(t.canSend, "no admission: the plain gate")
+
+        let open = LockedFlag(false)
+        let asked = Counter()
+        t.setAdmission { asked.increment(); return open.value }
+        XCTAssertFalse(t.canSend)
+        XCTAssertEqual(asked.value, 1)
+
+        let woken = DispatchSemaphore(value: 0)
+        t.setReadyHandler { woken.signal() }
+        open.set(true)
+        t.notifyReady()
+        XCTAssertEqual(woken.wait(timeout: .now() + 2), .success)
+        XCTAssertTrue(t.canSend)
+
+        // Taken while admitted, refused afterwards: `sendFrame` sends anyway and the record counter is used.
+        open.set(false)
+        let done = DispatchSemaphore(value: 0)
+        XCTAssertEqual(t.sendFrame(frame(0, size: 1000)) { _ in done.signal() }, .sent)
+        XCTAssertEqual(done.wait(timeout: .now() + 5), .success)
+
+        t.setAdmission(nil)
+        XCTAssertTrue(waitCanSend(t), "cleared: back to the plain gate")
+        let reader = Reader(fd: client)
+        c.cancel()
+        _ = reader.done.wait(timeout: .now() + 5)
+        server.listener.cancel()
+    }
+
     /// `sendFrame` enforces the same gate as `canSend` (review P2-1): above the mark it refuses before sealing, so no
     /// record counter is used up and the stream stays decodable.
     func testSendFrameEnforcesTheGateWithoutUsingACounter() throws {
@@ -553,6 +591,14 @@ private final class Counter: @unchecked Sendable {
     private var n = 0
     func increment() { lock.withLock { n += 1 } }
     var value: Int { lock.withLock { n } }
+}
+
+private final class LockedFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var flag: Bool
+    init(_ flag: Bool) { self.flag = flag }
+    func set(_ v: Bool) { lock.withLock { flag = v } }
+    var value: Bool { lock.withLock { flag } }
 }
 
 private final class LockedBox<T>: @unchecked Sendable {

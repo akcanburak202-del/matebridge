@@ -182,3 +182,20 @@ public enum NotSentLowatKnob {
     /// The setting in bytes.
     public static func bytes(_ env: [String: String]) -> Int { parseKB(env) * 1024 }
 }
+
+/// `MATEBRIDGE_WIFI_ADAPT=1` (T-328, decision 0023 branch (c)): the Wi-Fi video congestion controller (T-327) gates new
+/// frames on the in-flight byte budget and follows its target bit rate live. Default off. Only `1` turns it on; absent
+/// or anything else is off. Never active on USB: a `.usb` session never consults the knob.
+public enum WifiAdaptKnob {
+    public static let name = "MATEBRIDGE_WIFI_ADAPT"
+
+    public static func isEnabled(_ env: [String: String]) -> Bool {
+        env[name]?.trimmingCharacters(in: .whitespaces) == "1"
+    }
+
+    /// Whether a session over `transport` runs the controller: it is on the network and the knob is on.
+    public static func isActive(_ env: [String: String], transport: SessionTransport) -> Bool {
+        guard transport == .network else { return false }
+        return isEnabled(env)
+    }
+}

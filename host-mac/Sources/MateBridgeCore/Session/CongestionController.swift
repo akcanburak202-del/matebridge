@@ -46,6 +46,22 @@ public struct CongestionController: Equatable, Sendable {
     /// A send buffer above this multiple of the budget is a decrease trigger (the budget itself only refuses writes;
     /// the Oyun trace sits at 40-170 KB against a 150 KB budget at 60 Mbps when healthy).
     public static let sendBufferTriggerFactor = 3
+    /// The send-buffer trigger needs the buffer over `sendBufferTriggerFactor` budgets continuously for this long (two
+    /// consecutive over-threshold readings at least this far apart; at 100 ms ticks that is the 5th reading). One
+    /// keyframe makes a burst, not a backlog: a 680 KB keyframe (the largest in the Oyun trace) is over three budgets
+    /// for (680 KB - 3 x budget) / target. That is 91 ms at 60 Mbps, 121 ms at 30 Mbps and, with the smallest budget
+    /// (30 KB at the 12 Mbps floor, so 90 KB), 0.39 s at the floor, which stays under 0.4 s. A link that cannot carry
+    /// the target stays over it for seconds.
+    public static let sendBufferSustainMs: UInt32 = 400
+    /// Idle recovery (see `recoveryDemandFraction`): the video demand is measured over this window.
+    public static let demandWindowMs: UInt32 = 1_000
+    /// Idle recovery. After `quietMs` without a trigger, when the bytes actually written over the last
+    /// `demandWindowMs` are below this fraction of the current target, the target jumps to the ceiling: a static
+    /// screen (small frames, 5-30 s after the last congestion) needs no ramp, and stays far below the target, so
+    /// the jump cannot congest the link. Under load (demand at or above the fraction) the slow slope stays. Not applied
+    /// while the owner's gate refused frames in the window (`Tick.gateRefused`): written bytes are then low because of
+    /// the gate, not because the screen is still.
+    public static let recoveryDemandFraction = 0.5
     /// Window of the minimum-RTT baseline. 30 s, not 10 s: the congested start of the Oyun session lasted 9 s, which
     /// a short window would absorb into the baseline.
     public static let baselineWindowSeconds = 30
@@ -76,17 +92,22 @@ public struct CongestionController: Equatable, Sendable {
         public var sendBufferBytes: UInt32
         /// Retransmitted packets since the previous tick.
         public var retransmitPacketsDelta: UInt64
+        /// The owner's admission gate refused a frame since the previous tick (T-328): the bytes written in that span
+        /// understate the demand.
+        public var gateRefused: Bool
 
-        public init(nowUs: UInt64, srttMs: UInt32, sendBufferBytes: UInt32, retransmitPacketsDelta: UInt64) {
+        public init(nowUs: UInt64, srttMs: UInt32, sendBufferBytes: UInt32, retransmitPacketsDelta: UInt64,
+                    gateRefused: Bool = false) {
             self.nowUs = nowUs
             self.srttMs = srttMs
             self.sendBufferBytes = sendBufferBytes
             self.retransmitPacketsDelta = retransmitPacketsDelta
+            self.gateRefused = gateRefused
         }
 
-        public init(nowUs: UInt64, report: TcpInfoReport) {
+        public init(nowUs: UInt64, report: TcpInfoReport, gateRefused: Bool = false) {
             self.init(nowUs: nowUs, srttMs: report.snapshot.srttMs, sendBufferBytes: report.snapshot.sendBufferBytes,
-                      retransmitPacketsDelta: report.retransmitPacketsDelta)
+                      retransmitPacketsDelta: report.retransmitPacketsDelta, gateRefused: gateRefused)
         }
     }
 
@@ -96,6 +117,8 @@ public struct CongestionController: Equatable, Sendable {
         case retransmit
         case queueDelay = "queue_delay"
         case sendBuffer = "send_buffer"
+        /// The owner's gate stayed closed for most of a long window while frames kept dropping (T-328).
+        case blocked
     }
 
     public let config: Config
@@ -106,6 +129,12 @@ public struct CongestionController: Equatable, Sendable {
     private var lastDownUs: UInt64?
     private var lastUpdateUs: UInt64 = 0
     private var latestSrttMs: UInt32 = 0
+    /// Since when the send buffer has been over the trigger threshold without a reading below it.
+    private var sendBufferOverSinceUs: UInt64?
+    /// Idle recovery: bytes written since the last tick, and the recent ticks (bytes, span, gate refused).
+    private var writtenSinceTick = 0
+    private var lastDemandTickUs: UInt64?
+    private var demandWindow: [DemandSpan] = []
     /// One minimum-RTT bucket per second of the baseline window.
     private var bucketSecond = [UInt64](repeating: .max, count: CongestionController.baselineWindowSeconds)
     private var bucketMinMs = [UInt32](repeating: .max, count: CongestionController.baselineWindowSeconds)
@@ -147,6 +176,7 @@ public struct CongestionController: Equatable, Sendable {
 
     public mutating func frameWritten(bytes: Int) {
         guard bytes > 0 else { return }
+        writtenSinceTick += bytes
         averageFrameBytes += (Double(bytes) - averageFrameBytes) * Self.frameAverageWeight
     }
 
@@ -156,6 +186,16 @@ public struct CongestionController: Equatable, Sendable {
     public mutating func queueDropped(nowUs: UInt64) -> Bool {
         advance(to: nowUs)
         return trigger(.queueDrop, factor: Self.downFactor, nowUs: max(nowUs, lastUpdateUs)) != nil
+    }
+
+    /// The owner's admission gate was closed for most of a long window with host queue drops throughout, and no other
+    /// trigger fired (T-328 `WifiAdaptation`: a link slower than the target keeps the send buffer between one and
+    /// three budgets, so neither the buffer, the RTT nor the retransmit trigger sees it). Same decrease and
+    /// minimum interval as any trigger. Returns true when the target went down.
+    @discardableResult
+    public mutating func blockedTooLong(nowUs: UInt64) -> Bool {
+        advance(to: nowUs)
+        return trigger(.blocked, factor: Self.downFactor, nowUs: max(nowUs, lastUpdateUs)) != nil
     }
 
     /// Feeds one TCP reading. Returns the trigger that lowered the target, nil when it did not go down (no trigger,
@@ -180,13 +220,55 @@ public struct CongestionController: Equatable, Sendable {
             offer(.queueDelay, Self.downFactor)
         }
         if Int(t.sendBufferBytes) > Self.sendBufferTriggerFactor * budgetBytes {
-            offer(.sendBuffer, Self.downFactor)
+            let since = sendBufferOverSinceUs ?? now
+            sendBufferOverSinceUs = since
+            if now - since >= UInt64(Self.sendBufferSustainMs) * 1_000 { offer(.sendBuffer, Self.downFactor) }
+        } else {
+            sendBufferOverSinceUs = nil
         }
-        guard let (reason, factor) = hit else { return nil }
+        noteDemand(nowUs: now, gateRefused: t.gateRefused)
+        guard let (reason, factor) = hit else {
+            recoverIfIdle(nowUs: now)
+            return nil
+        }
         return trigger(reason, factor: factor, nowUs: now)
     }
 
     // MARK: Internals
+
+    private struct DemandSpan: Equatable, Sendable {
+        var bytes: Int
+        var spanUs: UInt64
+        var refused: Bool
+    }
+
+    /// Closes the bytes-written count of the span since the previous tick and keeps just enough ticks to cover
+    /// `demandWindowMs`.
+    private mutating func noteDemand(nowUs: UInt64, gateRefused: Bool) {
+        defer {
+            writtenSinceTick = 0
+            lastDemandTickUs = max(lastDemandTickUs ?? 0, nowUs)
+        }
+        guard let last = lastDemandTickUs, nowUs > last else { return }
+        demandWindow.append(DemandSpan(bytes: writtenSinceTick, spanUs: nowUs - last, refused: gateRefused))
+        let window = UInt64(Self.demandWindowMs) * 1_000
+        var span = demandWindow.reduce(UInt64(0)) { $0 + $1.spanUs }
+        while demandWindow.count > 1, span - demandWindow[0].spanUs >= window {
+            span -= demandWindow.removeFirst().spanUs
+        }
+    }
+
+    /// Idle recovery: quiet for `quietMs`, a full demand window, the gate not refusing in it, and the written rate
+    /// under `recoveryDemandFraction` of the target: straight to the ceiling.
+    private mutating func recoverIfIdle(nowUs: UInt64) {
+        guard let lastTrigger = lastTriggerUs, exactKbps < Double(config.ceilingKbps),
+              nowUs >= lastTrigger &+ UInt64(Self.quietMs) * 1_000 else { return }
+        let span = demandWindow.reduce(UInt64(0)) { $0 + $1.spanUs }
+        guard span >= UInt64(Self.demandWindowMs) * 900, !demandWindow.contains(where: \.refused) else { return }
+        let bytes = demandWindow.reduce(0) { $0 + $1.bytes }
+        let demandKbps = Double(bytes) * 8_000.0 / Double(span)
+        if demandKbps < exactKbps * Self.recoveryDemandFraction { exactKbps = Double(config.ceilingKbps) }
+    }
 
     /// Applies the slow climb up to `nowUs`. Only time after the quiet period counts.
     private mutating func advance(to nowUs: UInt64) {
