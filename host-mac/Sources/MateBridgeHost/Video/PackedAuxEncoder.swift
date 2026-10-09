@@ -40,6 +40,7 @@ final class PackedAuxEncoder: @unchecked Sendable {
     private var lastParameterSets: [UInt8] = []
     private var formatCache = ParameterSetCache()  // guarded by `lock`
     private var closed = false
+    private let rateWindowMs: Int?
 
     /// - Parameters:
     ///   - mainKbps: the main session's target; the auxiliary one follows `AuxBitratePolicy`.
@@ -47,6 +48,7 @@ final class PackedAuxEncoder: @unchecked Sendable {
          output: @escaping Output,
          onError: @escaping @Sendable (String) -> Void,
          onLoss: @escaping @Sendable (UInt64) -> Void = { _ in }) throws {
+        self.rateWindowMs = rateWindowMs
         self.output = output
         self.onError = onError
         self.onLoss = onLoss
@@ -123,6 +125,18 @@ final class PackedAuxEncoder: @unchecked Sendable {
             return false
         }
         return true
+    }
+
+    /// Changes the session's target bitrate (kbps) without a restart or keyframe (T-328). Owner queue only (called from
+    /// `HEVCEncoder.applyBitrate`); a no-op once closed. Returns the worse of the two property statuses.
+    @discardableResult
+    func setBitrate(kbps: Int) -> OSStatus {
+        guard !lock.withLock({ closed }) else { return kVTInvalidSessionErr }
+        let avg = VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate,
+                                       value: (kbps * 1000) as CFNumber)
+        let limits = VTSessionSetProperty(session, key: kVTCompressionPropertyKey_DataRateLimits,
+                                          value: HEVCEncoder.dataRateLimits(kbps: kbps, shortWindowMs: rateWindowMs))
+        return avg != noErr ? avg : limits
     }
 
     /// CODEC_CONFIG of the auxiliary stream (`view = 1`); nil before the first frame was encoded.

@@ -38,6 +38,8 @@ public final class SocketVideoTransport: VideoTransport, @unchecked Sendable {
     private var sealer: RecordSealer
     private var inFlight = 0
     private var readyHandler: (@Sendable () -> Void)?
+    /// Extra admission of new frames (T-328, Wi-Fi congestion control); nil = the gate above only, exactly as before.
+    private var admission: (@Sendable () -> Bool)?
 
     public init(connection: BsdTcpConnection, sealer: RecordSealer) {
         self.connection = connection
@@ -46,13 +48,26 @@ public final class SocketVideoTransport: VideoTransport, @unchecked Sendable {
     }
 
     public var canSend: Bool {
-        let inFlight = lock.withLock { self.inFlight }
+        let (inFlight, admission) = lock.withLock { (self.inFlight, self.admission) }
         // A record of ours is still in user space: its completion wakes the sender, no need to ask the socket (which
         // would arm its writable notification).
         guard inFlight < SocketVideoGate.maxRecordsInFlight else { return false }
-        return SocketVideoGate.canSend(recordsInFlight: inFlight,
-                                       socketBelowLowat: connection.isWritableForNewRecord)
+        guard SocketVideoGate.canSend(recordsInFlight: inFlight, socketBelowLowat: connection.isWritableForNewRecord)
+        else { return false }
+        // T-328: the in-flight byte budget, asked last and only here. `sendFrame` does not ask again: a frame the
+        // sender already took must not be refused (it would be lost and ask for a keyframe), and the sender asks
+        // before every frame.
+        return admission?() ?? true
     }
+
+    /// Sets (or clears) the extra admission of new frames. The closure runs on the sender's thread, outside this
+    /// transport's lock, and must wake the sender through `notifyReady` when a refusal may pass later.
+    public func setAdmission(_ admission: (@Sendable () -> Bool)?) {
+        lock.withLock { self.admission = admission }
+    }
+
+    /// Fires the ready handler: the sender asks `canSend` again. For an admission that was refused earlier.
+    public func notifyReady() { fireReady() }
 
     public func setReadyHandler(_ handler: (@Sendable () -> Void)?) {
         lock.withLock { readyHandler = handler }

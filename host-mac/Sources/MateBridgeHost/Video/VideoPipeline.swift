@@ -319,6 +319,13 @@ public final class VideoPipeline: @unchecked Sendable {
         return fps
     }
 
+    /// Live bitrate change for Wi-Fi adaptation (T-328, `MATEBRIDGE_WIFI_ADAPT`): no restart, no `STREAM_CONFIG`, no
+    /// keyframe (`HEVCEncoder.setTargetBitrate`). nil: there is no encoder (not started or already stopped).
+    @discardableResult
+    func setTargetBitrate(kbps: Int) -> BitrateRequest.Decision? {
+        box.encoder?.setTargetBitrate(kbps: kbps)
+    }
+
     /// Host-side keyframe (the sender's transport refused a frame): always forced, and recorded so that the client's
     /// requests caused by the same hiccup coalesce with it.
     public func requestKeyframe() {

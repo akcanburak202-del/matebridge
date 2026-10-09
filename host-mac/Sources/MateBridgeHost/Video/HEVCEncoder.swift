@@ -208,6 +208,7 @@ final class HEVCEncoder: @unchecked Sendable {
         let backend = Backend(session: s)
         order = EncoderSubmitOrder(
             backend: backend, streamFps: settings.fps, maxInFlight: HEVCEncoder.maxInFlight,
+            initialBitrateKbps: settings.bitrateKbps,
             nowUs: { HostClock.nowUs() },
             pacerCounts: { [meter] overwritten, decimated, deferred in
                 for _ in 0..<overwritten { meter?.recordOverwritten() }
@@ -717,6 +718,29 @@ final class HEVCEncoder: @unchecked Sendable {
         order.setTargetFps(fps)
     }
 
+    /// Changes the live session's target bitrate without restarting anything (T-177, restored by T-328): no new
+    /// `STREAM_CONFIG`, no video reconnect, no keyframe. Clamped to `BitrateRequest.defaultRange` and deduplicated;
+    /// applied on the owner queue between two submits, never after `stop`. Whether VideoToolbox honours it (the
+    /// `.fast` profile may accept and ignore it, cf. T-087) is a device measurement: `video ev=bitrate_set` logs the
+    /// statuses of the property sets.
+    @discardableResult
+    func setTargetBitrate(kbps: Int) -> BitrateRequest.Decision {
+        order.setBitrate(kbps: kbps)
+    }
+
+    /// Owner queue only (`Backend.setBitrate`, enqueued by `EncoderSubmitOrder.setBitrate`). Logs one line per applied
+    /// change (requests equal to the value in force never get here). The packed auxiliary session follows at its
+    /// share of the main target (`AuxBitratePolicy`).
+    private func applyBitrate(kbps: Int, session: VTCompressionSession, aux: PackedAuxEncoder?) {
+        let avg = VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate,
+                                       value: (kbps * 1000) as CFNumber)
+        let limits = VTSessionSetProperty(session, key: kVTCompressionPropertyKey_DataRateLimits,
+                                          value: Self.dataRateLimits(kbps: kbps, shortWindowMs: knobs.rateWindowMs))
+        let auxStatus = aux.map { String($0.setBitrate(kbps: AuxBitratePolicy.kbps(main: kbps))) } ?? "na"
+        Self.videoLog(.info, "bitrate_set",
+                      "kbps=\(kbps) avg_status=\(avg) limits_status=\(limits) aux_status=\(auxStatus)")
+    }
+
     /// `CompressionBackend` over the VideoToolbox session; called on the owner queue only. Holds the encoder weakly
     /// (the encoder owns the order, which owns this backend), so the teardown block never retains the encoder.
     final class Backend: CompressionBackend, @unchecked Sendable {
@@ -729,6 +753,11 @@ final class HEVCEncoder: @unchecked Sendable {
         /// After the encoder is gone (its `deinit` already stopped the order) a queued frame is not submitted.
         func encode(_ frame: Input, keyframe: Bool, token: EncoderSubmitToken) {
             encoder?.send(frame, key: keyframe, token: token, session: session)
+        }
+
+        /// After the encoder is gone (its `deinit` already stopped the order) nothing is set.
+        func setBitrate(kbps: Int) {
+            encoder?.applyBitrate(kbps: kbps, session: session, aux: aux)
         }
 
         /// Synchronous `CompleteFrames` runs here, on the owner queue, never on a Swift cooperative thread.

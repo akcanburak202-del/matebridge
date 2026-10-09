@@ -166,6 +166,9 @@ public final class StreamCoordinator: @unchecked Sendable {
     private var parked: (display: VirtualDisplay, sinceUs: UInt64)?
     private var consumer = Consumer.none
     private var consumerID = 0
+    /// T-328: Wi-Fi congestion control of the current video connection; nil unless `MATEBRIDGE_WIFI_ADAPT=1` and the
+    /// session is on the network. Started with the sender, stopped with it (`stopAdaptation`).
+    private var adaptDriver: WifiAdaptationDriver?
     private var session: ActiveSession?
     private var lastSent = VideoSender.Counters()
     /// T-289: bounded rebuilds after a running pipeline died, and the HDR10 to SDR fallback after repeated encoder failures.
@@ -707,6 +710,12 @@ public final class StreamCoordinator: @unchecked Sendable {
                                  clock: { HostClock.nowUs() })
         consumer = .sender(id: id, sender, link)
         lastSent = VideoSender.Counters()
+        // T-328: the gate is in place before the first frame is taken. USB sessions never get here (never consulted).
+        if WifiAdaptKnob.isActive(ProcessInfo.processInfo.environment, transport: s.transport) {
+            let driver = WifiAdaptationDriver(link: link, pipeline: pipeline, logger: videoLogger)
+            adaptDriver = driver
+            driver.start()
+        }
         sender.start()
         log(.info, "video_streaming")
     }
@@ -714,6 +723,7 @@ public final class StreamCoordinator: @unchecked Sendable {
     private func onSenderEnded(id: Int, reason: VideoSender.EndReason) async {
         guard case .sender(let current, _, let link) = consumer, current == id else { return }
         consumer = .none
+        stopAdaptation()
         link.cancel()  // the client sees EOF and reopens the video connection
         log(.info, "video_sender_ended", "reason=\(reason)")
         if pipeline != nil { startDrain() }
@@ -1302,12 +1312,20 @@ public final class StreamCoordinator: @unchecked Sendable {
         consumer = .drain(Task { while await frames.next() != nil {} }, Task { while await aux.next() != nil {} })
     }
 
+    /// T-328: ends the congestion control of the video connection that is going away (the encoder returns to the
+    /// configured bit rate). Never blocks.
+    private func stopAdaptation() {
+        adaptDriver?.stop()
+        adaptDriver = nil
+    }
+
     /// Every wait is bounded (T-325): the connection is closed first (that unblocks a pending write), then the sender or
     /// the drain tasks are awaited for at most `stopTimeout`. Past it `ev=consumer_stop_timeout` is logged and the
     /// shutdown goes on; the stuck task is cancelled and left behind.
     private func stopConsumer() async {
         let old = consumer
         consumer = .none
+        stopAdaptation()
         switch old {
         case .none: break
         case .drain(let task, let auxTask):
