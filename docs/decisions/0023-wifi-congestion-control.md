@@ -71,3 +71,10 @@ Bütçeler ölçümden **önce** yazılır. Öneri:
 - `MATEBRIDGE_BITRATE_STEP` ve yalnız onun ulaştığı canlı bit hızı ayarlayıcı zinciri kaldırılır (`VideoPipeline.setTargetBitrate` hiç çağrılmıyordu).
 - "Gerekirse canlı bit hızı" dalı yeniden açılırsa kod git geçmişinden (T-177) geri gelir.
 - `MATEBRIDGE_RATE_WINDOW_MS` şimdilik kalır: kare boyutu tavanı ölçümü (T-298 EN9) bekleniyor.
+
+**Ek (2026-10-09): (c) dalı yeniden açıldı.**
+- **Neden:** 2026-10-04'te "sabit profil yeterli" denip T-195/T-196 uygulanmadan kapatılmıştı. O günden beri Wi-Fi günlük yol oldu (kullanıcı oyunları Wi-Fi'de oynuyor). 2026-10-08 akşamından beri tablete giden WLAN atlaması kapasiteye yakın: Oyun 60 Mbps'te kuyruk gecikmesi, takılmalar ve üç kopma; 30 Mbps'te temiz (NOTES 2026-10-08 21:49, 22:37; 2026-10-09 16:50). Kapasite ortamla değişiyor; sabit bir Wi-Fi varsayılanı ya iyi günlerde netlik kaybettirir ya kötü günlerde takılır.
+- **Kullanıcı onayı (2026-10-09):** "önce DSCP (T-326), sonra uyarlamalı bit hızı" yönü onaylandı.
+- **Kartlar:** T-327 (saf denetleyici, T-195 tasarımı + 2026-10-09 Oyun izinden altın tekrar), T-328 (gönderim kapısı + T-177 canlı bit hızı ayarlayıcısının git geçmişinden geri gelmesi, `transport=network`, anahtar varsayılan kapalı). Varsayılan açma, cihaz A/B'sinden sonra ayrı ek ile.
+- **Tavan:** kullanıcının/modun bit hızı tavan kalır (0013 önceliği değişmez); denetleyici yalnız altına iner. PROTOCOL §0x03 metin değişikliği T-328 birleşirken orkestratör tarafından yapılır; bayt ve fixture değişmez.
+- T-326 (açık DSCP) bağımsızdır: ses/kontrolü AP'de videodan ayırır, video kuyruğunu küçültmez. A/B'ler ayrı kollarla ölçülür.
