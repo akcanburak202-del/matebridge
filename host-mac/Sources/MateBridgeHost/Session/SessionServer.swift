@@ -1034,9 +1034,6 @@ public final class SessionServer: @unchecked Sendable {
         return true
     }
 
-    /// A video connection from the video listener (T-091). Bounded: refused while too many have not yet authenticated
-    /// (VIDEO_HELLO). Reads arrive on `queue`; `onClosed` arrives on `queue` once the socket closed for any reason (end
-    /// of stream, error, or our own `cancel()`).
     /// T-326: the explicit TOS was asked for but the kernel refused it; once per connection, never fatal.
     private func logIpTosFailure(_ connection: BsdTcpConnection, video: Bool) {
         guard let errno = connection.ipTosFailure else { return }
@@ -1044,6 +1041,9 @@ public final class SessionServer: @unchecked Sendable {
                       fields: "video=\(video) errno=\(errno)")
     }
 
+    /// A video connection from the video listener (T-091). Bounded: refused while too many have not yet authenticated
+    /// (VIDEO_HELLO). Reads arrive on `queue`; `onClosed` arrives on `queue` once the socket closed for any reason (end
+    /// of stream, error, or our own `cancel()`).
     private func acceptVideo(_ connection: BsdTcpConnection) {
         logIpTosFailure(connection, video: true)
         guard !refusing(connection, video: true) else { return }
