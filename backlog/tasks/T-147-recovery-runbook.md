@@ -62,7 +62,15 @@ Source: external architecture review 2026-10-03 (M06, SE5, F5, D1, X13); verific
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+_(2026-10-09, taslak ajanı; kart orkestratöre aittir, ajan yalnız taslağı yazar. Cihaz provaları kullanıcıya kalır.)_
+
+1. `docs/RECOVERY.md` mevcut taslağını (2026-10-04) güncel HEAD'e göre doğrula ve yeniden yaz: her kod olgusu (görüntü bekletme T-165, tek kopya T-224, giriş öğesi yeniden denemesi T-148, bekçi ve kendi kendine yeniden başlatma T-325, medya devre kesici T-293, girdi bırakma süreleri 1,5 sn / 5 sn, izin metinleri) koddan kontrol edilir; kartın eski satır numaraları kullanılmaz.
+2. Salt okunur makine sorgularıyla uzak yol gerçeklerini kaydet (SSH, Ekran Paylaşımı, Parsec, fiziksel ekran/dummy, FileVault, otomatik giriş) ve `docs/NOTES.md`'ye tarihli bir girdi ekle (kullanıcı adı ve seri numarası yazılmaz).
+3. Sürüm çifti: macOS (`sw_vers`), HarmonyOS (`ro.build.display.id`), host SHA (log), APK SHA (`dumpsys package`, salt okunur) ve bu dalda tek `./scripts/check.sh` koşusu tabloya yazılır.
+4. Her senaryonun prova durumu dürüstçe "henüz prova edilmedi" diye işaretlenir; 2-9. adımlar kullanıcıya bırakılır, kabul kutuları açık kalır. Durum `in-progress`.
+5. `README.md`'ye tek satırlık bağlantı. Kod değişikliği yok.
+
+Riskler: taslaktaki bazı beklentiler (örn. Parsec'in giriş ekranında çalışması, tablet Wi-Fi'sini kesince USB'ye geçiş süresi) yalnız koddan çıkarıldı; prova bunları çürütebilir.
 
 ## Handoff
 
