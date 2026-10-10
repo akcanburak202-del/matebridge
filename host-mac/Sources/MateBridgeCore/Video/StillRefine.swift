@@ -125,7 +125,7 @@ public struct StillRefineReport: Equatable, Sendable {
 public struct StillRefinePolicy: Sendable {
     private enum Phase { case idle, armed, running }
 
-    public let config: StillRefineConfig
+    public private(set) var config: StillRefineConfig
     /// How long a deferred next frame waits for the queues to drain before the train ends as `queue_busy`.
     public static let queueDrainWaitUs: UInt64 = 500_000
     private var phase = Phase.idle
@@ -146,6 +146,10 @@ public struct StillRefinePolicy: Sendable {
     public private(set) var trainID: UInt64 = 0
 
     public init(config: StillRefineConfig) { self.config = config }
+
+    /// Live change of the train byte ceiling (decision 0038: the session's link changed). A running train keeps going
+    /// and is judged against the new ceiling from its next output.
+    public mutating func setMaxBytes(_ bytes: Int) { config.maxBytes = bytes }
 
     public var isRunning: Bool { phase == .running }
 

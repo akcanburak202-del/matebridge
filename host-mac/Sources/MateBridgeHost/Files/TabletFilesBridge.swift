@@ -40,6 +40,8 @@ public final class TabletFilesBridge: @unchecked Sendable {
     private let lock = NSLock()
     private var epoch: UInt64 = 0
     private var infoSlot = EpochCoalescer<FilesInfo>()
+    /// The session's latest `link` (decision 0038): newest wins, one drain per burst.
+    private var linkSlot = EpochCoalescer<Bool>()
     private var retryQueued = false
     private var openQueued = false
     /// `NSWorkspace.didUnmountNotification` observer (T-206): a Finder eject ends the remount intent.
@@ -114,10 +116,12 @@ public final class TabletFilesBridge: @unchecked Sendable {
     public func deliver(_ message: Message) {
         if case .streamPrefs(let prefs) = message {
             // Decision 0038: a remote session (`link = 1`) neither opens nor keeps a Wi-Fi share.
-            let current = lock.withLock { epoch }
+            let (current, needsDrain) = lock.withLock { (epoch, linkSlot.offer(prefs.isRemote, epoch: epoch)) }
+            guard needsDrain else { return }
             queue.async { [self] in
-                guard lock.withLock({ epoch }) == current else { return }  // another session began meanwhile
-                apply(planner.linkChanged(remote: prefs.isRemote))
+                // Nothing when another session began meanwhile (the epoch moved, the slot is void).
+                guard let remote = lock.withLock({ linkSlot.take(epoch: current) }) else { return }
+                apply(planner.linkChanged(remote: remote))
             }
             return
         }

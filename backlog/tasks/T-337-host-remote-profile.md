@@ -74,3 +74,9 @@ Heartbeat değişikliği takılı girdi yaratmamalı: release-all 1,5 sn'de kal�
 - **Dokunulmayanlar:** `MateBridgeApp/main.swift` (gerek olmadi: `handlers.deliver` zaten tum mesajlari bridge'e verir) ve PROTOCOL.md.
 
 ## Open questions
+
+### Codex review fixes (2026-10-11)
+
+- P2-1: `link` updates are coalesced per session (latest value + one pending drain, `EpochCoalescer`) in `CursorService.link` and `TabletFilesBridge.deliver`; a session boundary voids the slot.
+- P2-2: `StreamCoordinator.applyPrefs` now adjusts the refine ceiling live (`VideoPipeline.setRefineMaxBytes` -> `HEVCEncoder` -> `StillRefinePolicy.setMaxBytes`) before the settings-equality guard: no rebuild, no new config_id. The video socket low-water was already applied live from `SessionServer.linkChanged` independent of settings. Tests: `refineCeilingChangesLiveOnARunningPolicy`, `linkUpdatesCoalesceToTheNewestValue`.
+- Note: `StallRestartTests.retryJoinsTheHangingReleaseAndRestartsOnceItCompletes` (unrelated, 50 ms timeouts) failed once under full-suite load, passes alone and in check.sh.

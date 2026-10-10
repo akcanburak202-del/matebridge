@@ -64,6 +64,8 @@ final class CursorService: @unchecked Sendable {
     /// `CURSOR_PREFS` waiting for the cursor queue: one, newest wins, one wake-up (any thread, under `prefsLock`).
     private let prefsLock = NSLock()
     private var prefsBox = EpochCoalescer<(session: UInt32, enabled: Bool)>()
+    /// The session's `link` waiting for the cursor queue (same rules, decision 0038): newest wins, one wake-up.
+    private var linkBox = EpochCoalescer<(session: UInt32, remote: Bool)>()
     /// Changes at every session boundary; a wake-up belongs to the epoch it was scheduled in (guarded by `prefsLock`).
     private var prefsEpoch: UInt64 = 0
 
@@ -127,6 +129,7 @@ final class CursorService: @unchecked Sendable {
         prefsLock.withLock {
             prefsEpoch &+= 1
             prefsBox.clear()
+            linkBox.clear()
         }
     }
 
@@ -154,9 +157,14 @@ final class CursorService: @unchecked Sendable {
 
     /// The session's `STREAM_PREFS.link` (decision 0038): `CURSOR_STATE` keep-alive 2 s while remote, 500 ms otherwise.
     func link(sessionID: UInt32, remote: Bool) {
+        let (epoch, needsWake) = prefsLock.withLock {
+            (prefsEpoch, linkBox.offer((session: sessionID, remote: remote), epoch: prefsEpoch))
+        }
+        guard needsWake else { return }
         queue.async { [self] in
-            guard sessionID == self.sessionID, sessionID != 0 else { return }
-            planner.setKeepAlive(remote: remote)
+            guard let message = prefsLock.withLock({ linkBox.take(epoch: epoch) }) else { return }
+            guard message.session == self.sessionID, message.session != 0 else { return }
+            planner.setKeepAlive(remote: message.remote)
         }
     }
 

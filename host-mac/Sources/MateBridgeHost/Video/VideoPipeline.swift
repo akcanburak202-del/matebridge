@@ -319,6 +319,9 @@ public final class VideoPipeline: @unchecked Sendable {
         return fps
     }
 
+    /// Live change of the still-refinement byte ceiling (decision 0038); no encoder yet/any more: nothing to do.
+    func setRefineMaxBytes(_ bytes: Int) { box.encoder?.setRefineMaxBytes(bytes) }
+
     /// Live bitrate change for Wi-Fi adaptation (T-328, `MATEBRIDGE_WIFI_ADAPT`): no restart, no `STREAM_CONFIG`, no
     /// keyframe (`HEVCEncoder.setTargetBitrate`). nil: there is no encoder (not started or already stopped).
     @discardableResult

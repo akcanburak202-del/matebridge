@@ -281,6 +281,41 @@ private func pings(_ actions: [SessionAction]) -> Int {
         #expect(remoteLow.maxBytes == 16 * 1024)
     }
 
+    /// A link change with unchanged video settings adjusts the running policy live (no rebuild).
+    @Test func refineCeilingChangesLiveOnARunningPolicy() {
+        var p = StillRefinePolicy(config: StillRefineConfig.resolve(env: [:], transport: .network))
+        #expect(p.config.maxBytes == 256 * 1024)
+        p.noteCapture(nowUs: 0)
+        let started = p.tick(nowUs: 300_000, queueReady: true).start
+        #expect(started)
+        p.setMaxBytes(RemoteLinkProfile.bytes(bitrateKbps: 1000))
+        #expect(p.config.maxBytes == 31_250)
+        var reason: StillRefineEnd?
+        var total = 0
+        for n in 1...15 where reason == nil {
+            total += 5_000
+            reason = p.noteOutput(bytes: 5_000, nowUs: UInt64(n), queueReady: true).report?.reason
+        }
+        #expect(reason == .maxBytes)  // under the old 256 KiB ceiling 15 frames of 5 000 B would all have gone out
+        #expect(total <= 31_250 + 5_000)
+    }
+
+    @Test func linkUpdatesCoalesceToTheNewestValue() {
+        // The mailbox both link mailboxes use: a burst schedules one drain and only the newest value survives.
+        var box = EpochCoalescer<Bool>()
+        var drains = 0
+        for i in 0..<1000 where box.offer(i % 2 == 0, epoch: 1) { drains += 1 }
+        #expect(drains == 1)
+        let newest = box.take(epoch: 1)
+        #expect(newest == false)  // 999 is odd
+        let again = box.take(epoch: 1)
+        #expect(again == nil)
+        let next = box.offer(true, epoch: 2)
+        #expect(next)  // the next burst schedules its own drain
+        let old = box.take(epoch: 1)
+        #expect(old == nil)  // a drain of an older epoch gets nothing
+    }
+
     // MARK: Remembered prefs (T-049)
 
     @Test func remotePrefsAreNeverRemembered() {
