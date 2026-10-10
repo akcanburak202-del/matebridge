@@ -134,6 +134,8 @@ public struct Capabilities: OptionSet, Sendable {
     /// The client can draw the cursor itself: it sends `CURSOR_PREFS` and handles `CURSOR_SHAPE` / `CURSOR_STATE`
     /// (decision 0036).
     public static let localCursor = Capabilities(rawValue: 1 << 13)
+    /// The client decodes `AUDIO_CONFIG.format = 2` (AAC-LC 48 kHz stereo) and writes `AUDIO_PREFS.codec` (decision 0038).
+    public static let audioAAC = Capabilities(rawValue: 1 << 14)
 }
 
 public struct PenFlags: OptionSet, Sendable {
@@ -392,7 +394,7 @@ public struct StreamConfig: Equatable, Sendable {
 /// `STREAM_PREFS` (C->H): the user's stream mode request (docs/PROTOCOL.md 0x05). Raw wire values; the host applies
 /// `normalized` (unknown fps -> 60, scale clamped).
 public struct StreamPrefs: Equatable, Sendable {
-    public static let supportedFps: [Int] = [60, 120, 144]
+    public static let supportedFps: [Int] = [15, 30, 60, 120, 144]
     public static let scaleRange: ClosedRange<Int> = 500...1000
 
     public var fps: UInt16
@@ -412,10 +414,14 @@ public struct StreamPrefs: Equatable, Sendable {
     /// 2 full colour / packed 4:4:4, decision 0034; the host counts any other value as 0). Absent on the wire = 0. The group is written only when `dynamicRange`
     /// or `chroma` is non-zero.
     public var chroma: UInt8
+    /// Third optional group (decision 0038): the raw `link` (0 normal, 1 remote / least data; the host counts any
+    /// other value as 0, see `normalized`). Absent on the wire = 0. The group is written only when `link` is non-zero
+    /// (the earlier two groups are then written too).
+    public var link: UInt8
 
     public init(fps: UInt16, scalePermille: UInt16, bitrateKbps: UInt32 = 0,
                 displayWidthPx: UInt16 = 0, displayHeightPx: UInt16 = 0, dynamicRange: UInt8 = 0,
-                chroma: UInt8 = 0) {
+                chroma: UInt8 = 0, link: UInt8 = 0) {
         self.fps = fps
         self.scalePermille = scalePermille
         self.bitrateKbps = bitrateKbps
@@ -423,10 +429,11 @@ public struct StreamPrefs: Equatable, Sendable {
         self.displayHeightPx = displayHeightPx
         self.dynamicRange = dynamicRange
         self.chroma = chroma
+        self.link = link
     }
 
-    /// What the host honours: fps in {60, 120, 144} (anything else is 60), scale clamped to 500...1000, and
-    /// `dynamicRange` in {0, 1} and `chroma` in {0, 1, 2} (anything else is 0, PROTOCOL.md 0x05). `bitrateKbps` and
+    /// What the host honours: fps in {15, 30, 60, 120, 144} (anything else is 60), scale clamped to 500...1000, and
+    /// `dynamicRange` in {0, 1}, `chroma` in {0, 1, 2} and `link` in {0, 1} (anything else is 0, PROTOCOL.md 0x05). `bitrateKbps` and
     /// `displayWidthPx`/`displayHeightPx` are carried through unchanged (the game display size is validated by the
     /// host's policy, not here).
     public var normalized: StreamPrefs {
@@ -435,8 +442,12 @@ public struct StreamPrefs: Equatable, Sendable {
         return StreamPrefs(fps: f, scalePermille: UInt16(s), bitrateKbps: bitrateKbps,
                            displayWidthPx: displayWidthPx, displayHeightPx: displayHeightPx,
                            dynamicRange: DynamicRange(wire: dynamicRange).rawValue,
-                           chroma: ChromaPreference(wire: chroma).rawValue)
+                           chroma: ChromaPreference(wire: chroma).rawValue,
+                           link: link == 1 ? 1 : 0)
     }
+
+    /// The session is a remote (least data) one (decision 0038): `link = 1`.
+    public var isRemote: Bool { link == 1 }
 
     /// The requested dynamic range as the host reads it (unknown values are SDR).
     public var requestedDynamicRange: DynamicRange { DynamicRange(wire: dynamicRange) }
@@ -448,7 +459,8 @@ public struct StreamPrefs: Equatable, Sendable {
         w.u16(fps)
         w.u16(scalePermille)
         w.u32(bitrateKbps)
-        let rangeGroup = dynamicRange != 0 || chroma != 0
+        let linkGroup = link != 0
+        let rangeGroup = dynamicRange != 0 || chroma != 0 || linkGroup
         if displayWidthPx != 0 || displayHeightPx != 0 || rangeGroup {
             w.u16(displayWidthPx)
             w.u16(displayHeightPx)
@@ -457,12 +469,16 @@ public struct StreamPrefs: Equatable, Sendable {
             w.u8(dynamicRange)
             w.u8(chroma)
         }
+        if linkGroup {
+            w.u8(link)
+            w.u8(0)  // reserved
+        }
     }
 
     static func read(_ r: inout ByteReader) throws -> StreamPrefs {
         var prefs = StreamPrefs(fps: try r.u16(), scalePermille: try r.u16(), bitrateKbps: try r.u32())
         // Optional trailing groups (PROTOCOL.md 2, 0x05): absent -> 0; partially present -> payload too short
-        // (9-11 and 13 bytes); anything after the second group is ignored (long payload rule).
+        // (9-11, 13 and 15 bytes); anything after the third group is ignored (long payload rule).
         if r.remaining > 0 {
             prefs.displayWidthPx = try r.u16()
             prefs.displayHeightPx = try r.u16()
@@ -470,6 +486,10 @@ public struct StreamPrefs: Equatable, Sendable {
         if r.remaining > 0 {
             prefs.dynamicRange = try r.u8()
             prefs.chroma = try r.u8()
+        }
+        if r.remaining > 0 {
+            prefs.link = try r.u8()
+            try r.skip(1)  // reserved
         }
         return prefs
     }

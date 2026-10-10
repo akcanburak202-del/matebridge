@@ -14,8 +14,9 @@ final class BitratePrefsTests: XCTestCase {
 
     func testZeroMeansModeDefaultAndNonZeroIsClamped() {
         XCTAssertNil(VideoSettings.clampedUserBitrateKbps(0))
-        XCTAssertEqual(VideoSettings.clampedUserBitrateKbps(1), 5_000)
-        XCTAssertEqual(VideoSettings.clampedUserBitrateKbps(4_999), 5_000)
+        XCTAssertEqual(VideoSettings.clampedUserBitrateKbps(1), 500)  // the floor is 500 since decision 0038
+        XCTAssertEqual(VideoSettings.clampedUserBitrateKbps(499), 500)
+        XCTAssertEqual(VideoSettings.clampedUserBitrateKbps(500), 500)
         XCTAssertEqual(VideoSettings.clampedUserBitrateKbps(5_000), 5_000)
         XCTAssertEqual(VideoSettings.clampedUserBitrateKbps(60_000), 60_000)
         XCTAssertEqual(VideoSettings.clampedUserBitrateKbps(150_000), 150_000)
@@ -39,8 +40,8 @@ final class BitratePrefsTests: XCTestCase {
         XCTAssertEqual(s.bitrateSource, "user")
         XCTAssertEqual(s.streamConfig(configID: 2).bitrateKbps, 100_000, "STREAM_CONFIG carries the applied value")
         let clamped = base.applying(prefs(1))
-        XCTAssertEqual(clamped.bitrateKbps, 5_000)
-        XCTAssertEqual(clamped.streamConfig(configID: 2).bitrateKbps, 5_000)
+        XCTAssertEqual(clamped.bitrateKbps, 500)
+        XCTAssertEqual(clamped.streamConfig(configID: 2).bitrateKbps, 500)
         let high = base.applying(prefs(999_999))
         XCTAssertEqual(high.bitrateKbps, 150_000)
         // The user's value is not limited to the 20...80 Mbps mode-default band.

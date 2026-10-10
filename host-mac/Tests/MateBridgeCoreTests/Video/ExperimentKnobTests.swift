@@ -12,8 +12,9 @@ final class ExperimentKnobTests: XCTestCase {
     func testParseBitrate() {
         XCTAssertEqual(VideoSettings.parseBitrateKbps("80000"), 80_000)
         XCTAssertEqual(VideoSettings.parseBitrateKbps("5000"), 5_000)
+        XCTAssertEqual(VideoSettings.parseBitrateKbps("500"), 500)
         XCTAssertEqual(VideoSettings.parseBitrateKbps("150000"), 150_000)
-        for bad in [nil, "", "4999", "150001", "x"] { XCTAssertNil(VideoSettings.parseBitrateKbps(bad)) }
+        for bad in [nil, "", "499", "150001", "x"] { XCTAssertNil(VideoSettings.parseBitrateKbps(bad)) }
     }
 
     func testNoVariablesKeepsDefaults() {

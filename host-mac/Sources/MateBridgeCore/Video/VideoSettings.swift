@@ -88,9 +88,9 @@ public struct VideoSettings: Equatable, Sendable {
         return v
     }
 
-    /// `MATEBRIDGE_BITRATE_KBPS`: 5 000...150 000; anything else (or nil) is nil (keep the default).
+    /// `MATEBRIDGE_BITRATE_KBPS`: 500...150 000 (same range as the tablet's request, decision 0038); anything else (or nil) is nil (keep the default).
     public static func parseBitrateKbps(_ text: String?) -> Int? {
-        guard let text, let v = Int(text.trimmingCharacters(in: .whitespaces)), (5_000...150_000).contains(v) else { return nil }
+        guard let text, let v = Int(text.trimmingCharacters(in: .whitespaces)), VideoSettings.userBitrateRangeKbps.contains(v) else { return nil }
         return v
     }
 

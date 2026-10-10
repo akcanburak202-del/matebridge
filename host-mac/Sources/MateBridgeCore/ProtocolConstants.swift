@@ -15,8 +15,8 @@ public enum ProtocolConstants {
     /// AES-GCM tag, and the `type` byte inside every record (PROTOCOL.md 9: max length = payload limit + 17).
     public static let recordTagSize = 16
     public static let recordOverhead = 17
-    /// Largest AUDIO_FRAME `frame_count` (docs/PROTOCOL.md 0x32).
-    public static let audioMaxFrames = 960
+    /// Largest AUDIO_FRAME `frame_count` (docs/PROTOCOL.md 0x32; 960 before decision 0038, AAC_LC packets are 1024).
+    public static let audioMaxFrames = 1024
     /// Largest `FILES_DATA.data`: the control/file payload limit minus the `size` field (docs/PROTOCOL.md 0x52).
     public static let filesDataMax = maxControlPayload - 2
 }

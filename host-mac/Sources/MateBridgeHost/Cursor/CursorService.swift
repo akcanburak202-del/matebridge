@@ -152,6 +152,14 @@ final class CursorService: @unchecked Sendable {
         }
     }
 
+    /// The session's `STREAM_PREFS.link` (decision 0038): `CURSOR_STATE` keep-alive 2 s while remote, 500 ms otherwise.
+    func link(sessionID: UInt32, remote: Bool) {
+        queue.async { [self] in
+            guard sessionID == self.sessionID, sessionID != 0 else { return }
+            planner.setKeepAlive(remote: remote)
+        }
+    }
+
     /// An input message was just injected: sample the cursor now (and once more a moment later). Cheap when the flow is
     /// off (one atomic read); never blocks the caller.
     func noteInjected() {

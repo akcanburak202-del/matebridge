@@ -77,6 +77,8 @@ public struct CursorStreamPlanner: Sendable {
     public private(set) var wanted = false
     private var lastSent: CursorSnapshot?
     private var lastSentAtUs: UInt64 = 0
+    /// The session's `STREAM_PREFS.link` is 1 (decision 0038); forgotten by `reset()` (a new session starts normal).
+    private var remoteLink = false
 
     public init(configuration: Configuration = Configuration()) { self.configuration = configuration }
 
@@ -89,6 +91,13 @@ public struct CursorStreamPlanner: Sendable {
         case .off, .enabling, .on: return nil
         }
     }
+
+    /// Decision 0038: the keep-alive interval of the session's link (`RemoteLinkProfile.cursorKeepAliveUs` while
+    /// `STREAM_PREFS.link = 1`, else the normal 500 ms). Takes effect from the next sample; nothing else changes.
+    public mutating func setKeepAlive(remote: Bool) { remoteLink = remote }
+
+    /// The keep-alive interval in force: the configured one, or the remote profile's while `link = 1`.
+    public var keepAliveUs: UInt64 { remoteLink ? RemoteLinkProfile.cursorKeepAliveUs : configuration.keepAliveUs }
 
     /// Samples are wanted (the tracker should poll) in every phase but `off`.
     public var isTracking: Bool { phase != .off }
@@ -115,7 +124,7 @@ public struct CursorStreamPlanner: Sendable {
                 guard elapsed >= configuration.minIntervalUs else {
                     return Observation(send: nil, commands: [], retryAtUs: lastSentAtUs + configuration.minIntervalUs)
                 }
-            } else if elapsed < configuration.keepAliveUs {
+            } else if elapsed < keepAliveUs {
                 return Observation(send: nil, commands: [], retryAtUs: nil)
             }
             markSent(snapshot, nowUs: nowUs)
@@ -164,6 +173,7 @@ public struct CursorStreamPlanner: Sendable {
         wanted = false
         lastSent = nil
         lastSentAtUs = 0
+        remoteLink = false
     }
 
     private mutating func advance() -> [Command] {

@@ -112,6 +112,15 @@ public final class TabletFilesBridge: @unchecked Sendable {
 
     /// Every delivered message; only `FILES_INFO` matters here. Coalesced per session epoch (latest wins).
     public func deliver(_ message: Message) {
+        if case .streamPrefs(let prefs) = message {
+            // Decision 0038: a remote session (`link = 1`) neither opens nor keeps a Wi-Fi share.
+            let current = lock.withLock { epoch }
+            queue.async { [self] in
+                guard lock.withLock({ epoch }) == current else { return }  // another session began meanwhile
+                apply(planner.linkChanged(remote: prefs.isRemote))
+            }
+            return
+        }
         guard case .filesInfo(let info) = message else { return }
         let (current, needsDrain) = lock.withLock { (epoch, infoSlot.offer(info, epoch: epoch)) }
         guard needsDrain else { return }

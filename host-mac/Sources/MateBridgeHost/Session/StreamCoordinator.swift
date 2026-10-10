@@ -585,7 +585,7 @@ public final class StreamCoordinator: @unchecked Sendable {
             + "display=\(derived.displayModeText) requested_display=\(prefs.displayWidthPx)x\(prefs.displayHeightPx) "
             + "game_display=\(game.logName) dynamic_range=\(derived.dynamicRange.logName) "
             + "requested_dynamic_range=\(prefs.dynamicRange) chroma=\(derived.chromaPreference.logName) "
-            + "requested_chroma=\(prefs.chroma)")
+            + "requested_chroma=\(prefs.chroma) link=\(p.link)")
         if let now = prefsGate.offer(p, now: HostClock.nowUs()) { await applyPrefs(now) }
     }
 
@@ -633,7 +633,9 @@ public final class StreamCoordinator: @unchecked Sendable {
             if breakerBefore.state != .closed { log(.info, "pipeline_breaker_reset", "reason=prefs_change") }
             logBreaker(from: breakerBefore)
         }
-        prefsStore.save(prefs, device: live.deviceID)  // the next connection of this tablet starts in this mode
+        // The next connection of this tablet starts in this mode. A remote session (`link = 1`, decision 0038) is
+        // never remembered: the next ordinary connection must not open with the remote settings.
+        if RemoteLinkProfile.persistsPrefs(prefs) { prefsStore.save(prefs, device: live.deviceID) }
         live.prefs = prefs
         session = live
         guard wanted != live.settings else { return }
@@ -1004,8 +1006,10 @@ public final class StreamCoordinator: @unchecked Sendable {
         pipelineID += 1
         let id = pipelineID
         // T-253: the byte ceiling of a refinement train depends on the link (USB or network).
+        // Decision 0038: a remote session (`link = 1`) budgets 250 ms of its target bit rate (at least 16 KB).
         let refine = StillRefineConfig.resolve(env: ProcessInfo.processInfo.environment,
-                                               transport: session?.transport ?? .usb)
+                                               transport: session?.transport ?? .usb,
+                                               remoteKbps: session?.prefs?.isRemote == true ? settings.bitrateKbps : nil)
         let p = VideoPipeline(settings: settings, reusing: display, refine: refine,
                               onPackedFallback: { [weak self] reason in self?.post(.packedFallback(id: id, reason: reason)) },
                               onFailure: { [weak self] error in

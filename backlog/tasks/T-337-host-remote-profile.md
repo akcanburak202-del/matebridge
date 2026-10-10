@@ -1,7 +1,7 @@
 ---
 id: T-337
 title: Host — 0038 protokol kodu (STREAM_PREFS link/fps/taban, AUDIO_* ayrıştırma) ve uzak profil davranışı
-status: todo
+status: review
 phase: 7
 owner: mac-host-dev
 depends_on: [T-336]
@@ -56,5 +56,21 @@ Heartbeat değişikliği takılı girdi yaratmamalı: release-all 1,5 sn'de kal�
 6. Log: `ev=stream_prefs ... link=1`.
 
 ## Handoff
+
+- **Commit:** `git log -1 task/T-337-host-remote-profile`; dal `task/T-337-host-remote-profile`, taban 729f60c3.
+- **check.sh:** Swift kismi tam gecti (swift test: 684 XCTest + 1141 Swift Testing; fixture, crypto, measurement kit OK). Gradle kismi **beklenen sekilde 1 test dusuyor** (Kotlin fixture-kapsama testi, yeni 6 fixture icin; T-339 gelene kadar).
+- **Dosyalar:** Core: `Messages.swift` (StreamPrefs.link, fps 15/30, `Capabilities.audioAAC`), `Protocol/AudioMessages.swift` (`AudioPrefs.codecWire/codec`, `AudioFormat.aacLC`, `AudioCodecPreference`), `ProtocolConstants.swift` (frame_count 1024), `Video/StreamPrefsPolicy.swift` + `VideoSettings.swift` (500 kbps taban, env knob), `Video/StillRefine.swift` (uzak butce), `Session/RemoteLinkProfile.swift` (yeni; saf sabitler/hesap), `Session/SessionMachine.swift` (oturum basina `remote`; 15 sn kapanis, 2 sn host PING), `Session/BsdTcpSocket.swift` (`setNotSentLowat`), `Cursor/CursorStreamPlanner.swift` (2 sn keep-alive), `Files/TabletFilesPlanner.swift` (`linkChanged`). Host: `Session/SessionServer.swift` (link yonlendirme, video soketi lowat), `Session/StreamCoordinator.swift` (T-049 deposuna yazmama, refine butcesi, `link=` logu), `Cursor/CursorService.swift`, `Files/TabletFilesBridge.swift`. Testler: yeni `Tests/MateBridgeCoreTests/Session/RemoteLinkTests.swift`; fixture/codec/ses testleri ve eski 5000/960/payload-kuyrugu testleri guncellendi. `docs/KNOBS.md` satir 24 ve 36.
+- **Varsayimlar / kararlar:**
+  - `defaultBitrateKbps` formulu degismedi: uzak profil her zaman bit hizi gonderir (`bitrate_kbps != 0`), formul yalniz `0` icin kullanilir; test 15 fps + 0 -> 20 Mbps tabanini sabitler.
+  - 15/30 fps icin `FramePacer`/`FrameGate` degismedi; testle 2xfps ve 60 Hz kaynaktan ortalama hiz fps'e esit dogrulandi. SCK `minimumFrameInterval` 1/(2 fps) kaldi.
+  - Eski testlerde 14 bayttan sonraki "kuyruk" baytlari artik link grubu oldugu icin (16 bayt) o testler kuyrugu 16 bayttan sonraya tasidi (protokol degisikliginin dogal sonucu).
+  - `link` yalniz aktif baglantida ve son STREAM_PREFS'ten alinir; yeni oturum `remote=false` ile baslar. Ilk host PING hala hemen gider, sonraki aralik o ana kadarki `remote`'a gore.
+  - Refine butcesi ve video soketi lowat'inda gelistirici env'i (`MATEBRIDGE_REFINE_KB`, `MATEBRIDGE_NOTSENT_LOWAT_KB`) uzak profile kazanir.
+  - Refine butcesi `createPipeline`'da okunur: yalniz `link` degisip ayar degismeyen bir STREAM_PREFS boru hattini yeniden kurmaz (uzak profilde fps/ekran farkli oldugundan pratikte hep kurulur). Video lowat canli ayarlanir (yeni video baglantisi ve STREAM_CONFIG bit hizi degisince).
+  - Dosyalar: uzak oturumda menu gizli; acik Wi-Fi paylasim `FILES_NET(CLOSE)` + unmount + proxy durdurma ile kapanir; normal linke donunce tekrar sunulur.
+  - AAC kodlama yok (T-340); `AudioPrefs.codec` yalniz ayristirilir/kodlanir, host PCM gondermeye devam eder.
+  - `StreamPrefsStorageCodec` link yazmaz/okumaz.
+- **Gercek donanimda dogrulanacak (test edilmedi):** uzak oturumda `TCP_NOTSENT_LOWAT`'in canli degisimi (setsockopt aktif soketlerde isler mi), 15 fps ScreenCapture teslimati ve seyreltme, 1400x920 sanal ekran + 1 Mbps, 15 sn kapanis + 1,5 sn release-all birlikte, Wi-Fi paylasimin uzak linke gecince kapanmasi, `ev=stream_prefs ... link=1` logu. `SessionServer`/`StreamCoordinator`/`TabletFilesBridge` yonlendirmesinin birim testi yok (saf mantik Core'da test edildi). Cihaz testi orkestratorde (T-339 ile).
+- **Dokunulmayanlar:** `MateBridgeApp/main.swift` (gerek olmadi: `handlers.deliver` zaten tum mesajlari bridge'e verir) ve PROTOCOL.md.
 
 ## Open questions
