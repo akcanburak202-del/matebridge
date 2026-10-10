@@ -181,6 +181,11 @@ class SessionController(
     private val helloCapabilities: () -> Long = { 0L },
     /** T-276 (decision 0036): CURSOR_PREFS wish at start; null = this client never draws the cursor, CURSOR_PREFS never sent. */
     initialCursor: Boolean? = null,
+    /**
+     * Decision 0038: whether input is active at the given `nanoTime/1000` (held, or an event less than 2 s ago); the
+     * engine thread reads it per tick of a remote session to pick the 500 ms or 2 s PING rate. Must be cheap and thread-safe.
+     */
+    inputActive: (Long) -> Boolean = { true },
 ) {
     /** The HELLO template of a new connection: [hello] plus the capability bits of the moment ([helloCapabilities]). */
     private fun currentHello(): Hello = hello.copy(capabilities = hello.capabilities or helloCapabilities())
@@ -192,6 +197,7 @@ class SessionController(
         hello, initialPrefs, knobs.pingIntervalUs, initialAudio, initialFiles, trust,
         recordAuthenticated = { gen -> recordAuthenticated(gen) },
         initialCursor = initialCursor,
+        inputActive = inputActive,
     ) { level, ev, fields -> emit(LogLine(level, ev, fields)) }
 
     /** T-156: whether the reader of control connection [gen] authenticated a host record (engine thread). */
@@ -274,10 +280,26 @@ class SessionController(
      * ([SessionUi.PairingNeedsUser]) and opens no connection while a pairing is unresolved ([SessionUi.StoredTrust]).
      * [expectHost] (T-227): only that host may answer ([SessionMachine.Event.Start]).
      */
-    fun start(endpoint: Endpoint, wake: WakeTag? = null, userInitiated: Boolean = false, expectHost: HostTag? = null) {
+    fun start(
+        endpoint: Endpoint,
+        wake: WakeTag? = null,
+        userInitiated: Boolean = false,
+        expectHost: HostTag? = null,
+        remote: RemoteProfile? = null,
+    ) {
         if (terminated.get()) return
         ensureEngine()
-        mail.intent.post(SessionMachine.Event.Start(endpoint, wake, userInitiated, expectHost))
+        mail.intent.post(SessionMachine.Event.Start(endpoint, wake, userInitiated, expectHost, remote))
+    }
+
+    /**
+     * Non-blocking. Decision 0038: the remote profile changed (bit rate, audio wish). Takes effect only in a session
+     * started with a profile; sent as STREAM_PREFS / AUDIO_PREFS when it is accepted. Any thread.
+     */
+    fun setRemoteProfile(profile: RemoteProfile) {
+        if (terminated.get()) return
+        ensureEngine()
+        mail.remote.post(SessionMachine.Event.SetRemote(profile))
     }
 
     /**
@@ -1104,7 +1126,9 @@ class SessionController(
         fun eventLogLine(e: SessionMachine.Event, startExtra: String): LogLine? = when (e) {
             is SessionMachine.Event.Start -> LogLine(
                 'I', "session_start",
-                "host=${e.endpoint.host} port=${e.endpoint.port} transport=${ConnectMode.transportOf(e.endpoint).logName} " +
+                (if (e.remote != null) "host=remote " else "host=${e.endpoint.host} port=${e.endpoint.port} ") + // 0038: the remote address stays out of logs
+                    "transport=${ConnectMode.transportOf(e.endpoint).logName} " +
+                    (if (e.remote != null) "remote=1 bitrate_kbps=${e.remote.bitrateKbps} audio=${if (e.remote.audio) 1 else 0} " else "") +
                     "user=${if (e.userInitiated) 1 else 0} $startExtra" + (e.wake?.let { " wake_attempt=${it.n}" } ?: "") +
                     (if (e.expectHost != null) " expect_host=1" else ""), // T-227
             )
@@ -1138,6 +1162,7 @@ class SessionController(
             is SessionMachine.Event.SetMode -> e.prefs?.let {
                 LogLine('I', "stream_prefs_set", "fps=${it.fps} scale=${it.scalePermille} bitrate_kbps=${it.bitrateKbps}")
             }
+            is SessionMachine.Event.SetRemote -> LogLine('I', "remote_profile_set", "bitrate_kbps=${e.profile.bitrateKbps} audio=${if (e.profile.audio) 1 else 0}")
             is SessionMachine.Event.SetCursor -> null // T-276: `cursor_prefs_sent` is logged when it actually goes out
             is SessionMachine.Event.ForgetFilesNet -> LogLine('I', "files_net_forget")
             is SessionMachine.Event.SetFiles -> LogLine('I', "files_info_set", "state=${e.info.state} port=${e.info.port}") // never the token

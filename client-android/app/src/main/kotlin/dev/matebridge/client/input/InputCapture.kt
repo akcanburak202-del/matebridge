@@ -135,6 +135,26 @@ class InputCapture(
     private var lastStatsMs = NEVER_MS
     private val devices = HashSet<Int>()
 
+    /**
+     * Decision 0038 section 6 (remote PING rate): whether any input the host could hold is held right now (a key, a pointer
+     * button, a pen in contact or range, an open touch, scroll or pinch), published from the UI thread for the engine
+     * thread; refreshed after every input event and every tick. Never gates or changes what is sent.
+     */
+    @Volatile var holdsInput = false
+        private set
+
+    /** `System.nanoTime() / 1000` of the latest input event offered to this capture (0 = none); written on the UI thread. */
+    @Volatile var lastInputUs = 0L
+        private set
+
+    private fun noteInput() {
+        lastInputUs = System.nanoTime() / 1000
+    }
+
+    private fun publishHeld() {
+        holdsInput = keys.heldCount > 0 || pen.inRange || !touch.isIdle || rel.holdsState || outbox.hasHeld
+    }
+
     val isActive get() = active
     val isSuspended get() = suspended
     val penInRange get() = pen.inRange
@@ -201,6 +221,11 @@ class InputCapture(
 
     fun onPen(f: PenFrame, nowMs: Long) {
         if (!accepting) return
+        noteInput()
+        try { handlePen(f, nowMs) } finally { publishHeld() }
+    }
+
+    private fun handlePen(f: PenFrame, nowMs: Long) {
         idleGate?.let { if (!admitPen(it, f, nowMs)) return }
         devices += f.deviceId
         penInk?.onPenFrame(f, f.eraser || eraserModeMirror)
@@ -211,6 +236,11 @@ class InputCapture(
 
     fun onTouch(f: TouchFrame, nowMs: Long) {
         if (!accepting) return
+        noteInput()
+        try { handleTouch(f, nowMs) } finally { publishHeld() }
+    }
+
+    private fun handleTouch(f: TouchFrame, nowMs: Long) {
         idleGate?.let { if (!admitTouch(it, f, nowMs)) return }
         devices += f.deviceId
         dispatch(gate(Src.TOUCH, touch.onFrame(f, nowMs)))
@@ -228,6 +258,11 @@ class InputCapture(
     /** A touchpad event under pointer capture (T-034). The touchscreen and the pen never come through here. */
     fun onPad(f: PadFrame, nowMs: Long) {
         if (!accepting) return
+        noteInput()
+        try { handlePad(f, nowMs) } finally { publishHeld() }
+    }
+
+    private fun handlePad(f: PadFrame, nowMs: Long) {
         idleGate?.let { if (!IdleGestures.pad(it, f, nowMs)) return }
         dispatch(gate(Src.PAD, rel.onPad(f, nowMs)))
     }
@@ -235,6 +270,11 @@ class InputCapture(
     /** A mouse event under pointer capture (T-034). */
     fun onMouse(f: MouseFrame, nowMs: Long) {
         if (!accepting) return
+        noteInput()
+        try { handleMouse(f, nowMs) } finally { publishHeld() }
+    }
+
+    private fun handleMouse(f: MouseFrame, nowMs: Long) {
         idleGate?.let { if (!IdleGestures.mouse(it, f, nowMs)) return }
         dispatch(rel.onMouse(f, nowMs))
     }
@@ -259,6 +299,7 @@ class InputCapture(
      */
     fun onGestureKeyDown(eventTimeMs: Long) {
         if (!accepting) return
+        noteInput()
         idleGate?.let { if (!IdleGestures.gestureKey(it, eventTimeMs)) return }
         if (doubleTap.onDown(eventTimeMs)) {
             onEvent("pen_gesture", "gesture=double_tap")
@@ -278,10 +319,15 @@ class InputCapture(
             if (f3 && f.down && f.repeatCount == 0) return KeyDecision(consumed = true, local = LocalAction.STATS)
             return KeyDecision(consumed = f3)
         }
+        noteInput()
         // T-234: a swallowed key (and a local chord typed while dimmed) is consumed and does nothing.
         idleGate?.let { if (!IdleGestures.key(it, f, f.timeUs / 1000)) return KeyDecision(consumed = true) }
         val d = keys.onKey(f)
-        if (d.out.isNotEmpty()) dispatch(d.out)
+        try {
+            if (d.out.isNotEmpty()) dispatch(d.out)
+        } finally {
+            publishHeld()
+        }
         return d
     }
 
@@ -298,6 +344,7 @@ class InputCapture(
 
     private fun finishTick(nowMs: Long) {
         syncIdleHeld()
+        publishHeld()
         if (lastStatsMs == NEVER_MS) lastStatsMs = nowMs
         if (nowMs - lastStatsMs >= STATS_INTERVAL_MS) {
             val age = sendAgeFields() // always taken, so a window never carries over
@@ -390,6 +437,7 @@ class InputCapture(
         idlePenPointer = -1
         idleTouchDevice = NO_DEVICE
         idleTouchIds.clear()
+        publishHeld()
     }
 
     private enum class Src { NONE, TOUCH, PAD }

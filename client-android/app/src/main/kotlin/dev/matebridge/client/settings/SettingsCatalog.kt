@@ -5,6 +5,7 @@ import dev.matebridge.client.audio.AudioOutPref
 import dev.matebridge.client.files.FilesRoot
 import dev.matebridge.client.protocol.StreamConfig
 import dev.matebridge.client.idle.IdleTimeout
+import dev.matebridge.client.session.RemoteProfile
 import dev.matebridge.client.session.SpeedRange
 import dev.matebridge.client.session.TransportMode
 import dev.matebridge.client.stream.Bitrate
@@ -24,6 +25,17 @@ import java.util.Locale
  * logic exists twice. Main thread only.
  */
 interface SettingsHost {
+    // Uzak oturum (decision 0038, T-339)
+    /**
+     * A remote ("Uzaktan bağlan") session is running: the mode, frame rate, resolution, HDR, colour and cursor rows give way to
+     * "Görüntü modu: Uzak (Tasarruf)" and the remote bit rate; "Ses" is the remote audio wish. The defaults keep hosts
+     * without a remote session (tests) unchanged.
+     */
+    val remoteSession: Boolean get() = false
+    /** The remote bit rate, one of [RemoteProfile.BITRATE_OPTIONS_KBPS]; apart from the normal [bitrateKbps]. */
+    val remoteBitrateKbps: Long get() = RemoteProfile.DEFAULT_BITRATE_KBPS
+    fun selectRemoteBitrate(kbps: Long) {}
+
     // Bağlantı
     val transportMode: TransportMode
     fun selectTransport(m: TransportMode)
@@ -239,6 +251,9 @@ object SettingsCatalog {
         "Kısayollar: Ctrl+Shift+6: ayarlar paneli · Ctrl+Shift+Esc: Android'e dön · Ctrl+Shift+9/0: imleç hızı · " +
             "Ctrl+Shift+8: istatistik · Ctrl+Shift+7: görüntü modu (Günlük/Çizim/Oyun)"
 
+    /** Decision 0038: what the remote profile asks of the Mac (display rows are replaced by this line). */
+    const val REMOTE_PROFILE_TEXT = "15 fps · 1400×920 · SDR · imleç tablette · ses ve bit hızı uzak ayarlarla"
+
     /** T-215: only Oyun uses it (the other modes run the native 2800×1840 HiDPI display). */
     const val GAME_RESOLUTION_TITLE = "Oyun çözünürlüğü"
 
@@ -298,11 +313,23 @@ object SettingsCatalog {
         out += SettingsSection(
             "Görüntü",
             buildList {
+                // Decision 0038: a remote session has its own profile; the user's mode and settings stay as they are.
+                add(SettingItem.Info("remote_mode", { !h.remoteSession }) { "Görüntü modu: ${RemoteProfile.MODE_LABEL}" })
+                add(SettingItem.Info("remote_profile", { !h.remoteSession }) { REMOTE_PROFILE_TEXT })
+                add(
+                    SettingItem.Choice(
+                        "remote_bitrate", "Bit hızı (uzak)",
+                        RemoteProfile.BITRATE_OPTIONS_KBPS.map { SettingItem.Option(it.toString(), RemoteProfile.bitrateLabel(it)) },
+                        { h.remoteBitrateKbps.toString() },
+                        hidden = { !h.remoteSession },
+                    ) { id -> id.toLongOrNull()?.let { h.selectRemoteBitrate(RemoteProfile.sanitizeBitrate(it)) } },
+                )
                 add(
                     SettingItem.Choice(
                         "stream_mode", "Görüntü modu",
                         StreamMode.entries.map { SettingItem.Option(it.id, it.label) },
                         { h.streamMode.id },
+                        hidden = { h.remoteSession },
                     ) { id -> h.selectStreamMode(StreamMode.parse(id)) },
                 )
                 add(
@@ -311,7 +338,7 @@ object SettingsCatalog {
                         StreamMode.FPS_OPTIONS.map { SettingItem.Option(it.toString(), "$it fps") },
                         { h.frameRate.toString() },
                         { frameRateMarker(h.streamMode, h.frameRate) },
-                        { !h.streamMode.hasFpsSetting }, // decision 0030 §2: not shown in Çizim (always 120)
+                        { !h.streamMode.hasFpsSetting || h.remoteSession }, // decision 0030 §2: not shown in Çizim (always 120)
                     ) { id -> id.toIntOrNull()?.let { h.selectFrameRate(it) } },
                 )
                 add(
@@ -320,6 +347,7 @@ object SettingsCatalog {
                         // T-250: "2800×1840 (deneysel)" at every Oyun frame rate
                         GameResolution.entries.map { r -> SettingItem.Option(r.id) { r.panelLabel } },
                         { h.gameResolution.id },
+                        hidden = { h.remoteSession },
                     ) { id -> h.selectGameResolution(GameResolution.parse(id)) },
                 )
                 add(
@@ -330,6 +358,7 @@ object SettingsCatalog {
                         },
                         { h.bitrateKbps.toString() },
                         layered(GameModeSettings.Override.BITRATE),
+                        hidden = { h.remoteSession },
                     ) { id -> id.toLongOrNull()?.let { h.selectBitrate(Bitrate.sanitize(it)) } },
                 )
                 if (inStream) add(SettingItem.Info("bitrate_applied") { Bitrate.appliedLabel(h.appliedBitrateKbps) })
@@ -340,12 +369,12 @@ object SettingsCatalog {
                         listOf(SettingItem.Option(HdrPolicy.OPTION_OFF, "Kapalı"), SettingItem.Option(HdrPolicy.OPTION_ON, "Açık")),
                         { HdrPolicy.selected(h.hdrCapability, h.hdrEnabled) },
                         { HdrPolicy.marker(h.hdrCapability) },
-                        { HdrPolicy.rowHidden(h.streamMode) },
+                        { HdrPolicy.rowHidden(h.streamMode) || h.remoteSession },
                         { HdrPolicy.rowEnabled(h.hdrCapability) },
                     ) { id -> if (HdrPolicy.rowEnabled(h.hdrCapability)) h.selectHdr(id == HdrPolicy.OPTION_ON) },
                 )
                 if (inStream) {
-                    add(SettingItem.Info("hdr_applied", { HdrPolicy.rowHidden(h.streamMode) }) { HdrPolicy.appliedLabel(h.appliedConfig) })
+                    add(SettingItem.Info("hdr_applied", { HdrPolicy.rowHidden(h.streamMode) || h.remoteSession }) { HdrPolicy.appliedLabel(h.appliedConfig) })
                 }
                 // Decisions 0033/0034 (T-241, T-260): every mode; grey "(HDR açıkken etkisiz)" while HDR10 is applied.
                 add(
@@ -356,6 +385,7 @@ object SettingsCatalog {
                         },
                         { ColourPolicy.selected(h.colourChoice, h.fullChromaCapable) },
                         { ColourPolicy.marker(h.appliedConfig) },
+                        hidden = { h.remoteSession },
                         enabled = { ColourPolicy.rowEnabled(h.appliedConfig) },
                     ) { id ->
                         val c = ColourChoice.parse(id)
@@ -363,10 +393,10 @@ object SettingsCatalog {
                     },
                 )
                 add(
-                    SettingItem.Info("colour_note", { colourNote(h).isEmpty() }) { colourNote(h) },
+                    SettingItem.Info("colour_note", { colourNote(h).isEmpty() || h.remoteSession }) { colourNote(h) },
                 )
                 if (inStream) {
-                    add(SettingItem.Info("colour_applied", { colourApplied(h).isEmpty() }) { colourApplied(h) })
+                    add(SettingItem.Info("colour_applied", { colourApplied(h).isEmpty() || h.remoteSession }) { colourApplied(h) })
                 }
                 add(
                     SettingItem.Choice(
@@ -382,6 +412,7 @@ object SettingsCatalog {
                         listOf(SettingItem.Option(CURSOR_TABLET, "Tablette"), SettingItem.Option(CURSOR_VIDEO, "Görüntüde")),
                         { if (h.cursorLocal) CURSOR_TABLET else CURSOR_VIDEO },
                         { cursorMarker(h.streamMode) },
+                        hidden = { h.remoteSession }, // decision 0038: the remote profile always draws the cursor on the tablet
                     ) { id -> h.setCursorLocal(id != CURSOR_VIDEO) },
                 )
             },
@@ -390,7 +421,10 @@ object SettingsCatalog {
             out += SettingsSection(
                 "Ses",
                 listOf(
-                    SettingItem.Toggle("audio", "Ses", { h.audioEnabled }, { h.setAudioEnabled(it) }),
+                    SettingItem.Toggle(
+                        "audio", "Ses", { h.audioEnabled }, { h.setAudioEnabled(it) },
+                        marker = { if (h.remoteSession) " (uzak oturum)" else "" }, // decision 0038: its own wish, default off
+                    ),
                     SettingItem.Choice(
                         "audio_out", "Ses çıkışı",
                         listOf(
@@ -437,6 +471,7 @@ object SettingsCatalog {
                 ) { id -> h.selectFilesRoot(FilesRoot.parse(id)) },
                 SettingItem.Toggle("files_ro", "Salt okunur", { h.filesReadOnly }, { h.setFilesReadOnly(it) }),
                 SettingItem.Info("files_status") { h.filesStatus },
+                SettingItem.Info("files_remote", { !h.remoteSession }) { "Uzak oturumda tablet dosyaları kapalıdır." }, // decision 0038
             ),
         )
         out += SettingsSection(
