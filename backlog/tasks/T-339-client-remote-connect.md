@@ -39,6 +39,13 @@ PING seyreltme takılı girdi yaratmamalı: herhangi bir tuş/düğme/kalem/aç�
 
 ## Plan
 
+1. **Protokol (Kotlin):** `StreamPrefs.link` (16 bayt yazma, 15 bayt SHORT_PAYLOAD), `AudioPrefs.codec`, `AudioConfig.FORMAT_AAC_LC`, `AudioFrame.MAX_FRAMES = 1024`, `Capabilities.AUDIO_AAC` (sabit; HELLO'da bildirilmez). `FixtureTest` yeni fixture'lar + `CodecRulesTest`/`AudioCodecTest` ek testleri.
+2. **Saf mantık:** `RemoteProfile` (uzak STREAM_PREFS/AUDIO_PREFS), `RemoteTimings` (PING 500 ms/2 sn seçimi, PONG 10 sn, STATS 5 sn, imleç 5 sn), `RemoteAddress.parse`, `KeyframeRetryBackoff` (500/1000/2000/4000/4000). Hepsi JVM testli.
+3. **SessionMachine/Controller:** `Event.Start.remote: RemoteProfile?`. Uzak oturumda STREAM_PREFS/AUDIO_PREFS profilden gider, normal `SetPrefs`/`SetAudio` yalnız saklanır (kullanıcının normal ayarı değişmez); `FILES_INFO` OFF; PING `RemoteTimings` + `inputActive` (InputCapture'ın yayımladığı tutulu girdi / son girdi), PONG zaman aşımı 10 sn; uzak oturumda migrasyon reddedilir. Yeni `SetRemote` olayı (panelden bit hızı/ses).
+4. **FrameQueue:** STARTUP yinelemesi `KeyframeRetryBackoff` ile (tüm oturumlar).
+5. **MainActivity/UI:** ayrı "Uzaktan bağlan" + "Uzak adres" düğmesi, uzak adres/bit hızı/ses `Settings`'te ayrı; uzak oturumda WoL, keşif, otomatik USB/Wi-Fi geçişi, yeniden keşif, dosya sunucusu kapalı; mod seçimi/Ctrl+Shift+7 etkisiz, panel "Uzak (Tasarruf)"; STATS 5 sn; yerel imleç zaman aşımı 5 sn; REJECTED -> uzak eşleşme metni.
+6. Testler: STREAM_PREFS uzak baytları, PING aralığı + takılı girdi güvenliği (makine testi), STARTUP geri çekilme dizisi, adres ayrıştırma, uzak ses varsayılan kapalı.
+
 ## Handoff
 
 ## Open questions
