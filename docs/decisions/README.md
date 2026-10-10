@@ -55,3 +55,4 @@ Kazanılan, kaybedilen, neyi tetikler. Hangi koşulda tekrar düşünülür.
 | 0031 | Boşta karartma ve kapatma (tablet): panelden 2/5/10/15/kapalı, kısma → 1 dk sonra kapatma, ilk dokunuş yutulur, Oyun modunda yok | kabul |
 | 0032 | HDR10 akış (HEVC Main10 PQ), yalnız Oyun modunda, panelden isteğe bağlı; STREAM_PREFS dynamic_range grubu | kabul |
 | 0033 | Keskin renk kenarları (host luma ayarlı 4:2:0) panelden isteğe bağlı, varsayılan kapalı; STREAM_PREFS chroma baytı | kabul |
+| 0038 | Uzaktan bağlantı: "Uzaktan bağlan" düğmesi, en az veri profili, AAC ses, uzaktan eşleşme yok | kabul |
