@@ -15,9 +15,11 @@ import dev.matebridge.client.protocol.AudioFrame
  *  - STARTED with a playable format (PCM_S16LE, 48 kHz, 2 channels) and a new stream_id: start it.
  *  - STARTED with anything else: the host's stream is not playable here; the current one stops (not an error).
  *  - STOPPED: stop. Unknown state: ignored.
- *  - AUDIO_FRAME: only the current stream's, and only when data_len = frame_count x channels x 2.
+ *  - AAC_LC (format 2, decision 0038): playable only when [aacAllowed] (the device has an AAC decoder), 48 kHz, 2 channels.
+ *  - AUDIO_FRAME: only the current stream's, and only when it fits the format: PCM data_len = frame_count x channels x 2;
+ *    AAC frame_count = 1024 and data_len 1..1536 ([AacRules.isValidUnit]).
  */
-class AudioStreamGate {
+class AudioStreamGate(private val aacAllowed: Boolean = false) {
     sealed interface Action {
         data class Start(val streamId: Int) : Action
         data object Stop : Action
@@ -29,6 +31,10 @@ class AudioStreamGate {
         private set
 
     @Volatile var armedGen = NONE
+        private set
+
+    /** Format of the current stream (valid while [currentId] is set). */
+    @Volatile var currentFormat = AudioConfig.FORMAT_PCM_S16LE
         private set
 
     val armed: Boolean get() = armedGen != NONE
@@ -50,23 +56,26 @@ class AudioStreamGate {
         return when (c.state) {
             AudioConfig.STATE_STOPPED -> if (currentId != NONE) { currentId = NONE; Action.Stop } else Action.None
             AudioConfig.STATE_STARTED -> when {
-                !isPlayable(c) -> { currentId = NONE; Action.Unsupported }
+                !isPlayable(c, aacAllowed) -> { currentId = NONE; Action.Unsupported }
                 c.streamId == currentId -> Action.None // repeated STARTED of the running stream
-                else -> { currentId = c.streamId; Action.Start(c.streamId) }
+                else -> { currentFormat = c.format; currentId = c.streamId; Action.Start(c.streamId) }
             }
             else -> Action.None
         }
     }
 
     fun accepts(f: AudioFrame, gen: Int): Boolean =
-        gen == armedGen && currentId != NONE && f.streamId == currentId && f.data.size == f.frameCount * CHANNELS * 2
+        gen == armedGen && currentId != NONE && f.streamId == currentId &&
+            if (currentFormat == AudioConfig.FORMAT_AAC_LC) AacRules.isValidUnit(f.frameCount, f.data.size)
+            else f.data.size == f.frameCount * CHANNELS * 2
 
     companion object {
         const val NONE = -1
         const val SAMPLE_RATE = 48_000
         const val CHANNELS = 2
 
-        fun isPlayable(c: AudioConfig): Boolean =
-            c.format == AudioConfig.FORMAT_PCM_S16LE && c.sampleRate == SAMPLE_RATE.toLong() && c.channels == CHANNELS
+        fun isPlayable(c: AudioConfig, aacAllowed: Boolean = false): Boolean =
+            (c.format == AudioConfig.FORMAT_PCM_S16LE || (aacAllowed && c.format == AudioConfig.FORMAT_AAC_LC)) &&
+                c.sampleRate == SAMPLE_RATE.toLong() && c.channels == CHANNELS
     }
 }

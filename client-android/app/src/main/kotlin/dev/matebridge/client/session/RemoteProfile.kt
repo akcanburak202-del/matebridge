@@ -24,10 +24,11 @@ data class RemoteProfile(val bitrateKbps: Long = DEFAULT_BITRATE_KBPS, val audio
     )
 
     /**
-     * The remote AUDIO_PREFS. PCM for now: AAC arrives with T-341 (HELLO bit14 is not reported yet, so the host would
-     * ignore `codec = 1` anyway).
+     * The remote AUDIO_PREFS (decision 0038 section 4): AAC when audio is on and HELLO reported bit14 ([aacCapable]),
+     * else PCM. With audio off the codec stays PCM.
      */
-    fun audioPrefs(): AudioPrefs = AudioPrefs(audio, AudioPrefs.CODEC_PCM)
+    fun audioPrefs(aacCapable: Boolean = false): AudioPrefs =
+        AudioPrefs(audio, if (audio && aacCapable) AudioPrefs.CODEC_AAC else AudioPrefs.CODEC_PCM)
 
     companion object {
         const val FPS = 15

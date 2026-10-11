@@ -41,6 +41,8 @@ import dev.matebridge.client.input.KeyTracker
 import dev.matebridge.client.input.LocalAction
 import dev.matebridge.client.input.MotionEventAdapter
 import dev.matebridge.client.input.UnbufferedPenDispatch
+import dev.matebridge.client.audio.AacDecoderProbe
+import dev.matebridge.client.audio.AacRules
 import dev.matebridge.client.audio.AudioOutPref
 import dev.matebridge.client.audio.AudioPlayout
 import dev.matebridge.client.audio.AvSync
@@ -371,7 +373,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     // T-339 (decision 0038): "Uzaktan bağlan". True only for a session started with that button (UI thread); every other
     // way of connecting ends it. The remote profile (bit rate, audio) lives in [settings]; the session machine sends it.
-    private var remoteSession = false
+    @Volatile private var remoteSession = false // T-341: also read by the engine thread (onConnectionGen)
     private lateinit var remoteField: EditText
     private lateinit var remoteConnectButton: Button
     private var trustButtons: List<TrustButton> = emptyList()
@@ -519,9 +521,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             MbLog.i("mode_layer", GameModeSettings.logFields(change, gameSettings.effective()) + " at=start")
         }
         if (audioAllowed) {
-            audio = AudioPlayout(this, { clock.offsetUs() }, gameSettings.audioOut, devKnobs.audioOut, devKnobs.audioBufBursts, devKnobs.audioIdlePause) {
-                runOnUiThread { onAudioBecomingNoisy() }
-            }
+            audio = AudioPlayout(this, { clock.offsetUs() }, gameSettings.audioOut, devKnobs.audioOut, devKnobs.audioBufBursts, devKnobs.audioIdlePause, { runOnUiThread { onAudioBecomingNoisy() } }, AacDecoderProbe.available)
         }
         val quickAck = devKnobs.quickAck
         val stallDiag = devKnobs.stallDiag
@@ -572,7 +572,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
             // T-095: audio is armed per control connection; stale readers' messages are dropped by generation.
             override fun onConnectionGen(gen: Int, transport: Transport) {
-                audio?.beginSession(gen, transport) // T-123: safety per transport
+                audio?.beginSession(gen, transport, remoteSession) // T-123: safety per transport; T-341: a remote session starts with a larger audio buffer
                 if (::cursorOverlay.isInitialized) cursorOverlay.link.beginSession(gen) // T-276: cursor messages of an older connection are dropped
                 // The host holds no input state for a new connection (a takeover released the old one). Model reset and
                 // the new send target change together, so nothing from the old model can reach the new connection.
@@ -3092,6 +3092,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val caps = Capabilities.PEN or Capabilities.PEN_HOVER or Capabilities.PEN_TILT or Capabilities.KEYBOARD or
             Capabilities.TOUCHPAD or Capabilities.TOUCH or Capabilities.DECODE_H264 or Capabilities.DECODE_HEVC or
             (if (audioAllowed) Capabilities.AUDIO_PCM else 0) or // T-095
+            AacRules.capabilityBits(audioAllowed, AacDecoderProbe.available).toInt() or // T-341: bit14 only with an AAC decoder
             Capabilities.SETTINGS_PANEL or // T-105: handles SETTINGS_OPEN
             Capabilities.FILES or // T-135: sends FILES_INFO (OFF until the user enables the file server)
             Capabilities.FILES_NET or // T-269: STANDBY, FILES_NET and Wi-Fi file connections (decision 0035)

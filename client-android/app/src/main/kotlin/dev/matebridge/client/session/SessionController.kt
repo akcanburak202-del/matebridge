@@ -607,7 +607,7 @@ class SessionController(
                     is Bye -> MbLog.i("bye_sent", "reason=${m.reason}")
                     is DisplayRate -> MbLog.i("display_rate_sent", "hz=${m.hz}")
                     is StreamPrefs -> MbLog.i("stream_prefs_sent", "fps=${m.fps} scale=${m.scalePermille} bitrate_kbps=${m.bitrateKbps}")
-                    is AudioPrefs -> MbLog.i("audio_prefs_sent", "enabled=${if (m.enabled) 1 else 0}")
+                    is AudioPrefs -> MbLog.i("audio_prefs_sent", "enabled=${if (m.enabled) 1 else 0} codec=${m.codec}")
                     is CursorPrefs -> MbLog.i("cursor_prefs_sent", "enabled=${if (m.enabled) 1 else 0}") // T-276
                     is FilesInfo -> MbLog.i("files_info_sent", "state=${m.state} port=${m.port}") // never the token
                     else -> Unit
