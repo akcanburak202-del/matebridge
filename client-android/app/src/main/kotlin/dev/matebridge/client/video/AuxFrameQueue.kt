@@ -122,6 +122,7 @@ class AuxFrameQueue(
         val now = clockNs()
         if (!waitingKeyframe || !mayRequest(now)) return false
         if (hasRequested && now - lastRequestNs < retryBackoff.delayMs * 1_000_000) return false // decision 0038 section 7
+        heldRequest = false // the retry answers a held overflow request, as in FrameQueue.takeRetry
         val used = retryBackoff.delayMs
         record(now)
         retryBackoff.restore(used)

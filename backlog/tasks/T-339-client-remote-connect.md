@@ -69,6 +69,8 @@ PING seyreltme takılı girdi yaratmamalı: herhangi bir tuş/düğme/kalem/aç�
 
 **Codex turu (3 P2) düzeltildi:** (1) `Start.remote != null` artık kullanıcı dokunuşu sayılıp iptal/anahtar-uyuşmazlığı kilitlerini temizler, ama `userInitiated=false` kalır (uzakta yeni eşleşme başlamaz); test `KeyMismatchTest`. (2) `connect_start` günlüğünde uzak oturumda `host=remote` (`remoteLog`, her yeniden denemede); test `startLogLineNeverCarriesTheRemoteAddress` (session_start). (3) `AuxFrameQueue.takeRetry` aynı 500..4000 ms geri çekilmesi, keyframe/yeni istekte sıfırlanır; test `AuxQueueAndPairingTest`.
 
+**Codex tur 2:** `AuxFrameQueue.takeRetry` artık `heldRequest`'i temizler (FrameQueue ile aynı); gecikmeli taşma isteği + retry araya girmesi için test `retryAnswersAHeldOverflowRequestSoNoRedundantFramesDroppedFollows`.
+
 **Varsayımlar**
 - Uzak başlatma `userInitiated=false` (uzak yolda eşleşme başlatılmaz); tamamlanmamış bir eşleşme varsa makine StoredTrust gösterir -> uzakta aynı "eşleşme yalnız ev ağında" mesajı.
 - `RemoteAddress`: küçük harfe çevirir, sondaki noktayı atar, IPv6 ve alt çizgili ad reddedilir.
