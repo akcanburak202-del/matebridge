@@ -1,7 +1,7 @@
 ---
 id: T-339
 title: İstemci — 0038 protokol kodu, "Uzaktan bağlan" düğmesi, uzak profil ve keyframe yineleme geri çekilmesi
-status: review
+status: done
 phase: 7
 owner: android-client-dev
 depends_on: [T-336]
