@@ -33,6 +33,11 @@ Karar 0038 §5 ve ek madde 1; PROTOCOL.md §3 adım 3 "Uzaktan eşleşme yok". D
 
 ## Plan
 
+1. `MateBridgeCore/Session/PeerLocality.swift`: saf `PeerClassifier.classify(peerHost:interfaces:)` -> `PeerLocality` (`local`/`remote`). Eş `"adres[%kapsam]"` metni; arayüz = `LocalInterface(name, isUp, address, prefixLength)`. IPv4-mapped IPv4 sayılır; `127/8` ve `::1` yerel; `100.64/10` her zaman uzak; `en*` + up + ön ek >= 8 eşleşmesi yerel; link-local yalnız kapsam `en*` ve up ise yerel; ayrıştırılamayan = uzak. Link-local gömülü kapsam baytları (KAME) sıfırlanır.
+2. `SessionMachine`: `connectionOpened(_:now:peer:)` (varsayılan `.local`, yalnız mevcut testler için; üretim çağrısı açıkça verir). Bağlantıda saklanır. Anahtarsız (PAIRING gerekecek) yolda eş uzaksa `HELLO_ACK(REJECTED, NONE)` + close + `pairing_refused reason=remote`; `handleHello` içinde (anahtar kesin yoksa, BUSY/orphan kontrolünden önce) ve `continueHello` başında (arama sonucu anahtarsızsa). Bekleyen durum, `requestApproval`, orphan hiç oluşmaz. PAIRED yolu aynı.
+3. Host: `BsdTcpConnection` kapsam kimliğini de verir (`peerScopeID`); `SessionServer` `getifaddrs`'tan (`NetworkInterfaces`) `LocalInterface` toplar, `PeerClassifier` ile sınıflar, `connectionOpened`'a verir. Adres loglanmaz.
+4. Testler: sınıflandırıcı (kart listesi + ek durumlar), makine (uzak anahtarsız -> REJECTED/NONE, onay yok, orphan yok; uzak PAIRED kabul; yerel PAIRING bozulmaz).
+
 ## Handoff
 
 ## Open questions
