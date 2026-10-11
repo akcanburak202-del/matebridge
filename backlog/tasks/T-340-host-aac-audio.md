@@ -33,6 +33,12 @@ Karar 0038 §4; PROTOCOL.md AUDIO_PREFS/CONFIG/FRAME. Dal tabanı: `task/0038-re
 
 ## Plan
 
+- Capture/IOProc yok sayilir: ring bugunku gibi 480 kare PCM paketleri tasir. AAC kodlama `AudioStreamer` kuyrugunda (drain), IOProc disinda: sessizlik kapisindan gecen her PCM paketi `AACStage`e verilir, 1024 karelik bloklar `AudioConverter` ile kodlanir, her AU bir `AUDIO_FRAME` (frame_count 1024).
+- `AACStage` (Core, saf mantik + `AACConverting` protokolu): birikim, bosluk (kapi atlamasi/HAL bosluk) isleme (kucuk bosluk sifirla doldurulur, buyuk bosluk: kismi blok sifirla tamamlanip kodlanir + converter reset), zaman damgasi: AU k sample_index = segment ilk index + k*1024, capture_time = ilk karenin zamani + (k*1024 - priming)/48k. `AudioToolboxAACConverter` gercek AudioConverter (96 kbps, AAC-LC).
+- `AudioStreamPolicy`: oturumda `clientSupportsAAC` (HELLO bit14) ve `prefs.codec`; istenen kodek degisince mevcut akis STOPPED ile biter, yeni stream_id ile yeniden baslar; kodlayici kurulamaz/bozulursa `aacEncoderFailed` -> PCM'e duser, bir kez loglanir.
+- Kablolama: `AudioStreamer.sessionStarted/prefs` yeni parametreler (varsayilanli), `main.swift`'te iki satir.
+- Testler: kodek secimi, stream_id artisi, zaman damgasi aritmetigi (sahte converter), gercek sinus kodlama (AU boy 1-1536, ~96 kbps).
+
 ## Handoff
 
 ## Open questions
