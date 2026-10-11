@@ -83,12 +83,24 @@ import Testing
         #expect(AudioOutbox.isStale(aac, nowUs: 1_000_001 + 100_000 + AudioOutbox.aacAllowanceUs))
     }
 
+    @Test func tinyAndLargeUnitsShareOneTimeBudget() {
+        // Time, not bytes, bounds the outbox: tiny units (near silence) still count 1024 frames each.
+        var box = AudioOutbox()
+        for seq in 0..<12 {
+            let size = seq % 2 == 0 ? 256 : 6
+            _ = box.push(sessionID: 7, .audioFrame(AudioFrame(
+                streamID: 1, seq: UInt32(seq), sampleIndex: UInt64(seq) * 1024, captureTimeUs: 0, frameCount: 1024,
+                data: [UInt8](repeating: 0, count: size))))
+        }
+        #expect(describe(box.take()) == (8..<12).map { "f\($0)" })
+    }
+
     @Test func aacKernelMarkIsFarBelowThePCMMark() {
         let pcm = AudioStreamPolicy.startedConfig(streamID: 1)
         let aac = AudioStreamPolicy.startedConfig(streamID: 1, codec: .aac)
         let pcmMark = AudioOutbox.notSentLowatBytes(for: pcm, framingBytes: 49)
         let aacMark = AudioOutbox.notSentLowatBytes(for: aac, framingBytes: 49)
         #expect(pcmMark == 9 * (49 + 1920))
-        #expect(aacMark == 3 * (49 + 256))  // under 100 ms of 96 kbps audio
+        #expect(aacMark == 1_024 && aacMark == AudioOutbox.aacNotSentLowatBytes)  // byte-bounded, ~3 nominal units
     }
 }

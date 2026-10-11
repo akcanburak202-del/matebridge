@@ -264,6 +264,8 @@ public final class SessionServer: @unchecked Sendable {
     private var restartAttempts = 0
     private var restartScheduled = false
     private var inflightBytes: [ConnectionID: Int] = [:]
+    /// AUDIO_FRAME sample frames queued in user space per control connection (not yet handed to the kernel).
+    private var audioInflightFrames: [ConnectionID: Int] = [:]
     private var videoBuffers: [ConnectionID: [UInt8]] = [:]
     private var videoHelloSeen: Set<ConnectionID> = []
     /// Video connections whose VIDEO_HELLO passed and that now owe one authenticated PING (PROTOCOL.md 3.5).
@@ -791,30 +793,35 @@ public final class SessionServer: @unchecked Sendable {
         let items = audioLock.withLock { audioOutbox.take() }
         let now = nowUs()
         for item in items {
-            if case .audioConfig(let config) = item.message {
-                closeAudioTimingWindow()  // stream boundary, sent or not
-                if config.state == .started, let id = activeControl {
-                    // The kernel's unsent mark follows the codec: 100 ms of AAC is far fewer bytes than of PCM.
-                    controlConnections[id]?.setNotSentLowat(AudioOutbox.notSentLowatBytes(
-                        for: config, framingBytes: Self.sealedAudioFrameFramingBytes))
-                }
-            }
+            if case .audioConfig = item.message { closeAudioTimingWindow() }  // stream boundary, sent or not
             guard !stopped, item.sessionID != 0, item.sessionID == currentSessionID, let id = activeControl,
                   sealers[id] != nil else { continue }
+            if case .audioConfig(let config) = item.message, config.state == .started {
+                // Only for the live session (checked above): the kernel's unsent mark follows the codec.
+                controlConnections[id]?.setNotSentLowat(AudioOutbox.notSentLowatBytes(
+                    for: config, framingBytes: Self.sealedAudioFrameFramingBytes))
+            }
             guard case .audioFrame(let frame) = item.message else {
                 sendControl(id, item.message)
                 continue
             }
             let size = 4 + ProtocolConstants.recordOverhead + AudioFrame.fixedSize + frame.data.count
+            // User-space queue: bounded in audio time (sample frames still unsent, 100 ms), with the byte limit as a
+            // backstop. Bytes alone cannot bound AAC time: unit sizes vary.
+            let frames = Int(frame.frameCount)
             guard !AudioOutbox.isStale(frame, nowUs: now),
-                  inflightBytes[id, default: 0] + size
-                      <= AudioOutbox.backlogFrames(frameCount: Int(frame.frameCount)) * size,
+                  audioInflightFrames[id, default: 0] + frames <= AudioOutbox.maxPendingSampleFrames,
+                  inflightBytes[id, default: 0] + size <= Self.audioBacklogBytes,
                   !kernelAudioBacklog(id) else {
                 audioWireDrops.add(1, ordering: .relaxed)
                 continue
             }
+            audioInflightFrames[id, default: 0] += frames
             let writeStart = nowUs()
-            sendControl(id, item.message)
+            sendControl(id, item.message) { [weak self] in  // on `queue`, once handed to the kernel (or refused)
+                guard let self, let n = audioInflightFrames[id] else { return }
+                audioInflightFrames[id] = max(0, n - frames)
+            }
             let writeEnd = nowUs()
             recordAudioWrite(id, frame: frame, queueLagUs: now > item.pushedUs ? now - item.pushedUs : 0,
                              writeStart: writeStart, writeEnd: writeEnd)
@@ -1305,6 +1312,7 @@ public final class SessionServer: @unchecked Sendable {
     private func dropControlState(_ id: ConnectionID) {
         tcpInfoSamplers[id] = nil
         inflightBytes[id] = nil
+        audioInflightFrames[id] = nil
         inbounds[id] = nil
         sealers[id] = nil
         streamBitrates[id] = nil

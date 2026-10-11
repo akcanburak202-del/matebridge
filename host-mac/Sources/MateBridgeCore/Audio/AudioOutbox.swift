@@ -20,16 +20,20 @@ public struct AudioOutbox: Sendable {
         max(1, min(maxFrames, maxPendingSampleFrames / max(1, frameCount)))
     }
 
-    /// Unsent-bytes mark of the control socket for a stream: all but one frame of the 100 ms window (the frame
-    /// written after the check makes up the rest). `framingBytes` is the sealed size of an `AUDIO_FRAME` without data.
+    /// Unsent-bytes mark of the control socket for a stream. PCM: all but one frame of the 100 ms window (the frame
+    /// written after the check makes up the rest); exact in time because PCM frames have a fixed size.
+    /// AAC: a fixed ~1 KB (about 3 nominal units, `aacNotSentLowatBytes`). The kernel part is byte-bounded only
+    /// (PROTOCOL.md 5): unit sizes vary, and tiny units (near silence) can make the same bytes span more than 100 ms.
+    /// That is accepted: such audio is nearly silent, and the client's 300 ms jitter cap is the upper bound. The
+    /// user-space queue is time-bounded separately (sample frames, `maxPendingSampleFrames`).
     public static func notSentLowatBytes(for config: AudioConfig, framingBytes: Int) -> Int {
+        if config.format == .aacLC { return aacNotSentLowatBytes }
         let frames = backlogFrames(frameCount: Int(config.framesPerPacket))
-        let data = config.format == .aacLC ? nominalAACUnitBytes : Int(config.framesPerPacket) * Int(config.channels) * 2
-        return max(1, frames - 1) * (framingBytes + data)
+        return max(1, frames - 1) * (framingBytes + Int(config.framesPerPacket) * Int(config.channels) * 2)
     }
 
-    /// 96 kbps CBR AAC at 1024 frames per unit.
-    public static let nominalAACUnitBytes = 256
+    public static let aacNotSentLowatBytes = 1_024
+
     /// Frames captured longer ago than this when they would be sealed are dropped (they would only be late).
     public static let maxAgeUs: UInt64 = 100_000
 

@@ -58,6 +58,13 @@ Karar 0038 §4; PROTOCOL.md AUDIO_PREFS/CONFIG/FRAME. Dal tabanı: `task/0038-re
 - Queue limits time-based for AAC: `AudioOutbox` drops oldest frames beyond 4800 sample frames (100 ms; AAC keeps 4 units, PCM still 10). `SessionServer.drainAudio` (minimal edit, Session/): user-space limit is `backlogFrames(frameCount) * frameSize`, and the control socket's `TCP_NOTSENT_LOWAT` is set at AUDIO_CONFIG(STARTED) from the codec (AAC about 3 nominal AUs = 915 B vs PCM 9 packets). `isStale` allows 66 ms extra for AAC units (their time is the first decoded frame, earlier by priming + own length). Tests in AudioOutboxTests. Pairing/HELLO_ACK paths untouched.
 - Not verified on hardware: kernel unsent mark behaviour with AAC on a real Wi-Fi link.
 
+### Review fixes (Codex round 2)
+
+- Integration branch merged again (T-338 included); full `check.sh` ALL OK.
+- User-space queue (`SessionServer.drainAudio`): `audioInflightFrames[id]` counts AUDIO_FRAME sample frames not yet handed to the kernel (decremented in `sendControl`'s `done`, cleared with the connection); a frame is dropped beyond 4800 (100 ms). The byte limit stays only as a backstop (`audioBacklogBytes`). No longer depends on the incoming AU's size. Not unit-tested (Host module has no test target); the outbox time budget is tested with alternating 256 B / 6 B units.
+- Kernel mark: AAC `TCP_NOTSENT_LOWAT` is a fixed 1 KB (`AudioOutbox.aacNotSentLowatBytes`); comment states it is byte-bounded only, tiny units are near silence, the client's 300 ms jitter cap is the upper bound (PROTOCOL.md 5). PCM mark unchanged.
+- `setNotSentLowat` now runs after the session-validity guard, so an obsolete session's STARTED cannot change the live socket.
+
 ## Open questions
 
 - Index/zaman priming farki yukaridaki gibi; PROTOCOL.md AUDIO_FRAME'de sample_index anlami "blok ilk giris karesi (priming dusulmemis)" diye yazilmali mi (orkestrator karari).
