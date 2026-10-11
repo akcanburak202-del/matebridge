@@ -53,6 +53,8 @@ Karar 0038 §4; PROTOCOL.md AUDIO_*. Dal tabanı: `task/0038-remote-integration`
 - Test edilmedi (cihaz gerekir): gerçek `MediaCodec` AAC çözme (T-340 host birleşince), A/V senkronu, 100 ms tampon hissi, `AacDecoderProbe` HarmonyOS'ta.
 - Cihazda kontrol: uzak oturumda ses aç; log: `audio_prefs_sent ... codec=1`, `audio_config ... format=2`, `audio_start ... codec=aac remote=1`, `safety_start used=100`; `audio_aac_error` OLMAMALI; YouTube 1 dk boyunca underrun ve A/V kayması; normal oturumda `codec=pcm` ve davranış aynı.
 
+- Codex düzeltmeleri (2 x P2): (1) çözücüye giriş verildikten sonra 300 ms boyunca girdi kuyruğu 5 ms'lik kısa poll'la beklenir ve çıkış hemen boşaltılır (250 ms'lik boşta poll'a takılmaz). (2) `AacDecodeWorker(previous=)`: yeni çözücü, önceki akışın çözücüsü serbest kalana kadar (en çok 1 sn) oluşturulmaz; `start` hata verirse bir kez 50 ms sonra yeniden denenir. Testler: geç çıkış, serbest bırakma sırası, tek yeniden deneme. `task/0038-remote-integration` birleştirildi.
+
 ## Open questions
 
 - Yok. Codex incelemesi orkestratörde.

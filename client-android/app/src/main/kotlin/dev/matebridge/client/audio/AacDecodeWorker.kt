@@ -37,7 +37,10 @@ class AacDecodeWorker(
     private val sink: (sampleIndex: Long, captureUs: Long, pcm: ByteArray, frames: Int) -> Unit,
     private val onError: (String) -> Unit,
     private val name: String = "mb-aac",
+    /** The previous stream's worker: its decoder is released before this one allocates its own (bounded wait). */
+    private val previous: AacDecodeWorker? = null,
 ) {
+    private val released = java.util.concurrent.CountDownLatch(1)
     @Volatile private var running = true
     @Volatile private var thread: Thread? = null
 
@@ -61,6 +64,9 @@ class AacDecodeWorker(
         queue.close()
     }
 
+    /** True once the decoder is released (or was never created) and the thread is done with it. */
+    fun awaitReleased(ms: Long): Boolean = released.await(ms, java.util.concurrent.TimeUnit.MILLISECONDS)
+
     fun join(ms: Long) { thread?.join(ms) }
 
     private class Pending(val seq: Long, val unit: AacUnit)
@@ -75,9 +81,9 @@ class AacDecodeWorker(
         var port: AacCodecPort? = null
         try {
             val csd = AacRules.audioSpecificConfig(AacRules.SAMPLE_RATE, AacRules.CHANNELS) ?: error("asc")
-            val p = portFactory()
+            previous?.awaitReleased(PREVIOUS_RELEASE_WAIT_MS)
+            val p = openPort(csd)
             port = p
-            p.start(csd)
             val pending = ArrayDeque<Pending>()
             var seq = 0L
             var lastPts = -1L
@@ -102,9 +108,12 @@ class AacDecodeWorker(
                     emitted += frames
                 }
             }
+            var busyUntilNs = 0L // while the decoder may still owe output, poll the input briefly so output is not left waiting
             while (running) {
-                val u = queue.poll(POLL_MS)
+                val busy = System.nanoTime() < busyUntilNs
+                val u = queue.poll(if (busy) BUSY_POLL_MS else POLL_MS)
                 if (u == null) { drain(0); continue }
+                busyUntilNs = System.nanoTime() + BUSY_WINDOW_NS
                 val s = ++seq
                 pending.addLast(Pending(s, u))
                 while (pending.size > MAX_PENDING) pending.removeFirst()
@@ -120,6 +129,24 @@ class AacDecodeWorker(
             running = false
             queue.close()
             try { port?.release() } catch (_: RuntimeException) {}
+            released.countDown()
+        }
+    }
+
+    /** Creates and starts the decoder; one retry after a short wait (a resource error while the old one is going away). */
+    private fun openPort(csd: ByteArray): AacCodecPort {
+        var attempt = 0
+        while (true) {
+            val p = portFactory()
+            try {
+                p.start(csd)
+                return p
+            } catch (e: Exception) {
+                try { p.release() } catch (_: RuntimeException) {}
+                if (++attempt >= 2 || !running) throw e
+                previous?.awaitReleased(PREVIOUS_RELEASE_WAIT_MS)
+                try { Thread.sleep(RETRY_DELAY_MS) } catch (_: InterruptedException) { throw e }
+            }
         }
     }
 
@@ -129,6 +156,10 @@ class AacDecodeWorker(
         const val INPUT_TIMEOUT_US = 5_000L
         const val FIRST_OUTPUT_WAIT_US = 5_000L
         const val MAX_PENDING = 64
+        const val BUSY_POLL_MS = 5L
+        const val BUSY_WINDOW_NS = 300_000_000L
+        const val PREVIOUS_RELEASE_WAIT_MS = 1000L
+        const val RETRY_DELAY_MS = 50L
     }
 }
 

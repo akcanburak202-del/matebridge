@@ -3,6 +3,7 @@ package dev.matebridge.client.audio
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -97,5 +98,77 @@ class AacDecodeWorkerTest {
         assertFalse(t.isAlive)
         assertTrue((System.nanoTime() - t0) / 1_000_000 < 500)
         assertEquals(1, fake.released.get())
+    }
+
+    /** Output appears 40 ms after the input; no further unit arrives (a stall): it must still be handed on promptly. */
+    @Test fun lateOutputIsDrainedWithoutWaitingForTheNextUnit() {
+        val readyAtNs = AtomicLong(Long.MAX_VALUE)
+        val port = object : AacCodecPort {
+            var gave = false
+            override fun start(csd0: ByteArray) {}
+            override fun queueInput(data: ByteArray, ptsUs: Long, timeoutUs: Long): Boolean {
+                readyAtNs.set(System.nanoTime() + 40_000_000L); gave = false; pts = ptsUs; return true
+            }
+            var pts = 0L
+            override fun pollOutput(timeoutUs: Long): AacCodecPort.Output? {
+                if (!gave && System.nanoTime() >= readyAtNs.get()) { gave = true; return AacCodecPort.Output(ByteArray(4096), 4096, pts) }
+                return null
+            }
+            override fun release() {}
+        }
+        val q = AacUnitQueue()
+        val gotAt = AtomicLong(0)
+        val w = AacDecodeWorker(q, { port }, { _, _, _, _ -> gotAt.set(System.nanoTime()) }, {})
+        val t = Thread { w.runLoop() }.also { it.start() }
+        val t0 = System.nanoTime()
+        q.offer(unit(0))
+        Thread.sleep(150)
+        w.stop(); t.join(2000)
+        assertTrue("output was handed on", gotAt.get() != 0L)
+        assertTrue("within ~60 ms of being ready, not 250 ms", (gotAt.get() - t0) / 1_000_000 < 100)
+    }
+
+    @Test fun theNewDecoderIsCreatedOnlyAfterThePreviousOneIsReleased() {
+        val log = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val oldPort = object : AacCodecPort {
+            override fun start(csd0: ByteArray) { log += "old-start" }
+            override fun queueInput(data: ByteArray, ptsUs: Long, timeoutUs: Long) = true
+            override fun pollOutput(timeoutUs: Long): AacCodecPort.Output? = null
+            override fun release() { Thread.sleep(80); log += "old-release" }
+        }
+        val old = AacDecodeWorker(AacUnitQueue(), { oldPort }, { _, _, _, _ -> }, {})
+        val ot = Thread { old.runLoop() }.also { it.start() }
+        Thread.sleep(30)
+        old.stop() // the replacement starts right away
+        val newPort = object : AacCodecPort {
+            override fun start(csd0: ByteArray) { log += "new-start" }
+            override fun queueInput(data: ByteArray, ptsUs: Long, timeoutUs: Long) = true
+            override fun pollOutput(timeoutUs: Long): AacCodecPort.Output? = null
+            override fun release() { log += "new-release" }
+        }
+        val nw = AacDecodeWorker(AacUnitQueue(), { newPort }, { _, _, _, _ -> }, {}, previous = old)
+        val nt = Thread { nw.runLoop() }.also { it.start() }
+        Thread.sleep(200)
+        nw.stop(); nt.join(2000); ot.join(2000)
+        assertEquals(listOf("old-start", "old-release", "new-start", "new-release"), log.toList())
+    }
+
+    @Test fun aResourceFailureAtStartIsRetriedOnce() {
+        var attempts = 0
+        val errors = mutableListOf<String>()
+        val q = AacUnitQueue()
+        val w = AacDecodeWorker(q, {
+            object : AacCodecPort {
+                override fun start(csd0: ByteArray) { if (++attempts == 1) throw IllegalStateException("resource") }
+                override fun queueInput(data: ByteArray, ptsUs: Long, timeoutUs: Long) = true
+                override fun pollOutput(timeoutUs: Long): AacCodecPort.Output? = null
+                override fun release() {}
+            }
+        }, { _, _, _, _ -> }, { errors += it })
+        val t = Thread { w.runLoop() }.also { it.start() }
+        Thread.sleep(200)
+        w.stop(); t.join(2000)
+        assertEquals(2, attempts)
+        assertTrue(errors.isEmpty())
     }
 }

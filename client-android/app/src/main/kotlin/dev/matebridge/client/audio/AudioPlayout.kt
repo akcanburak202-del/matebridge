@@ -320,6 +320,7 @@ class AudioPlayout(
                 },
                 { err -> MbLog.e("audio_aac_error", "stream_id=$id err=$err", COMPONENT) }, // once; the stream is then ignored
                 "mb-aac-$id",
+                previous?.aacWorker, // decoder of the stream being replaced is released first
             )
         }
         /** T-123: the connection's transport; the writer follows a change ([setTransport]). */
