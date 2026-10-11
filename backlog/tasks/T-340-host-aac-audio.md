@@ -1,7 +1,7 @@
 ---
 id: T-340
 title: Host — AAC-LC ses kodlama (AUDIO_PREFS.codec = 1 ve HELLO bit14)
-status: todo
+status: review
 phase: 7
 owner: mac-host-dev
 depends_on: [T-337]
@@ -41,4 +41,15 @@ Karar 0038 §4; PROTOCOL.md AUDIO_PREFS/CONFIG/FRAME. Dal tabanı: `task/0038-re
 
 ## Handoff
 
+- Commit: son commit "T-340: host AAC-LC audio encoding" (dal task/T-340-host-aac-audio).
+- Dosyalar: Core/Audio: `AACStage.swift` (yeni; birikim, bosluk, zaman damgasi), `AudioToolboxAACConverter.swift` (yeni; AudioConverter, 96 kbps CBR, AAC-LC), `AudioStreamPolicy.swift` (clientSupportsAAC, codec, `activeCodec`, `aacEncoderFailed`, kodek degisiminde yeniden baslatma), `AudioStreamer.swift` (kodlama drain'de, `Options.makeConverter`). Tests: `AACAudioTests.swift` (yeni, 10 test). Kart disi tek degisiklik: `host-mac/Sources/MateBridgeApp/main.swift` iki satir (HELLO bit14 ve `prefs.codec` AudioStreamer'a iletiliyor; Session/ ve pairing/HELLO_ACK yollarina dokunulmadi).
+- Tasarim: IOProc/ring degismedi (480 karelik PCM). Kodlama streamer kuyrugunda, sessizlik kapisindan sonra; 100 ms kuyruk siniri giris tarafinda ayni.
+- Zaman damgasi (istemci icin onemli): AU k `sample_index = segment ilk PCM index + k*1024` (priming ile KAYDIRILMAZ; unsigned kalsin diye), `capture_time_us = ilk karenin zamani + (k*1024 - priming)/48000` (priming ~2112 kare = 44 ms dusulur). Yani index ile zaman arasinda sabit priming farki var. Sessizlik kapisi atlamasi/HAL boslugu: <=4096 kare sifirla doldurulur (segment surer); daha uzunsa kismi blok sifirla tamamlanip kodlanir, converter reset, yeni segment (sample_index bosluk kadar atlar).
+- Sessizlik kapisi AAC'de de calisir (PCM paketi seviyesinde). Kodek degisimi (0<->1) STOPPED + yeni stream_id. Kodlayici kurulamaz/hata verirse PCM'e duser, `audio_aac_unavailable` bir kez loglanir (surec boyunca PCM).
+- Varsayimlar: AudioConverter her 1024 karelik girdiye 1 AU verir (gercek sinus testi dogruladi: 1-1536 B, ort. ~96 kbps CBR). CBR modu en iyi caba.
+- Test edilmedi: gercek tablet/istemci kod cozumu, gercek sistem ses tap'i ile uzun sure calisma, CPU maliyeti.
+- check.sh: Swift gecti; Kotlin fixture-coverage testi beklendigi gibi basarisiz (T-339). Not: `ControlSocketTests.testLargeAndSmallRecordsKeepOrder` (XCTest) yuk altinda bir kez titreme gosterdi, tekrarda gecti; bu gorevle ilgisiz.
+
 ## Open questions
+
+- Index/zaman priming farki yukaridaki gibi; PROTOCOL.md AUDIO_FRAME'de sample_index anlami "blok ilk giris karesi (priming dusulmemis)" diye yazilmali mi (orkestrator karari).
