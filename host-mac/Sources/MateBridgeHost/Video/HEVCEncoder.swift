@@ -723,6 +723,11 @@ final class HEVCEncoder: @unchecked Sendable {
     /// applied on the owner queue between two submits, never after `stop`. Whether VideoToolbox honours it (the
     /// `.fast` profile may accept and ignore it, cf. T-087) is a device measurement: `video ev=bitrate_set` logs the
     /// statuses of the property sets.
+    /// Live change of the still-refinement train ceiling (decision 0038), no restart.
+    func setRefineMaxBytes(_ bytes: Int) {
+        lock.withLock { refinePolicy.setMaxBytes(bytes) }
+    }
+
     @discardableResult
     func setTargetBitrate(kbps: Int) -> BitrateRequest.Decision {
         order.setBitrate(kbps: kbps)

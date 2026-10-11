@@ -47,15 +47,23 @@ public struct StillRefineConfig: Equatable, Sendable {
 
     /// Default on; `MATEBRIDGE_REFINE=0` turns it off. `MATEBRIDGE_REFINE_MS` (50...2000), `MATEBRIDGE_REFINE_KB`
     /// (16...8192, the train's byte ceiling; default 1024 on USB, 256 on a network link) and `MATEBRIDGE_REFINE_FRAMES`
-    /// (1...60) override; an invalid value keeps the default.
-    public static func resolve(env: [String: String], transport: SessionTransport) -> StillRefineConfig {
+    /// (1...60) override; an invalid value keeps the default. A remote session (`remoteKbps` set, decision 0038:
+    /// `STREAM_PREFS.link = 1` with that target bit rate) budgets `RemoteLinkProfile.bytes(bitrateKbps:)` instead,
+    /// unless `MATEBRIDGE_REFINE_KB` is set (the developer override wins).
+    public static func resolve(env: [String: String], transport: SessionTransport,
+                               remoteKbps: Int? = nil) -> StillRefineConfig {
         var c = StillRefineConfig.disabled
         c.enabled = env["MATEBRIDGE_REFINE"]?.trimmingCharacters(in: .whitespaces) != "0"
         let ms = int(env["MATEBRIDGE_REFINE_MS"], in: stillMsRange) ?? defaultStillMs
         c.stillUs = UInt64(ms) * 1000
         c.maxFrames = int(env["MATEBRIDGE_REFINE_FRAMES"], in: framesRange) ?? defaultMaxFrames
-        let kb = int(env["MATEBRIDGE_REFINE_KB"], in: kbRange) ?? (transport == .usb ? usbKB : networkKB)
-        c.maxBytes = kb * 1024
+        if let kb = int(env["MATEBRIDGE_REFINE_KB"], in: kbRange) {
+            c.maxBytes = kb * 1024
+        } else if let remoteKbps {
+            c.maxBytes = RemoteLinkProfile.bytes(bitrateKbps: remoteKbps)
+        } else {
+            c.maxBytes = (transport == .usb ? usbKB : networkKB) * 1024
+        }
         return c
     }
 
@@ -117,7 +125,7 @@ public struct StillRefineReport: Equatable, Sendable {
 public struct StillRefinePolicy: Sendable {
     private enum Phase { case idle, armed, running }
 
-    public let config: StillRefineConfig
+    public private(set) var config: StillRefineConfig
     /// How long a deferred next frame waits for the queues to drain before the train ends as `queue_busy`.
     public static let queueDrainWaitUs: UInt64 = 500_000
     private var phase = Phase.idle
@@ -138,6 +146,10 @@ public struct StillRefinePolicy: Sendable {
     public private(set) var trainID: UInt64 = 0
 
     public init(config: StillRefineConfig) { self.config = config }
+
+    /// Live change of the train byte ceiling (decision 0038: the session's link changed). A running train keeps going
+    /// and is judged against the new ceiling from its next output.
+    public mutating func setMaxBytes(_ bytes: Int) { config.maxBytes = bytes }
 
     public var isRunning: Bool { phase == .running }
 

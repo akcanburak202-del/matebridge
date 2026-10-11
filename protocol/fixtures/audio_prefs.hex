@@ -3,5 +3,5 @@
 30           # header u8 type = 0x30 (AUDIO_PREFS)
 04 00 00 00  # header u32 length = 4
 01           # u8 enabled = 1
-00           # u8 reserved = 0
+00           # u8 codec = 0 (PCM)
 00 00        # u16 reserved2 = 0

@@ -64,6 +64,7 @@ USB kullanımında aynı bağlantılar `adb reverse` ile taşınır. Protokol de
      - Aktif oturum varken aynı `device_id` için **PAIRING** gerekecekse (host anahtarı yok) devralma yapılmaz: `BUSY`.
    - `device_id` daha önce onaylanmışsa ve bu cihaz için eşleşme anahtarı varsa `ACCEPTED` (`key_mode = PAIRED`).
      - **Önce kanıt (T-152):** host her PAIRED bağlantıda, devralma olsun ya da olmasın, `HELLO_ACK(ACCEPTED, PAIRED)`'ten sonra bağlantıyı **kanıt bekliyor** durumuna alır ve ilk doğrulanmış şifreli kaydı (istemcinin ACCEPTED'dan hemen sonraki PING'i) bekler. Oturumu ancak ondan sonra etkinleştirir: `STREAM_CONFIG` gönderilir, sanal ekran kurulur, ekran uykusu tutulur; o ilk kayıt da etkinleştirmeden sonra işlenir (PING ise PONG gider). Kanıt 5 sn içinde gelmezse ya da ilk kayıt doğrulanamazsa bağlantı BYE'sız kapatılır ve hiçbir oturum yan etkisi olmaz. Böylece şifresiz `device_id`'yi gören biri Mac'te ekran kurduramaz. Gerçek bir yeniden bağlanma yaklaşık bir gidiş-dönüş süresi uzar.
+   - **Uzaktan eşleşme yok (karar 0038):** eşleşme anahtarı yoksa ve kontrol bağlantısının eşi **yerel değilse** host şifresiz `HELLO_ACK(REJECTED)` (`key_mode = NONE`) gönderip bağlantıyı kapatır; onay penceresi açılmaz, `ev=pairing_refused reason=remote` loglanır. Yerel eş: loopback (`127.0.0.0/8`, `::1`, IPv4-mapped dahil) ya da Mac'in adı `en` ile başlayan, açık (`IFF_UP`) bir arayüzünün doğrudan bağlı alt ağındaki eş (IPv4 `adres & maske`; IPv6 önek, link-local yalnız kapsam arayüzü `en*` ise). `100.64.0.0/10` her zaman uzaktır; belirlenemeyen her eş uzak sayılır. PAIRED bağlantılar eş adresinden bağımsız kabul edilir. Kural istemcinin `link` beyanına değil eş adrese bağlıdır. Tel biçimi değişmez.
    - Yeni cihazsa (ya da eşleşme anahtarı yoksa) önce `PENDING_APPROVAL` (`key_mode = PAIRING`) ve Mac'te "MatePad bağlanmak istiyor → İzin ver" sorulur; onay penceresi ve tablet aynı **6 haneli eşleşme kodunu** gösterir (§9). Kabul edilirse ikinci bir `HELLO_ACK(ACCEPTED)` gelir (şifreli). Reddedilirse veya **60 sn** içinde cevap yoksa `HELLO_ACK(REJECTED)` gelir (şifreli) ve bağlantı kapanır.
    - İlk `HELLO_ACK`'ten (PENDING ya da ACCEPTED) hemen sonra iki yönde de şifreleme başlar (§9). Terminal cevaplar (REJECTED ilk cevapsa, VERSION_MISMATCH, BUSY) şifresizdir, `key_mode = NONE` taşır ve bağlantı kapanır.
 4. **STREAM_CONFIG:** host `STREAM_CONFIG`'i oturumu etkinleştirince gönderir: PAIRED bağlantıda ilk doğrulanmış kayıttan sonra (adım 3, önce kanıt), PAIRING'de onaylı `ACCEPTED` ile birlikte.
@@ -132,7 +133,7 @@ Aralıklar: `0x01–0x0F` oturum, `0x10–0x1F` girdi, `0x20–0x2F` bakım/ista
 | client_nonce | bytes[16] | Her bağlantıda yeni rastgele değer (§9) |
 | client_eph_pub | bytes[65] | Bu bağlantı için üretilen geçici P-256 açık anahtarı, sıkıştırılmamış (`0x04 ‖ X ‖ Y`) (§9) |
 
-`capabilities`: bit0 `PEN`, bit1 `PEN_HOVER`, bit2 `PEN_TILT`, bit3 `KEYBOARD`, bit4 `TOUCHPAD` (pointer capture ile göreli hareket + kaydırma), bit5 `TOUCH` (ekrana parmakla dokunma), bit6 `DECODE_H264`, bit7 `DECODE_HEVC`, bit8 `AUDIO_PCM` (istemci §4 ses mesajlarını işleyebilir ve PCM s16le 48 kHz stereo çalabilir), bit9 `SETTINGS_PANEL` (istemci akış sırasında ayarlar panelini açabilir ve `SETTINGS_OPEN`'ı işler, karar 0013). bit10 `FILES` (istemci tablet dosyaları için WebDAV sunucusu sunabilir ve `FILES_INFO` gönderir, karar 0015). bit11 `FULL_CHROMA` (istemci `chroma_layout = 1` akışını, yani `VIDEO_FRAME.view` ve iki akışı işleyebilir ve yetenek testini geçti, karar 0034). bit12 `FILES_NET` (istemci `FILES_INFO.state = 2` STANDBY gönderir, `FILES_NET`'i işler ve Wi-Fi'da dosya bağlantıları açar, karar 0035). bit13 `LOCAL_CURSOR` (istemci imleci kendisi çizebilir: `CURSOR_PREFS` gönderir, `CURSOR_SHAPE`/`CURSOR_STATE` işler, karar 0036).
+`capabilities`: bit0 `PEN`, bit1 `PEN_HOVER`, bit2 `PEN_TILT`, bit3 `KEYBOARD`, bit4 `TOUCHPAD` (pointer capture ile göreli hareket + kaydırma), bit5 `TOUCH` (ekrana parmakla dokunma), bit6 `DECODE_H264`, bit7 `DECODE_HEVC`, bit8 `AUDIO_PCM` (istemci §4 ses mesajlarını işleyebilir ve PCM s16le 48 kHz stereo çalabilir), bit9 `SETTINGS_PANEL` (istemci akış sırasında ayarlar panelini açabilir ve `SETTINGS_OPEN`'ı işler, karar 0013). bit10 `FILES` (istemci tablet dosyaları için WebDAV sunucusu sunabilir ve `FILES_INFO` gönderir, karar 0015). bit11 `FULL_CHROMA` (istemci `chroma_layout = 1` akışını, yani `VIDEO_FRAME.view` ve iki akışı işleyebilir ve yetenek testini geçti, karar 0034). bit12 `FILES_NET` (istemci `FILES_INFO.state = 2` STANDBY gönderir, `FILES_NET`'i işler ve Wi-Fi'da dosya bağlantıları açar, karar 0035). bit13 `LOCAL_CURSOR` (istemci imleci kendisi çizebilir: `CURSOR_PREFS` gönderir, `CURSOR_SHAPE`/`CURSOR_STATE` işler, karar 0036). bit14 `AUDIO_AAC` (istemci `AUDIO_CONFIG.format = 2` AAC-LC 48 kHz stereo akışını çözüp çalabilir ve `AUDIO_PREFS.codec`'i yazar, karar 0038).
 
 ### 0x02 HELLO_ACK (H→C)
 
@@ -189,16 +190,18 @@ Kullanıcının görüntü modu tercihi (Faz 5, "performans modu"). İstemci `AC
 
 | Alan | Tip | Açıklama |
 |---|---|---|
-| fps | u16 | İstenen akış kare hızı: `60`, `120`, `144`. Başka değer: host 60 kabul eder. |
+| fps | u16 | İstenen akış kare hızı: `15`, `30`, `60`, `120`, `144` (`15` ve `30` karar 0038; sanal ekran 60 Hz kalır, host kodlamayı bu hıza seyreltir). Başka değer: host 60 kabul eder. |
 | scale_permille | u16 | Kodlanan görüntünün sanal ekrana oranı, binde: `500`–`1000`. Dışı: host sıkıştırır. |
-| bitrate_kbps | u32 | Kullanıcının seçtiği hedef bit hızı (karar 0013). `0` = host varsayılanı (moda göre). Sıfırdan farklı değer host'ta `5000`–`150000` aralığına sıkıştırılır. Eski istemciler burada `0` (eski `reserved`) gönderir. |
+| bitrate_kbps | u32 | Kullanıcının seçtiği hedef bit hızı (karar 0013). `0` = host varsayılanı (moda göre). Sıfırdan farklı değer host'ta `500`–`150000` aralığına sıkıştırılır (karar 0038'den önce `5000`–`150000`; eski host `5000`'e yükseltir). Eski istemciler burada `0` (eski `reserved`) gönderir. |
 | display_width_px | u16 | *İsteğe bağlı grup (yoksa 0).* `0` = doğal ekran (HELLO boyutu, HiDPI 2x, bugünkü gibi). `≠0`: host sanal ekranı **HiDPI olmadan (1x)** bu piksel boyutunda kurar; nokta = piksel (karar 0029, "oyun ekranı"). |
 | display_height_px | u16 | |
 | dynamic_range | u8 | *İkinci isteğe bağlı grup (yoksa 0; karar 0032).* `0` SDR, `1` HDR10 (PQ). Diğer değerler: host `0` sayar. |
 | chroma | u8 | *Aynı grupta (eski `reserved`; karar 0033).* `0` normal 4:2:0, `1` keskin renk kenarları (host'ta luma ayarlı 4:2:0, `sharp_nearest`), `2` tam renk (paketlenmiş 4:4:4, karar 0034). Diğer değerler: host `0` sayar. HDR10 uygulanırken yok sayılır. |
+| link | u8 | *Üçüncü isteğe bağlı grup (yoksa 0; karar 0038).* `0` normal, `1` uzak (en az veri profili). Diğer değerler: host `0` sayar. |
+| reserved | u8 | Aynı grupta; `0` gönderilir, okunmaz. |
 
-- Payload 8 bayt (eski istemci; ekran `0×0`), 12 bayt (ekran grubu) ya da en az 14 bayttır (ekran + dinamik aralık grubu). 9–11 ve 13 bayt kısa payload'dur (fixture `invalid_stream_prefs_partial`, `invalid_stream_prefs_hdr_partial`).
-- Gönderen ekran grubunu yalnız iki alandan biri sıfırdan farklıysa ya da dinamik aralık grubu yazılacaksa yazar (o zaman `0×0` olabilir); dinamik aralık grubunu yalnız `dynamic_range ≠ 0` ya da `chroma ≠ 0` ise yazar (`stream_prefs`, `stream_prefs_bitrate` 8 bayt kalır; `stream_prefs_game_display` 12 bayt; `stream_prefs_hdr` 14 bayt).
+- Payload 8 bayt (eski istemci; ekran `0×0`), 12 bayt (ekran grubu), 14 bayt (ekran + dinamik aralık grubu) ya da en az 16 bayttır (+ bağlantı grubu). 9–11, 13 ve 15 bayt kısa payload'dur (fixture `invalid_stream_prefs_partial`, `invalid_stream_prefs_hdr_partial`, `invalid_stream_prefs_link_partial`).
+- Gönderen ekran grubunu yalnız iki alandan biri sıfırdan farklıysa ya da dinamik aralık grubu yazılacaksa yazar (o zaman `0×0` olabilir); dinamik aralık grubunu yalnız `dynamic_range ≠ 0` ya da `chroma ≠ 0` ise ya da bağlantı grubu yazılacaksa yazar; bağlantı grubunu yalnız `link ≠ 0` ise yazar (`stream_prefs`, `stream_prefs_bitrate` 8 bayt kalır; `stream_prefs_game_display` 12 bayt; `stream_prefs_hdr` 14 bayt; `stream_prefs_remote` 16 bayt).
 
 **Host kuralları:**
 - `display_* = 0` iken sanal ekranın boyutu ve nokta ölçüsü (`width_pt`) **değişmez** (HELLO boyutu, HiDPI; Mac'teki düzen aynı kalır). Değişen: yakalama/kodlama boyutu (`scale_permille`), sanal ekranın yenileme hızı ve akış fps'i (`fps`; 144 için sanal ekran 144 Hz), bit hızı (`bitrate_kbps`).
@@ -213,6 +216,7 @@ Kullanıcının görüntü modu tercihi (Faz 5, "performans modu"). İstemci `AC
 - **HDR10 (karar 0032):** istemci `dynamic_range = 1`'i yalnız tabletin ekranı HDR10 bildiriyorsa, HEVC çözücüsü `Main10HDR10` bildiriyorsa ve kullanıcı Oyun modunda HDR'yi açtıysa gönderir. Host isteği uygulayabilirse sanal ekranı HDR aktarım işleviyle (`transferFunction`, yalnız `VirtualDisplay`) kurar, HDR yakalar, HEVC Main10 PQ kodlar ve `STREAM_CONFIG`'te HDR10 kodlarını bildirir. `dynamic_range` değişimi ekran kipi değişimi sayılır (ekran yeniden kurulur, yeni `config_id`). Herhangi bir halka başarısız olursa host SDR'ye döner, SDR kodlarını bildirir ve `ev=hdr_fallback reason=` loglar. Grubu tanımayan eski host 14 baytlık payload'un fazlasını yok sayar ve SDR kalır (§2, uzun payload kuralı); istemci bunu `transfer ≠ 16`'dan anlar.
 - **Keskin renk kenarları (karar 0033):** `chroma = 1` iken host yakalamayı BGRA'ya alır ve kodlamadan önce bir Metal geçişiyle luma ayarlı 4:2:0 üretir (protokol ve istemci çözücüsü değişmez; ~+3 ms yakalama→kodlama). Değişim yeni `config_id` ile bildirilir (ekran yeniden kurulmaz). Host ortam değişkeni `MATEBRIDGE_CHROMA` (geliştirici) bu alandan önce gelir. Uygulanan değer `STREAM_CONFIG`'te bildirilmez; host `ev=chroma_config` loglar.
 - **Tam renk (karar 0034):** istemci `chroma = 2`'yi yalnız Günlük modunda, `fps = 60`, `display_* = 0`, `scale_permille = 1000`, `dynamic_range = 0` iken ve yetenek testini (GPU ham YUV örnekleme, ikinci çözücü) geçtiyse gönderir; diğer durumlarda kullanıcının seçimi `1`'e iner. Host `chroma = 2`'yi bu koşullar tutarsa (aksi halde `1` gibi) uygular: yakalama BGRA, Metal paketleyici iki 4:2:0 görüntü üretir, iki VT oturumu ana ve yardımcıyı kodlar; yardımcının bit hızı tavanı ana hedefin yarısıdır ve `STREAM_CONFIG.bitrate_kbps` yalnız ana akışın hedefidir. Uygulanınca `STREAM_CONFIG.chroma_layout = 1`. Yardımcı kodlama sürekli yetişemezse (ör. başka bir uygulama kodlayıcıyı kullanıyor) ya da hata olursa host yeni `config_id` ile `chroma_layout = 0`'a döner ve `ev=chroma_fallback reason=` loglar; tercih korunur, sonraki ekran kipi değişiminde yeniden denenir. `MATEBRIDGE_CHROMA` (geliştirici) bu alandan önce gelir. Grubu tanımayan ya da `2`'yi bilmeyen eski host normal 4:2:0 kalır (`chroma_layout = 0`); istemci bunu `STREAM_CONFIG`'ten anlar. Hatırlanan tercih ile başlayan oturum, istemcinin bu oturumdaki `STREAM_PREFS`'i gelene kadar `chroma = 2`'yi `1` gibi uygular; `MATEBRIDGE_CHROMA=packed444` de yalnız bit11 + bu oturumda `chroma = 2` iken etkilidir (yoksa keskin yol).
+- **Uzak profil (karar 0038):** `link = 1` bu oturum için geçerlidir (son uygulanan STREAM_PREFS'teki değer; gelene kadar `0`). İstemci uzak oturumda her STREAM_PREFS'te `link = 1`, `fps = 15`, `display_* = 1400×920`, `dynamic_range = 0`, `chroma = 0` ve uzak bit hızını (varsayılan `1000`) gönderir. Host `link = 1` iken: kontrol PING'ini 2 sn'de bir gönderir ve heartbeat kapanışı 15 sn olur (§6); `CURSOR_STATE` canlılık aralığı 2 sn olur (§4 CURSOR_STATE); sabit ekran netleştirme treni bütçesi ve video soketi düşük su işareti hedef bit hızının 250 ms'si kadardır (en az 16 KB); `FILES_NET OPEN` göndermez; bu tercihi cihaz başına hatırlanan tercihe (T-049) **yazmaz** (sonraki normal oturum uzak ayarlarla açılmaz). Bağlantı grubunu tanımayan eski host 16 baytlık payload'un fazlasını yok sayar (§2, uzun payload kuralı).
 - **Bit hızı önceliği:** host ortam değişkeni (`MATEBRIDGE_BITRATE_KBPS`; geliştirici ayarı) > `bitrate_kbps ≠ 0` > modun varsayılanı. Uygulanan değer `STREAM_CONFIG.bitrate_kbps`'te bildirilir.
 - Tercih mevcut ayardan farklıysa host §3 adım 7'deki gibi yeni `config_id` ile `STREAM_CONFIG` gönderir ve video bağlantısını kapatır; istemci yeniden açar. Aynıysa hiçbir şey yapmaz.
 - İstemci tercihi her bağlantıda yeniden gönderir. Host her cihazın (`device_id`) son uygulanan tercihini (bit hızı dahil) hatırlar ve yeni oturumu doğrudan onunla başlatır (T-049): sanal ekranın yenileme hızı değişince ekran yeniden yaratılmak zorunda olduğundan (ScreenCaptureKit yaratılıştaki hızda veriyor), her bağlantıda yeniden yaratma olmasın diye. Aynı tercih arka arkaya gelirse bir kez uygulanır; host saniyede en çok bir yeniden yapılandırma yapar (sonraki tercih bekletilir, en sonuncusu uygulanır).
@@ -329,7 +333,7 @@ Bir imleç şekli (karar 0036). Host yalnız `CURSOR_PREFS(1)` uygulanmışken v
 
 ### 0x0D CURSOR_STATE (H→C, kontrol)
 
-İmlecin o anki durumu (karar 0036). Host `CURSOR_PREFS(1)` uygulanmışken gönderir: konum, görünürlük ya da şekil değişince (en sık ~8 ms'de bir; araya düşen değişiklikler birleşir, en yenisi kazanır) ve değişiklik olmasa da en az **500 ms'de bir**.
+İmlecin o anki durumu (karar 0036). Host `CURSOR_PREFS(1)` uygulanmışken gönderir: konum, görünürlük ya da şekil değişince (en sık ~8 ms'de bir; araya düşen değişiklikler birleşir, en yenisi kazanır) ve değişiklik olmasa da en az **500 ms'de bir** (uzak profilde, STREAM_PREFS `link = 1`, **2 sn'de bir**; karar 0038).
 
 | Alan | Tip | Açıklama |
 |---|---|---|
@@ -342,7 +346,7 @@ Bir imleç şekli (karar 0036). Host yalnız `CURSOR_PREFS(1)` uygulanmışken v
 | host_time_us | u64 | Host monoton saatinde örnekleme anı (yalnız ölçüm; istemci saat farkıyla gecikme hesaplayabilir) |
 
 - İstemci en yeni `seq`'i çizer; daha eski `seq` gelirse yok sayar.
-- **Zaman aşımı:** istemci `CURSOR_PREFS(1)` gönderdikten sonra 1,5 s boyunca hiç `CURSOR_STATE` almazsa (ya da sonradan 1,5 s kesilirse) katmanını gizler ve `CURSOR_PREFS(0)` gönderir: imleç videoya döner, kullanıcı imleçsiz kalmaz. İstemci yeniden denemeyi en erken 10 s sonra yapar.
+- **Zaman aşımı:** (uzak oturumda 1,5 s yerine **5 s**, karar 0038) istemci `CURSOR_PREFS(1)` gönderdikten sonra 1,5 s boyunca hiç `CURSOR_STATE` almazsa (ya da sonradan 1,5 s kesilirse) katmanını gizler ve `CURSOR_PREFS(0)` gönderir: imleç videoya döner, kullanıcı imleçsiz kalmaz. İstemci yeniden denemeyi en erken 10 s sonra yapar.
 - Mod değişiminde (Oyun) istemci önce `CURSOR_PREFS(0)` gönderir; host'un video imlecini geri açması bir sonraki karelerde görünür.
 
 ### 0x10 PEN (C→H)
@@ -549,7 +553,7 @@ PONG (PING'i alan taraf hemen cevaplar):
 
 ### 0x22 STATS (C→H)
 
-İstemci her `interval_ms`'de (varsayılan 1000) bir gönderir. Host ekran üstü göstergeyi ve logları bununla besler.
+İstemci her `interval_ms`'de (varsayılan 1000; uzak oturumda 5000, karar 0038) bir gönderir. Host ekran üstü göstergeyi ve logları bununla besler.
 
 | Alan | Tip | Açıklama |
 |---|---|---|
@@ -578,11 +582,12 @@ Host bir sonraki kareyi (istenen akışta) keyframe olarak kodlar. Art arda gele
 | Alan | Tip | Açıklama |
 |---|---|---|
 | enabled | u8 | `1` ses istiyor, `0` istemiyor. Başka değer: `0` sayılır. |
-| reserved | u8 | |
+| codec | u8 | *Eski `reserved` (karar 0038).* İstenen kodek: `0` PCM, `1` AAC. Diğer değerler: `0` sayılır. İstemci `1`'i yalnız HELLO bit14 `AUDIO_AAC` bildirdiyse yazar. |
 | reserved2 | u16 | |
 
 **Host kuralları:**
 - Ses yalnızca şu koşulların hepsi tutunca başlar: oturum `ACCEPTED` ve şifreli, `HELLO.capabilities` bit8 `AUDIO_PCM`, son `AUDIO_PREFS.enabled = 1`.
+- **Kodek (karar 0038):** host AAC'yi (`format = 2`) yalnız `HELLO.capabilities` bit14 `AUDIO_AAC` ve son `AUDIO_PREFS.codec = 1` iken kullanır; aksi halde PCM. Kodek değişimi akışı yeniden başlatır (yeni `stream_id`). Alanı tanımayan eski host PCM gönderir; istemci PCM'i her zaman çalabilmelidir. Hedef bit hızı 96 kbps.
 - Başlarken host yeni `stream_id` ile `AUDIO_CONFIG(STARTED)` gönderir. Yakalama sürerken Mac'in yerel ses çıkışı susar.
 - `enabled = 0`, `BYE`, kontrol bağlantısının kopması ya da oturumun bitmesi: host yakalamayı **hemen** durdurur (video grace süresi beklenmez). Mac'in yerel sesi geri gelir.
 - Bağlantı hâlâ açıksa `AUDIO_CONFIG(STOPPED)` gönderilir.
@@ -594,7 +599,7 @@ Host bir sonraki kareyi (istenen akışta) keyframe olarak kodlar. Art arda gele
 |---|---|---|
 | stream_id | u16 | Her yeni ses akışında artar (1'den başlar). `AUDIO_FRAME` bununla eşleşir. |
 | state | u8 | `0` STOPPED, `1` STARTED |
-| format | u8 | `1` PCM_S16LE (işaretli 16 bit, little-endian, kanallar iç içe) |
+| format | u8 | `1` PCM_S16LE (işaretli 16 bit, little-endian, kanallar iç içe), `2` AAC_LC (karar 0038: 48 kHz, 2 kanal, `frames_per_packet = 1024`; her `AUDIO_FRAME` tam bir ham AAC erişim birimi taşır, ADTS yok; AudioSpecificConfig `sample_rate` ve `channels`'tan türetilir, telde taşınmaz) |
 | sample_rate | u32 | Hz (`48000`) |
 | channels | u8 | `2` |
 | reserved | u8 | |
@@ -612,12 +617,13 @@ Host bir sonraki kareyi (istenen akışta) keyframe olarak kodlar. Art arda gele
 | seq | u32 | Akışta her pakette 1 artar, 0'dan başlar |
 | sample_index | u64 | Paketin ilk karesinin akıştaki sırası (kare = tüm kanallardan birer örnek). Sıçrama: host o aralığı atmıştır, istemci sessizlikle doldurur. |
 | capture_time_us | u64 | İlk karenin host monoton zamanı, `VIDEO_FRAME.capture_time_us` ile aynı saat (A/V senkronu, §6) |
-| frame_count | u16 | Paketteki kare sayısı, `1`–`960` |
-| data_len | u16 | `data` uzunluğu, bayt. PCM_S16LE stereo için `frame_count × 4`. |
-| data | bytes[data_len] | PCM örnekleri |
+| frame_count | u16 | Paketteki kare sayısı, `1`–`1024` (AAC_LC'de her zaman `1024`) |
+| data_len | u16 | `data` uzunluğu, bayt. PCM_S16LE stereo için `frame_count × 4`; AAC_LC'de erişim biriminin boyu (`1`–`1536`). |
+| data | bytes[data_len] | PCM örnekleri ya da bir AAC erişim birimi |
 
-- Payload `28 + data_len`'den kısaysa ya da `frame_count` 0 veya 960'tan büyükse **protokol hatasıdır** (fixture `invalid_audio_frame_short`).
-- `data_len`, güncel `AUDIO_CONFIG` biçimiyle uyuşmuyorsa (`frame_count × channels × 2`): istemci paketi atar. Protokol hatası değildir.
+- Payload `28 + data_len`'den kısaysa ya da `frame_count` 0 veya 1024'ten büyükse **protokol hatasıdır** (fixture `invalid_audio_frame_short`, `invalid_audio_frame_count`; sınır karar 0038'den önce 960'tı).
+- `data_len`, güncel `AUDIO_CONFIG` biçimiyle uyuşmuyorsa (PCM: `frame_count × channels × 2`; AAC_LC: `frame_count ≠ 1024` ya da `data_len` 0 veya 1536'dan büyük): istemci paketi atar. Protokol hatası değildir.
+- AAC_LC'de `capture_time_us`, erişim birimi çözülünce çıkan 1024 karenin ilkinin yakalama zamanıdır (kodlayıcı gecikmesi, ~2112 kare, host'ta düşülür; A/V senkronu bununla yapılır). `sample_index` yalnız süreklilik ve boşluk içindir: ardışık birimlerde 1024 artar, sıçrama boşluk demektir; PCM karşılığından sabit bir kodlayıcı gecikmesi kadar farklıdır ve işaretsiz kalsın diye bu gecikme düşülmez. İstemci `sample_index`'ten zaman türetmez (T-340).
 - Ses içeriği asla loglanmaz.
 
 ### 0x40 VIDEO_HELLO (C→H, video bağlantısı)
@@ -695,11 +701,12 @@ Gönderen bir kayda en çok `size` bayt koyar; Wi-Fi'da öneri ≤ 16 KiB (§5, 
   - Eski yol: bekleyen kareler atılır ve `frames_dropped` artar. Referans zinciri koptuğu için `KEYFRAME_REQUEST(FRAMES_DROPPED)` gönderilir.
   - Keyframe gelene kadar, gelen keyframe olmayan kareler decoder'a verilmez.
   - İstemci bir istekten sonra 500 ms içinde yeni `FRAMES_DROPPED` isteği göndermez (T-121). `STARTUP` / `DECODE_ERROR` hemen gider.
+  - Keyframe beklerken `STARTUP` yinelemesi 500 ms sonra başlar ve her seferinde aralık iki katına çıkar, en çok **4 sn** (keyframe gelince sıfırlanır; karar 0038). Yavaş hatta yolda olan keyframe'in yeni bir istekle geçersiz kalıp döngüye girmesini önler.
   - Host, yolda olan bir IDR varken gelen `FRAMES_DROPPED` isteklerini birleştirir (T-122). Tel biçimi değişmez.
 - **Paketlenmiş tam renk (karar 0034):** yardımcı akışın kendi sınırlı kuyruğu vardır (ana ile aynı derinlik). Yardımcı kuyruğu taşarsa yalnız yardımcı kareler atılır, `KEYFRAME_REQUEST(view = 1)` gider; bu sırada ana kareler yalnız-ana gösterilir. Ana akışın kuralları yukarıdaki gibidir. Host'ta yardımcı kareler de en çok 2 kare bekler; soket tıkanınca önce yardımcı atılır.
 
 **Ses (karar 0011):**
-- Host: gönderilmeyi bekleyen ses en çok **100 ms** (10 paket). Taşarsa en eski paketler atılır; `sample_index` boşluğu oluşur. Ses paketleri kontrol bağlantısının H→C yönündedir, girdiyi (C→H) bekletmez.
+- Host: gönderilmeyi bekleyen ses en çok **100 ms** (PCM'de 10 paket; sınır bayt değil kare sayısıyla tutulur). Taşarsa en eski paketler atılır; `sample_index` boşluğu oluşur. AAC'de çekirdek gönderim tamponundaki ses yalnız bayt eşiğiyle (~1 KB) sınırlanabilir; küçük (sessize yakın) erişim birimlerinde bu süre 100 ms'yi aşabilir. Üst sınır istemcinin 300 ms titreşim tamponudur (karar 0038, T-340). Ses paketleri kontrol bağlantısının H→C yönündedir, girdiyi (C→H) bekletmez.
 - İstemci: titreşim tamponu en çok **300 ms**. Taşarsa en eski ses atılır (kısa sönümle).
 
 **Dosya bağlantıları (karar 0035):**
@@ -722,9 +729,9 @@ Gönderen bir kayda en çok `size` bayt koyar; Wi-Fi'da öneri ≤ 16 KiB (§5, 
 
 ## 6. Heartbeat ve saat farkı
 
-- İstemci her **500 ms**'de bir `PING` gönderir. Host da aynı aralıkla gönderebilir. Host, etkinleşmiş (ACCEPTED + ilk doğrulanmış kayıt) kontrol bağlantısına 500 ms'de bir PING gönderir; PONG'u yalnız kendi tanı amaçlı saat farkı tahmini için kullanır (girdi yaşı, T-171). Hiçbir davranış buna bağlı değildir.
-- Host kontrol bağlantısından **1.500 ms** boyunca hiçbir mesaj almazsa **release-all** uygular (bağlantıyı kapatmaz). **5.000 ms** olursa bağlantıyı kapatır. Onay beklenirken (PENDING) 5 sn kuralı uygulanmaz, 60 sn onay süresi geçerlidir.
-- İstemci **3.000 ms** boyunca `PONG` alamazsa bağlantıyı kapatıp yeniden bağlanır (§3.3 devralma).
+- İstemci her **500 ms**'de bir `PING` gönderir. **Uzak oturumda** (karar 0038, STREAM_PREFS `link = 1`): herhangi bir girdi tutuluyorken (tuş, düğme, kalem teması/yakınlığı, açık kaydırma ya da yakınlaştırma) ya da son girdi olayından sonraki 2 sn içinde 500 ms, aksi halde **2 sn**. Böylece tutulan girdi varken 1,5 sn release-all yanlış tetiklenmez; boştayken bırakılacak bir şey yoktur. Host da aynı aralıkla gönderebilir. Host, etkinleşmiş (ACCEPTED + ilk doğrulanmış kayıt) kontrol bağlantısına 500 ms'de bir PING gönderir; PONG'u yalnız kendi tanı amaçlı saat farkı tahmini için kullanır (girdi yaşı, T-171). Hiçbir davranış buna bağlı değildir.
+- Host kontrol bağlantısından **1.500 ms** boyunca hiçbir mesaj almazsa **release-all** uygular (bağlantıyı kapatmaz). **5.000 ms** olursa bağlantıyı kapatır (uzak profilde **15.000 ms**; 1.500 ms release-all değişmez; karar 0038). Host uzak profilde kendi PING'ini 2 sn'de bir gönderir. Onay beklenirken (PENDING) 5 sn kuralı uygulanmaz, 60 sn onay süresi geçerlidir.
+- İstemci **3.000 ms** (uzak oturumda **10.000 ms**) boyunca `PONG` alamazsa bağlantıyı kapatıp yeniden bağlanır (§3.3 devralma).
 - Saat farkı tahmini (istemci):
   - `rtt = now − echo_time_us`
   - `offset = responder_time_us − (echo_time_us + rtt/2)`, en düşük `rtt`'li son örneklerle
@@ -785,12 +792,12 @@ Swift ve Kotlin testleri:
 3. `unknown_type`'ın atlandığını ve akışın devam ettiğini doğrular.
 
 **Fixture listesi:**
-- Oturum: `hello`, `hello_utf8_name`, `invalid_str8_utf8`, `hello_ack`, `hello_ack_pending`, `hello_ack_busy`, `stream_config`, `stream_config_game_display`, `stream_config_hdr10`, `stream_config_packed444`, `bye`, `stream_prefs`, `stream_prefs_bitrate`, `stream_prefs_game_display`, `stream_prefs_hdr`, `stream_prefs_sharp_chroma`, `stream_prefs_full_chroma`, `invalid_stream_prefs_partial`, `invalid_stream_prefs_hdr_partial`, `clipboard_text`, `clipboard_empty`, `display_rate`, `settings_open`
+- Oturum: `hello`, `hello_utf8_name`, `invalid_str8_utf8`, `hello_ack`, `hello_ack_pending`, `hello_ack_busy`, `stream_config`, `stream_config_game_display`, `stream_config_hdr10`, `stream_config_packed444`, `bye`, `stream_prefs`, `stream_prefs_bitrate`, `stream_prefs_game_display`, `stream_prefs_hdr`, `stream_prefs_sharp_chroma`, `stream_prefs_full_chroma`, `stream_prefs_remote`, `invalid_stream_prefs_partial`, `invalid_stream_prefs_hdr_partial`, `invalid_stream_prefs_link_partial`, `clipboard_text`, `clipboard_empty`, `display_rate`, `settings_open`
 - Kalem: `pen_hover_to_contact`, `pen_leave`, `pen_eraser`, `pen_extremes`, `invalid_pen_count_zero`, `pen_gesture`
 - Klavye: `key_down`, `key_up_caps`, `key_no_scan`, `invalid_key_short`
 - İşaretçi ve kaydırma: `pointer_rel`, `pointer_abs`, `scroll_began`, `scroll`, `scroll_ended`, `pinch_began`, `pinch`, `pinch_ended`
 - Bakım: `release_all`, `ping`, `pong`, `stats`, `keyframe_request`, `keyframe_request_view`
-- Ses: `audio_prefs`, `audio_config`, `audio_config_stopped`, `audio_frame`, `invalid_audio_frame_short`
+- Ses: `audio_prefs`, `audio_prefs_aac`, `audio_config`, `audio_config_aac`, `audio_config_stopped`, `audio_frame`, `audio_frame_aac`, `invalid_audio_frame_short`, `invalid_audio_frame_count`
 - Video: `video_hello`, `video_frame`, `video_frame_config`, `video_frame_aux`, `video_frame_aux_config`
 - İmleç: `cursor_prefs_on`, `cursor_prefs_off`, `cursor_shape`, `invalid_cursor_shape_short`, `cursor_state`, `cursor_state_hidden`
 - Dosya: `files_info_ready`, `files_info_off`, `files_info_standby`, `files_net_open`, `files_net_close`, `files_hello`, `files_hello_ack`, `files_hello_ack_rejected`, `files_data`, `invalid_files_hello_short`, `invalid_files_data_empty`

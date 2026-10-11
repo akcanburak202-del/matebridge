@@ -121,6 +121,7 @@ class FrameQueue(
     /** Tests only (T-219 barrier): runs in [awaitNext] on the consumer's thread right before each park. */
     @Volatile internal var parkHook: (() -> Unit)? = null
     private var waitingKeyframe = true
+    private val retryBackoff = KeyframeRetryBackoff() // decision 0038 section 7
     private var lastConfig: VideoFrame? = null
 
     private var limit = maxPending.coerceAtLeast(1)
@@ -188,6 +189,7 @@ class FrameQueue(
                     tr?.onRxAction(frame.frameSeq, nowNs, PaceTrace.RX_QUEUED)
                     queue.addLast(frame)
                     waitingKeyframe = false
+                    retryBackoff.reset() // decision 0038: a keyframe ends the STARTUP repeat backoff
                     heldRequest = false // the keyframe answers it
                     sinceKeyframe = 0
                     notePending()
@@ -433,8 +435,13 @@ class FrameQueue(
         synchronized(lock) {
             val now = clockNs()
             if (!waitingKeyframe || !mayRequest(now)) return false
+            // Decision 0038 section 7: the repeat waits 500, 1000, 2000, then 4000 ms after the previous request.
+            if (hasRequested && now - lastRequestNs < retryBackoff.delayMs * 1_000_000) return false
             heldRequest = false
-            recordRequest(now)
+            val used = retryBackoff.delayMs
+            recordRequest(now) // resets the backoff: any other request starts it over ...
+            retryBackoff.restore(used)
+            retryBackoff.onRepeat() // ... but a repeat continues the sequence
         }
         onRequest?.invoke(KeyframeRequest.STARTUP, Source.RETRY)
         return true
@@ -466,6 +473,7 @@ class FrameQueue(
     private fun mayRequest(nowNs: Long) = !hasRequested || nowNs - lastRequestNs >= HOLDOFF_MS * 1_000_000
 
     private fun recordRequest(nowNs: Long) {
+        retryBackoff.reset()
         hasRequested = true
         lastRequestNs = nowNs
         kfRequests++

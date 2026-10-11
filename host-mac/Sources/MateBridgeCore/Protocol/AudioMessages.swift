@@ -14,25 +14,44 @@ public struct AudioFormat: OpenCode {
     public init(rawValue: UInt8) { self.rawValue = rawValue }
     /// Signed 16-bit little-endian PCM, channels interleaved.
     public static let pcmS16LE = AudioFormat(rawValue: 1)
+    /// AAC-LC, 48 kHz stereo, 1024-frame raw access units, no ADTS (decision 0038). The AAC encoder is T-340.
+    public static let aacLC = AudioFormat(rawValue: 2)
+}
+
+/// `AUDIO_PREFS.codec` as the host reads it (decision 0038): unknown values are PCM.
+public enum AudioCodecPreference: UInt8, Equatable, Sendable {
+    case pcm = 0
+    case aac = 1
+
+    public init(wire: UInt8) { self = AudioCodecPreference(rawValue: wire) ?? .pcm }
 }
 
 /// `AUDIO_PREFS` (C->H, 0x30): whether the client wants audio.
 public struct AudioPrefs: Equatable, Sendable {
     public var enabled: Bool
+    /// The raw `codec` byte (the former `reserved`; decision 0038): 0 PCM, 1 AAC, anything else counts as 0 (`codec`).
+    public var codecWire: UInt8
 
-    public init(enabled: Bool) { self.enabled = enabled }
+    public init(enabled: Bool, codecWire: UInt8 = 0) {
+        self.enabled = enabled
+        self.codecWire = codecWire
+    }
+
+    /// The codec the client asks for (unknown values are PCM). The host still plays AAC only with HELLO bit14.
+    public var codec: AudioCodecPreference { AudioCodecPreference(wire: codecWire) }
 
     func write(_ w: inout ByteWriter) {
         w.u8(enabled ? 1 : 0)
-        w.u8(0)
+        w.u8(codecWire)
         w.u16(0)
     }
 
     /// Any value other than 1 counts as 0 (PROTOCOL.md 0x30).
     static func read(_ r: inout ByteReader) throws -> AudioPrefs {
         let enabled = try r.u8()
-        try r.skip(3)
-        return AudioPrefs(enabled: enabled == 1)
+        let codec = try r.u8()
+        try r.skip(2)
+        return AudioPrefs(enabled: enabled == 1, codecWire: codec)
     }
 }
 
@@ -97,7 +116,7 @@ public struct AudioFrame: Equatable, Sendable {
     public var sampleIndex: UInt64
     /// Host monotonic time of the first frame, same clock as `VIDEO_FRAME.capture_time_us`.
     public var captureTimeUs: UInt64
-    /// Frames in this packet, 1...960.
+    /// Frames in this packet, 1...1024 (always 1024 for AAC_LC).
     public var frameCount: UInt16
     /// PCM samples. Never log.
     public var data: [UInt8]
@@ -123,7 +142,7 @@ public struct AudioFrame: Equatable, Sendable {
         w.raw(data)
     }
 
-    /// `frame_count` outside 1...960 or a payload shorter than the fixed part + `data_len` is a protocol error.
+    /// `frame_count` outside 1...1024 or a payload shorter than the fixed part + `data_len` is a protocol error.
     /// Trailing bytes are future fields and ignored.
     static func read(_ r: inout ByteReader) throws -> AudioFrame {
         let streamID = try r.u16()

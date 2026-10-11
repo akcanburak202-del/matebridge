@@ -15,8 +15,8 @@ final class LiveBitrateTests: XCTestCase {
 
     func testDefaultRangeIsTheUserBitrateRange() {
         var r = BitrateRequest(initialKbps: 60_000)
-        XCTAssertEqual(r.range, 5_000...150_000)
-        XCTAssertEqual(r.request(1_000), .apply(5_000))
+        XCTAssertEqual(r.range, 500...150_000)
+        XCTAssertEqual(r.request(100), .apply(500))
         XCTAssertEqual(r.request(500_000), .apply(150_000))
     }
 

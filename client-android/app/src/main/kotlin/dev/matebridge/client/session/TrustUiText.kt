@@ -209,6 +209,11 @@ enum class ConnectOrigin(val logName: String, val userInitiated: Boolean, val au
     AUTO_SWITCH("auto_switch", userInitiated = false, automatic = true, clearsGate = false),
     /** T-134 direct wake attempt. */
     WAKE("wake", userInitiated = false, automatic = true, clearsGate = false),
+    /**
+     * T-339 (decision 0038): "Uzaktan bağlan". The user's tap, but never a pairing start (a new pairing is refused over the
+     * remote path): not user-initiated, not automatic (the address is the user's choice), and no gate is touched.
+     */
+    REMOTE("remote", userInitiated = false, automatic = false, clearsGate = false),
     ;
 
     companion object {

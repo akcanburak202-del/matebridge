@@ -45,7 +45,7 @@ final class HDRTests: XCTestCase {
     }
 
     func testLongerPayloadIsAcceptedAndTheTailIgnored() throws {
-        let payload: [UInt8] = [0x78, 0, 0x94, 0x02, 0, 0, 0, 0, 0x38, 0x07, 0xbe, 0x04, 1, 0, 0xAA, 0xBB, 0xCC]
+        let payload: [UInt8] = [0x78, 0, 0x94, 0x02, 0, 0, 0, 0, 0x38, 0x07, 0xbe, 0x04, 1, 0, 0, 0, 0xAA, 0xBB, 0xCC]  // 14 + link group + tail
         XCTAssertEqual(try decode(frame(payload)), .streamPrefs(prefs(w: 1848, h: 1214, dr: 1)))
     }
 

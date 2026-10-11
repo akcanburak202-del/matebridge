@@ -19,6 +19,7 @@ public final class VideoLink: @unchecked Sendable {
     public let configID: UInt16
     /// Owns this connection's sealer: one sealer per connection key, never a copy (two would reuse nonces).
     private let transport: SocketVideoTransport
+    private let socket: BsdTcpConnection
     private let logger: SessionLogger
     /// Kernel send-queue sampling (T-088), only with `MATEBRIDGE_SENDQ_LOG=1` or `MATEBRIDGE_LAT_TRACE=1`.
     private let sendQueue: SendQueueSampler?
@@ -29,6 +30,7 @@ public final class VideoLink: @unchecked Sendable {
     fileprivate init(sessionID: UInt32, configID: UInt16, socket: BsdTcpConnection, logger: SessionLogger,
                      sealer: RecordSealer, sampleSendQueue: Bool) {
         self.sendQueue = sampleSendQueue ? SendQueueSampler(socket: socket) : nil
+        self.socket = socket
         self.logger = logger
         self.sessionID = sessionID
         self.configID = configID
@@ -36,6 +38,10 @@ public final class VideoLink: @unchecked Sendable {
     }
 
     public var canSend: Bool { transport.canSend }
+
+    /// `TCP_NOTSENT_LOWAT` of this video connection (decision 0038, remote profile). False when the socket is gone.
+    @discardableResult
+    func setNotSentLowat(bytes: Int) -> Bool { socket.setNotSentLowat(bytes) }
 
     /// Encodes and sends one frame. Returns false (nothing sent) while the link cannot take a frame (see above)
     /// or when the frame is not a valid single-fragment VIDEO_FRAME within the 16 MiB payload limit
@@ -258,11 +264,15 @@ public final class SessionServer: @unchecked Sendable {
     private var restartAttempts = 0
     private var restartScheduled = false
     private var inflightBytes: [ConnectionID: Int] = [:]
+    /// AUDIO_FRAME sample frames queued in user space per control connection (not yet handed to the kernel).
+    private var audioInflightFrames: [ConnectionID: Int] = [:]
     private var videoBuffers: [ConnectionID: [UInt8]] = [:]
     private var videoHelloSeen: Set<ConnectionID> = []
     /// Video connections whose VIDEO_HELLO passed and that now owe one authenticated PING (PROTOCOL.md 3.5).
     private var videoProofDecoders: [ConnectionID: RecordDecoder] = [:]
     private var videoLinks: [ConnectionID: VideoLink] = [:]
+    /// Decision 0038: the active session's last `STREAM_PREFS` has `link = 1`. Session queue; false until one arrives.
+    private var sessionRemote = false
     /// `bitrate_kbps` of the last `STREAM_CONFIG` sent on each control connection (T-268), reported when it becomes active.
     private var streamBitrates: [ConnectionID: UInt32] = [:]
     private let flushGroup = DispatchGroup()
@@ -272,7 +282,8 @@ public final class SessionServer: @unchecked Sendable {
 
     static let maxInflightBytes = 256 * 1024
     /// Sealed size of one 10 ms AUDIO_FRAME: record length (4) + type and tag (17) + fixed part (28) + 1920 PCM bytes.
-    static let sealedAudioFrameBytes = 4 + ProtocolConstants.recordOverhead + AudioFrame.fixedSize
+    static let sealedAudioFrameFramingBytes = 4 + ProtocolConstants.recordOverhead + AudioFrame.fixedSize
+    static let sealedAudioFrameBytes = sealedAudioFrameFramingBytes
         + Int(AudioStreamPolicy.framesPerPacket) * Int(AudioStreamPolicy.channels) * 2
     /// 100 ms of audio (PROTOCOL.md 5), about 19.2 KiB. An AUDIO_FRAME that would take the unsent control bytes above
     /// this is dropped: audio never pushes the connection to `maxInflightBytes` or queues far behind other sends.
@@ -785,19 +796,32 @@ public final class SessionServer: @unchecked Sendable {
             if case .audioConfig = item.message { closeAudioTimingWindow() }  // stream boundary, sent or not
             guard !stopped, item.sessionID != 0, item.sessionID == currentSessionID, let id = activeControl,
                   sealers[id] != nil else { continue }
+            if case .audioConfig(let config) = item.message, config.state == .started {
+                // Only for the live session (checked above): the kernel's unsent mark follows the codec.
+                controlConnections[id]?.setNotSentLowat(AudioOutbox.notSentLowatBytes(
+                    for: config, framingBytes: Self.sealedAudioFrameFramingBytes))
+            }
             guard case .audioFrame(let frame) = item.message else {
                 sendControl(id, item.message)
                 continue
             }
             let size = 4 + ProtocolConstants.recordOverhead + AudioFrame.fixedSize + frame.data.count
+            // User-space queue: bounded in audio time (sample frames still unsent, 100 ms), with the byte limit as a
+            // backstop. Bytes alone cannot bound AAC time: unit sizes vary.
+            let frames = Int(frame.frameCount)
             guard !AudioOutbox.isStale(frame, nowUs: now),
+                  audioInflightFrames[id, default: 0] + frames <= AudioOutbox.maxPendingSampleFrames,
                   inflightBytes[id, default: 0] + size <= Self.audioBacklogBytes,
                   !kernelAudioBacklog(id) else {
                 audioWireDrops.add(1, ordering: .relaxed)
                 continue
             }
+            audioInflightFrames[id, default: 0] += frames
             let writeStart = nowUs()
-            sendControl(id, item.message)
+            sendControl(id, item.message) { [weak self] in  // on `queue`, once handed to the kernel (or refused)
+                guard let self, let n = audioInflightFrames[id] else { return }
+                audioInflightFrames[id] = max(0, n - frames)
+            }
             let writeEnd = nowUs()
             recordAudioWrite(id, frame: frame, queueLagUs: now > item.pushedUs ? now - item.pushedUs : 0,
                              writeStart: writeStart, writeEnd: writeEnd)
@@ -842,12 +866,39 @@ public final class SessionServer: @unchecked Sendable {
     /// the cursor is sampled: `CURSOR_PREFS` goes to the cursor flow, a message that moves the cursor makes it sample.
     private func routeCursor(_ message: Message) {
         switch message {
+        case .streamPrefs(let prefs):
+            linkChanged(remote: prefs.isRemote)
         case .cursorPrefs(let prefs):
             cursor.prefs(sessionID: currentSessionID, enabled: prefs.enabled)
         case .pen, .pointerRel, .pointerAbs, .scroll, .pinch, .penGesture:
             cursor.noteInjected()
         default: break
         }
+    }
+
+    /// Decision 0038: the session's `link` (the last applied `STREAM_PREFS`). The machine has set the heartbeat timings
+    /// already; here the cursor keep-alive and the video sockets' low-water mark follow. The files bridge learns it from
+    /// the same delivered message.
+    private func linkChanged(remote: Bool) {
+        sessionRemote = remote
+        cursor.link(sessionID: currentSessionID, remote: remote)
+        applyVideoLowat()
+    }
+
+    /// `TCP_NOTSENT_LOWAT` of the active session's video connections: the normal knob value, or while remote the
+    /// target bit rate's 250 ms (at least 16 KB). `MATEBRIDGE_NOTSENT_LOWAT_KB`, when set, wins (developer override).
+    private func applyVideoLowat() {
+        let bytes = videoLowatBytes()
+        for link in videoLinks.values where link.sessionID == currentSessionID && currentSessionID != 0 {
+            link.setNotSentLowat(bytes: bytes)
+        }
+    }
+
+    private func videoLowatBytes() -> Int {
+        let normal = Self.videoNotSentLowatKB * 1024
+        guard sessionRemote, ProcessInfo.processInfo.environment["MATEBRIDGE_NOTSENT_LOWAT_KB"] == nil else { return normal }
+        let kbps = activeControl.flatMap { streamBitrates[$0] } ?? 0
+        return RemoteLinkProfile.bytes(bitrateKbps: Int(kbps))
     }
 
     /// AUDIO_PREFS handling: the machine has already seen the message (heartbeat). It reaches the audio streamer only
@@ -1126,7 +1177,12 @@ public final class SessionServer: @unchecked Sendable {
         })
         controlConnections[id] = connection
         inbounds[id] = ControlInbound()
-        apply(machine.connectionOpened(id, now: nowUs()))
+        // Decision 0038 section 5: classified once, here, from the peer address (never from anything the client says).
+        // Interfaces are read per connection so a network change is seen. Not logged: only the verdict is used.
+        let locality = PeerClassifier.classify(
+            peerHost: NetworkInterfaces.peerText(host: connection.peerHost, scopeID: connection.peerScopeID),
+            interfaces: NetworkInterfaces.localInterfaces())
+        apply(machine.connectionOpened(id, now: nowUs(), peer: locality))
     }
 
     /// Control connection input: plain frames until the handshake answer went out, encrypted records afterwards.
@@ -1256,6 +1312,7 @@ public final class SessionServer: @unchecked Sendable {
     private func dropControlState(_ id: ConnectionID) {
         tcpInfoSamplers[id] = nil
         inflightBytes[id] = nil
+        audioInflightFrames[id] = nil
         inbounds[id] = nil
         sealers[id] = nil
         streamBitrates[id] = nil
@@ -1366,7 +1423,10 @@ public final class SessionServer: @unchecked Sendable {
             case .send(let id, let message):
                 if case .streamConfig(let config) = message {
                     streamBitrates[id] = config.bitrateKbps
-                    if id == activeControl { handlers.streamBitrate(config.bitrateKbps) }
+                    if id == activeControl {
+                        handlers.streamBitrate(config.bitrateKbps)
+                        if sessionRemote { applyVideoLowat() }  // the mark follows the target bit rate
+                    }
                 }
                 sendControl(id, message)
             case .startEncryption(let id, let keys):
@@ -1456,6 +1516,7 @@ public final class SessionServer: @unchecked Sendable {
                 activeControl = id
                 currentSessionID = sid
                 currentConfigID = configID
+                sessionRemote = false  // normal timings until the session's first STREAM_PREFS (decision 0038)
                 startTcpInfoSampling(id, role: .control)
                 if let kbps = streamBitrates[id] { handlers.streamBitrate(kbps) }
                 cursor.sessionStarted(sessionID: sid, supported: hello.capabilities.contains(.localCursor))
@@ -1465,6 +1526,7 @@ public final class SessionServer: @unchecked Sendable {
                 tcpInfoSamplers[id] = nil
                 currentSessionID = 0
                 currentConfigID = 0
+                sessionRemote = false
                 cursor.sessionEnded()  // the cursor goes back into the video
                 handlers.sessionEnded()
             case .videoAttached(let vid, _, let sid, let configID, let keys):
@@ -1473,6 +1535,7 @@ public final class SessionServer: @unchecked Sendable {
                     let link = VideoLink(sessionID: sid, configID: configID, socket: socket, logger: logger,
                                          sealer: sealer, sampleSendQueue: Self.sampleSendQueue)
                     videoLinks[vid] = link
+                    if sessionRemote { link.setNotSentLowat(bytes: videoLowatBytes()) }
                     startTcpInfoSampling(vid, role: .video)
                     handlers.videoAttached(link)
                 }

@@ -22,6 +22,9 @@ class SettingsCatalogTest {
         val calls = ArrayList<String>()
         override var transportMode = TransportMode.AUTO
         override fun selectTransport(m: TransportMode) { calls += "transport ${m.id}"; transportMode = m }
+        override var remoteSession = false
+        override var remoteBitrateKbps = 1000L
+        override fun selectRemoteBitrate(kbps: Long) { calls += "remote_bitrate $kbps"; remoteBitrateKbps = kbps }
         override fun disconnect() { calls += "disconnect" }
         override val forgetHostLabel = "Bu Mac'i unut"
         override fun forgetHost() { calls += "forget" }
@@ -90,6 +93,38 @@ class SettingsCatalogTest {
 
     private fun choice(s: List<SettingsSection>, key: String) = item(s, key) as SettingItem.Choice
 
+    /** T-339 (decision 0038): a remote session replaces the display rows by the remote profile; the normal rows come back after it. */
+    @Test fun remoteSessionShowsTheRemoteProfileInsteadOfTheDisplayRows() {
+        val s = SettingsCatalog.sections(h, inStream = true)
+        fun hidden(key: String) = when (val i = item(s, key)) {
+            is SettingItem.Choice -> i.hidden()
+            is SettingItem.Info -> i.hidden()
+            else -> error(key)
+        }
+        val displayRows = listOf("stream_mode", "frame_rate", "game_resolution", "bitrate", "hdr", "hdr_applied", "colour", "cursor")
+        val remoteRows = listOf("remote_mode", "remote_profile", "remote_bitrate", "files_remote")
+        h.remoteSession = false
+        displayRows.filter { it != "hdr_applied" }.forEach { assertFalse(it, hidden(it)) }
+        remoteRows.forEach { assertTrue(it, hidden(it)) }
+        h.remoteSession = true
+        displayRows.forEach { assertTrue(it, hidden(it)) }
+        remoteRows.forEach { assertFalse(it, hidden(it)) }
+        assertEquals("Görüntü modu: Uzak (Tasarruf)", (item(s, "remote_mode") as SettingItem.Info).text())
+        val rb = choice(s, "remote_bitrate")
+        assertEquals(listOf("500", "1000", "2000"), rb.options.map { it.id })
+        assertEquals(listOf("0,5 Mbps", "1 Mbps", "2 Mbps"), rb.options.map { it.label })
+        assertEquals("1000", rb.selected())
+        rb.select("500")
+        assertEquals(listOf("remote_bitrate 500"), h.calls.takeLast(1))
+        assertEquals("500", rb.selected())
+        rb.select("12345") // not an option: the default, never an arbitrary value
+        assertEquals(1000L, h.remoteBitrateKbps)
+        val audio = item(s, "audio") as SettingItem.Toggle
+        assertTrue(audio.text().startsWith("Ses (uzak oturum)"))
+        h.remoteSession = false
+        assertTrue(audio.text().startsWith("Ses:"))
+    }
+
     @Test fun sectionsInOrder() {
         assertEquals(listOf("Bağlantı", "Görüntü", "Ses", "Girdi", "Tablet dosyaları", "Diğer"), SettingsCatalog.sections(h, inStream = true).map { it.title })
         assertEquals(listOf("Bağlantı", "Görüntü", "Ses", "Girdi", "Tablet dosyaları", "Diğer"), SettingsCatalog.sections(h, inStream = false).map { it.title })
@@ -101,8 +136,8 @@ class SettingsCatalogTest {
         assertEquals(side - setOf("disconnect", "bitrate_applied", "hdr_applied", "colour_applied"), connect)
         assertEquals(
             listOf(
-                "transport", "disconnect", "forget_host", "stream_mode", "frame_rate", "game_resolution", "bitrate", "bitrate_applied", "hdr", "hdr_applied", "colour", "colour_note", "colour_applied", "idle_dim", "cursor", "audio", "audio_out",
-                "touchpad_speed", "mouse_speed", "finger_off", "pen_trail", "pen_dot", "files", "files_root", "files_ro", "files_status",
+                "transport", "disconnect", "forget_host", "remote_mode", "remote_profile", "remote_bitrate", "stream_mode", "frame_rate", "game_resolution", "bitrate", "bitrate_applied", "hdr", "hdr_applied", "colour", "colour_note", "colour_applied", "idle_dim", "cursor", "audio", "audio_out",
+                "touchpad_speed", "mouse_speed", "finger_off", "pen_trail", "pen_dot", "files", "files_root", "files_ro", "files_status", "files_remote",
                 "clipboard", "stats", "reset_defaults", "reset_hint", "shortcuts", "version",
             ),
             side,
@@ -400,7 +435,7 @@ class SettingsCatalogTest {
         h.streamMode = StreamMode.DRAWING
         assertEquals("Kare hızı (Çizim: hep 120)", c.titleText())
         // no other row is hidden in Çizim except HDR (T-238/T-280: hidden only in Çizim)
-        for (it in s.flatMap { it.items }.filterIsInstance<SettingItem.Choice>().filter { it.key != "frame_rate" && it.key != "hdr" }) assertFalse(it.key, it.hidden())
+        for (it in s.flatMap { it.items }.filterIsInstance<SettingItem.Choice>().filter { it.key != "frame_rate" && it.key != "hdr" && it.key != "remote_bitrate" }) assertFalse(it.key, it.hidden())
         c.select("60") // the host ignores it in Çizim
         assertEquals("120", c.selected())
     }
@@ -493,7 +528,7 @@ class SettingsCatalogTest {
 
     @Test fun filesSectionTogglesAndShowsStatus() {
         val s = SettingsCatalog.sections(h, inStream = true)
-        assertEquals(listOf("files", "files_root", "files_ro", "files_status"), s.single { it.title == "Tablet dosyaları" }.items.map { it.key })
+        assertEquals(listOf("files", "files_root", "files_ro", "files_status", "files_remote"), s.single { it.title == "Tablet dosyaları" }.items.map { it.key })
         val t = item(s, "files") as SettingItem.Toggle
         assertEquals("Tablet dosyalarını Mac'te göster: kapalı", t.text())
         t.set(!t.get())

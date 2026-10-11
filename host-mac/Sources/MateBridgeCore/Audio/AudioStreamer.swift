@@ -43,11 +43,13 @@ struct AudioControlInbox: Equatable, Sendable {
         var generation: UInt64
         var sessionID: UInt32
         var clientSupportsAudio: Bool
+        var clientSupportsAAC: Bool
     }
 
     struct PrefsWish: Equatable, Sendable {
         var sessionID: UInt32
         var enabled: Bool
+        var codec: AudioCodecPreference = .pcm
         /// A disable was coalesced away: it is applied before a final enable (an off/on retries a failed capture).
         var sawDisable: Bool
     }
@@ -63,9 +65,10 @@ struct AudioControlInbox: Equatable, Sendable {
     private var reconcileQueued = false
 
     /// Each mutation returns true when the caller must enqueue the (single) reconcile pass.
-    mutating func sessionStarted(sessionID: UInt32, clientSupportsAudio: Bool) -> Bool {
+    mutating func sessionStarted(sessionID: UInt32, clientSupportsAudio: Bool, clientSupportsAAC: Bool = false) -> Bool {
         generation &+= 1
-        session = SessionWish(generation: generation, sessionID: sessionID, clientSupportsAudio: clientSupportsAudio)
+        session = SessionWish(generation: generation, sessionID: sessionID, clientSupportsAudio: clientSupportsAudio,
+                              clientSupportsAAC: clientSupportsAAC)
         prefs = nil
         return queueReconcile()
     }
@@ -76,9 +79,9 @@ struct AudioControlInbox: Equatable, Sendable {
         return queueReconcile()
     }
 
-    mutating func prefs(sessionID: UInt32, enabled: Bool) -> Bool {
+    mutating func prefs(sessionID: UInt32, enabled: Bool, codec: AudioCodecPreference = .pcm) -> Bool {
         let saw = (prefs?.sessionID == sessionID ? prefs?.sawDisable ?? false : false) || !enabled
-        prefs = PrefsWish(sessionID: sessionID, enabled: enabled, sawDisable: saw)
+        prefs = PrefsWish(sessionID: sessionID, enabled: enabled, codec: codec, sawDisable: saw)
         return queueReconcile()
     }
 
@@ -114,6 +117,8 @@ public final class AudioStreamer: @unchecked Sendable {
         public var statsIntervalUs: UInt64 = 1_000_000
         /// Overrides the policy's rebuild retry delay (tests). nil: the policy's delay.
         public var retryDelay: DispatchTimeInterval?
+        /// Creates the AAC encoder of a stream (decision 0038); throwing makes the stream fall back to PCM.
+        public var makeConverter: @Sendable () throws -> AACConverting = { try AudioToolboxAACConverter() }
         public init() {}
     }
 
@@ -140,6 +145,8 @@ public final class AudioStreamer: @unchecked Sendable {
         var seq: UInt32 = 0
         /// T-279: skips all-zero packets after 500 ms of them. Per stream, so a new stream starts open.
         var gate = AudioSilenceGate()
+        /// AAC streams only: PCM packets in, access units out (on this queue, never in the IOProc).
+        var aac: AACStage?
         /// STARTED sent: frames may flow.
         var live = false
     }
@@ -180,12 +187,17 @@ public final class AudioStreamer: @unchecked Sendable {
 
     // MARK: Session events (any thread)
 
-    public func sessionStarted(sessionID: UInt32, clientSupportsAudio: Bool) {
-        update { $0.sessionStarted(sessionID: sessionID, clientSupportsAudio: clientSupportsAudio) }
+    /// `clientSupportsAAC`: HELLO bit14 `AUDIO_AAC`.
+    public func sessionStarted(sessionID: UInt32, clientSupportsAudio: Bool, clientSupportsAAC: Bool = false) {
+        update {
+            $0.sessionStarted(sessionID: sessionID, clientSupportsAudio: clientSupportsAudio,
+                              clientSupportsAAC: clientSupportsAAC)
+        }
     }
 
-    public func prefs(sessionID: UInt32, enabled: Bool) {
-        update { $0.prefs(sessionID: sessionID, enabled: enabled) }
+    /// `codec`: `AUDIO_PREFS.codec`; a change restarts the stream under a new `stream_id`.
+    public func prefs(sessionID: UInt32, enabled: Bool, codec: AudioCodecPreference = .pcm) {
+        update { $0.prefs(sessionID: sessionID, enabled: enabled, codec: codec) }
     }
 
     public func sessionEnded() {
@@ -225,12 +237,13 @@ public final class AudioStreamer: @unchecked Sendable {
             appliedGeneration = wish.session?.generation
             if let s = wish.session {
                 logSessionID = s.sessionID
-                perform(policy.sessionStarted(sessionID: s.sessionID, clientSupportsAudio: s.clientSupportsAudio))
+                perform(policy.sessionStarted(sessionID: s.sessionID, clientSupportsAudio: s.clientSupportsAudio,
+                                              clientSupportsAAC: s.clientSupportsAAC))
             }
         }
         if let p = wish.prefs {
             if p.sawDisable, p.enabled { perform(policy.prefs(sessionID: p.sessionID, enabled: false)) }
-            perform(policy.prefs(sessionID: p.sessionID, enabled: p.enabled))
+            perform(policy.prefs(sessionID: p.sessionID, enabled: p.enabled, codec: p.codec))
         }
     }
 
@@ -252,6 +265,15 @@ public final class AudioStreamer: @unchecked Sendable {
                 let packetizer = AudioPacketizer(ring: AudioPacketRing(
                     capacity: options.ringCapacity, framesPerPacket: Int(AudioStreamPolicy.framesPerPacket)))
                 stream = Stream(id: id, sessionID: policy.sessionID ?? 0, packetizer: packetizer)
+                if policy.activeCodec == .aac {
+                    do {
+                        stream?.aac = AACStage(converter: try options.makeConverter())
+                    } catch {
+                        // No encoder: this stream (and the rest of the process) is PCM; nothing was started yet.
+                        perform(policy.aacEncoderFailed(streamID: id, reason: "encoder_create"))
+                        continue
+                    }
+                }
                 backend.start(streamID: id, packetizer: packetizer) { [weak self] event in
                     guard let self else { return }
                     queue.async { self.handle(event) }
@@ -326,11 +348,29 @@ public final class AudioStreamer: @unchecked Sendable {
                 continue
             }
             let offsetUs = UInt64(meta.hostOffsetFrames) * 1_000_000 / UInt64(AudioStreamPolicy.sampleRate)
-            let frame = AudioFrame(streamID: s.id, seq: s.seq, sampleIndex: meta.sampleIndex,
-                                   captureTimeUs: clock.hostTicksToUs(meta.hostTime) &+ offsetUs,
-                                   frameCount: UInt16(meta.frameCount), data: packet.data)
-            s.seq &+= 1
-            sink.sendAudio(sessionID: s.sessionID, .audioFrame(frame))
+            let timeUs = clock.hostTicksToUs(meta.hostTime) &+ offsetUs
+            if let aac = s.aac {
+                let units: [AACUnit]
+                do {
+                    units = try aac.feed(pcm: packet.data, sampleIndex: meta.sampleIndex, captureTimeUs: timeUs)
+                } catch {
+                    stream?.seq = s.seq
+                    perform(policy.aacEncoderFailed(streamID: s.id, reason: "encode"))
+                    return
+                }
+                for unit in units {
+                    let frame = AudioFrame(streamID: s.id, seq: s.seq, sampleIndex: unit.sampleIndex,
+                                           captureTimeUs: unit.captureTimeUs,
+                                           frameCount: AudioStreamPolicy.aacFramesPerPacket, data: unit.data)
+                    s.seq &+= 1
+                    sink.sendAudio(sessionID: s.sessionID, .audioFrame(frame))
+                }
+            } else {
+                let frame = AudioFrame(streamID: s.id, seq: s.seq, sampleIndex: meta.sampleIndex,
+                                       captureTimeUs: timeUs, frameCount: UInt16(meta.frameCount), data: packet.data)
+                s.seq &+= 1
+                sink.sendAudio(sessionID: s.sessionID, .audioFrame(frame))
+            }
             stats.addPacket(frames: Int(meta.frameCount), channels: Int(AudioStreamPolicy.channels),
                             sumSquares: meta.sumSquares,
                             callbackUs: meta.callbackMaxTicks > 0 ? clock.hostTicksToUs(meta.callbackMaxTicks) : 0)

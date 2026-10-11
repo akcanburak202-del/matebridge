@@ -81,16 +81,20 @@ class AudioPlayout(
     launchBufBursts: Int? = null,
     launchIdlePauseRaw: String? = null,
     private val onNoisy: () -> Unit = {},
+    /** Decision 0038: the device has an AAC decoder (HELLO bit14); AAC_LC streams are played only then. */
+    aacAllowed: Boolean = false,
 ) {
     private val appContext = context.applicationContext
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val gate = AudioStreamGate()
+    private val gate = AudioStreamGate(aacAllowed)
     private val lock = Any()
     @Volatile private var stream: Stream? = null
     private var shut = false
     @Volatile private var errorLogged = false
     /** T-123: transport of the armed connection ([beginSession], [setTransport]); new streams take it. */
     @Volatile private var transport = Transport.USB
+    /** Decision 0038: the armed connection is a remote session (larger start buffer, nothing learned from it). */
+    @Volatile private var remote = false
     /** T-123: transport the last stream's safety ran on (writer threads; for `safety_transport live=0`). */
     @Volatile private var lastSafetyTransport: Transport? = null
     private val video = VideoLatencyFilter()
@@ -168,10 +172,11 @@ class AudioPlayout(
      * A new control connection [gen] over [transport] is being opened (engine thread): only its audio is taken from now
      * on. The old stream is stopped before the transport changes, so it never switches its safety.
      */
-    fun beginSession(gen: Int, transport: Transport): Unit = synchronized(lock) {
+    fun beginSession(gen: Int, transport: Transport, remote: Boolean = false): Unit = synchronized(lock) {
         if (shut) return
         stopStream("new_connection")
         this.transport = transport
+        this.remote = remote
         gate.arm(gen)
     }
 
@@ -256,7 +261,7 @@ class AudioPlayout(
             is AudioStreamGate.Action.Start -> {
                 val prev = stream
                 prev?.stop("restart")
-                stream = Stream(a.streamId, prev, transport).also { it.start() }
+                stream = Stream(a.streamId, prev, transport, gate.currentFormat == AudioConfig.FORMAT_AAC_LC, remote).also { it.start() }
             }
             AudioStreamGate.Action.Stop -> stopStream("stopped")
             AudioStreamGate.Action.Unsupported -> {
@@ -276,6 +281,11 @@ class AudioPlayout(
     private fun onFrame(f: AudioFrame, gen: Int) {
         val s = stream ?: return
         if (!gate.accepts(f, gen) || f.streamId != s.id) { s.rejected++; return }
+        val q = s.aacQueue
+        if (q != null) { // decoded on its own thread; the reader never waits for it
+            q.offer(AacUnit(f.sampleIndex, f.captureTimeUs, f.data.value))
+            return
+        }
         s.core.buffer.write(f.sampleIndex, f.captureTimeUs, f.data.value, f.frameCount)
         s.onPacket()
     }
@@ -290,8 +300,29 @@ class AudioPlayout(
         }
     }
 
-    private inner class Stream(val id: Int, private var previous: Stream?, initialTransport: Transport) {
+    private inner class Stream(
+        val id: Int,
+        private var previous: Stream?,
+        initialTransport: Transport,
+        aac: Boolean,
+        private val remote: Boolean,
+    ) {
         val core = PlayoutCore()
+        /** AAC_LC stream: the reader offers units here; [aacWorker] decodes them into [core]'s buffer. */
+        val aacQueue: AacUnitQueue? = if (aac) AacUnitQueue() else null
+        private val aacWorker: AacDecodeWorker? = aacQueue?.let { q ->
+            AacDecodeWorker(
+                q,
+                { MediaCodecAacPort() },
+                { idx, cap, pcm, frames ->
+                    core.buffer.write(idx, cap, pcm, frames)
+                    onPacket()
+                },
+                { err -> MbLog.e("audio_aac_error", "stream_id=$id err=$err", COMPONENT) }, // once; the stream is then ignored
+                "mb-aac-$id",
+                previous?.aacWorker, // decoder of the stream being replaced is released first
+            )
+        }
         /** T-123: the connection's transport; the writer follows a change ([setTransport]). */
         @Volatile var transport: Transport = initialTransport
         /** T-117: the control reader's arrival figures, taken once per stats line (writer thread only). */
@@ -317,7 +348,8 @@ class AudioPlayout(
         @Volatile private var writer: Thread? = null
 
         fun start() {
-            MbLog.i("audio_start", "stream_id=$id", COMPONENT)
+            MbLog.i("audio_start", "stream_id=$id codec=${if (aacQueue != null) "aac" else "pcm"} remote=${b(remote)}", COMPONENT)
+            aacWorker?.start()
             Thread({ run() }, "mb-audio-$id").also { writer = it; it.isDaemon = true; it.start() }
         }
 
@@ -344,6 +376,7 @@ class AudioPlayout(
             if (!running) return
             running = false
             MbLog.i("audio_stop", "stream_id=$id reason=$reason", COMPONENT)
+            aacWorker?.stop()
             current?.interrupt()
             wakeWriter()
         }
@@ -375,8 +408,9 @@ class AudioPlayout(
             } finally {
                 try { current?.close() } catch (_: RuntimeException) {} catch (_: LinkageError) {}
                 current = null
+                aacWorker?.stop() // releases the decoder when its thread ends
                 core.buffer.reset()
-                safetyApi?.let { safety.flush(it, safetyTransport, core.drift.safetyFrames / MS) }
+                if (!remote) safetyApi?.let { safety.flush(it, safetyTransport, core.drift.safetyFrames / MS) }
                 running = false
                 finished.countDown()
             }
@@ -458,10 +492,16 @@ class AudioPlayout(
          */
         private fun applySafety(api: String): SafetyMemory.Init? {
             if (api == safetyApi) return null
-            safetyApi?.let { safety.flush(it, safetyTransport, core.drift.safetyFrames / MS) }
+            if (!remote) safetyApi?.let { safety.flush(it, safetyTransport, core.drift.safetyFrames / MS) }
             val tr = transport
             val init = safety.initial(api, tr)
-            core.drift.resetSafety(init.ms, init.profile.defaultMs, init.profile.sessionMaxMs)
+            if (remote) {
+                // Decision 0038 section 6: at least 100 ms start buffer; also the floor and the ceiling of this session.
+                val ms = RemoteAudio.startMs(init.ms)
+                core.drift.resetSafety(ms, ms, maxOf(ms, init.profile.sessionMaxMs))
+            } else {
+                core.drift.resetSafety(init.ms, init.profile.defaultMs, init.profile.sessionMaxMs)
+            }
             safetyApi = api
             safetyTransport = tr
             // T-118: once per output API taken into use: what was stored and what the controller now runs with.
@@ -484,6 +524,7 @@ class AudioPlayout(
          */
         private fun followTransport() {
             val api = safetyApi ?: return
+            if (remote) return // a remote session keeps its start buffer
             val tr = transport
             if (tr == safetyTransport) return
             val from = safetyTransport
@@ -695,7 +736,7 @@ class AudioPlayout(
                     audioSum = 0; audioN = 0; avSum = 0; avN = 0
                     logStats(t, xr, win, lastAudioMs, lastAvMs)
                     if (running) followTransport()
-                    safety.onSafety(t.api, safetyTransport, core.drift.safetyFrames / MS, SystemClock.elapsedRealtime())
+                    if (!remote) safety.onSafety(t.api, safetyTransport, core.drift.safetyFrames / MS, SystemClock.elapsedRealtime())
                 }
             }
         }

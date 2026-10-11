@@ -157,6 +157,9 @@ public struct TabletFilesPlanner: Sendable {
         var capable: Bool
         /// `HELLO` bit12 `FILES_NET` (decision 0035): the client can serve its files over Wi-Fi.
         var netCapable = false
+        /// The session's last `STREAM_PREFS` has `link = 1` (decision 0038): no `FILES_NET(OPEN)`, the tablet's files
+        /// stay off. Normal until a `STREAM_PREFS` arrives.
+        var remote = false
 
         /// A Wi-Fi session of a client that speaks `FILES_NET`: the volume goes through the loopback proxy.
         var usesNet: Bool { transport == .network && netCapable }
@@ -362,6 +365,19 @@ public struct TabletFilesPlanner: Sendable {
         return [.removeForward(localPort: localPort)]
     }
 
+    /// The session's link changed (`STREAM_PREFS.link`, decision 0038). While remote no `FILES_NET(OPEN)` goes out and
+    /// the menu entry is hidden; an open Wi-Fi share is closed (`FILES_NET(CLOSE)`, volume detached, proxy stopped) and
+    /// the user's mount intent is dropped. Going back to the normal link offers the volume again.
+    public mutating func linkChanged(remote: Bool) -> [TabletFilesAction] {
+        guard !isShutDown, var current = session, current.remote != remote else { return [] }
+        current.remote = remote
+        session = current
+        guard remote else { return [] }
+        keepsMounted = false
+        autoMountArmed = false
+        return netEjectActions()
+    }
+
     /// The user chose "Tablet dosyalarını aç".
     public mutating func openRequested() -> [TabletFilesAction] {
         if session?.usesNet == true { return netOpenRequested() }
@@ -555,7 +571,7 @@ public struct TabletFilesPlanner: Sendable {
     public static let netMax: UInt8 = FilesNet.recommendedMax
 
     private mutating func netOpenRequested() -> [TabletFilesAction] {
-        guard !isShutDown, mountingGeneration == nil, collisionRetry == nil, info != nil || netStandby else { return [] }
+        guard !isShutDown, session?.remote != true, mountingGeneration == nil, collisionRetry == nil, info != nil || netStandby else { return [] }
         switch forward {
         case .up where info != nil:
             keepsMounted = true
@@ -608,13 +624,13 @@ public struct TabletFilesPlanner: Sendable {
                 return forceDeadLeftovers()  // `proxyFinished` mounts, the info is known by then
             case .none, .failed:
                 // Offered, or the tablet came back (OFF then READY) while the user still wants the volume.
-                return forceDeadLeftovers() + (keepsMounted ? startProxyAction() : [])
+                return forceDeadLeftovers() + (keepsMounted && session?.remote != true ? startProxyAction() : [])
             }
         }
         // STANDBY or OFF: the server is down, so the volume and the proxy go (no CLOSE: the tablet closed by itself).
         autoMountArmed = false
         let out = teardown() + forceDeadLeftovers()
-        guard standby, keepsMounted else { return out }
+        guard standby, keepsMounted, session?.remote != true else { return out }
         autoMountArmed = true  // after the OPEN round trip the READY mounts it again, not revealed
         return out + startProxyAction()
     }
@@ -634,7 +650,7 @@ public struct TabletFilesPlanner: Sendable {
 
     public var menu: TabletFilesMenu {
         guard let session, session.capable, !isShutDown else { return .hidden }
-        if session.usesNet { return netMenu }
+        if session.usesNet { return session.remote ? .hidden : netMenu }
         guard session.transport == .usb else { return .usbOnly }
         guard info != nil else { return .enableOnTablet }
         guard case .up = forward, !usbDeviceLost else { return .preparing }

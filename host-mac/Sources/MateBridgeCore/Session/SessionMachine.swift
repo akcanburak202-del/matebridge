@@ -105,6 +105,11 @@ public struct SessionMachine: Sendable {
         public var approvalTimeoutUs: UInt64 = 60_000_000
         public var releaseSilenceUs: UInt64 = 1_500_000
         public var closeSilenceUs: UInt64 = 5_000_000
+        /// Decision 0038: while the session's last `STREAM_PREFS` has `link = 1`, the close silence is this (and
+        /// `releaseSilenceUs` stays as it is: a held key is still released after 1.5 s).
+        public var remoteCloseSilenceUs: UInt64 = RemoteLinkProfile.closeSilenceUs
+        /// Decision 0038: the host PING interval of a `link = 1` session (when `hostPingIntervalUs` is on at all).
+        public var remoteHostPingIntervalUs: UInt64 = RemoteLinkProfile.hostPingIntervalUs
         public var videoHelloTimeoutUs: UInt64 = 5_000_000
         /// How long the approval window stays open after the pending tablet disconnected.
         public var orphanWindowUs: UInt64 = 120_000_000
@@ -238,6 +243,10 @@ public struct SessionMachine: Sendable {
         var phase: Phase
         var lastReceive: UInt64
         var silenceReleased = false
+        /// The last `STREAM_PREFS` of this session had `link = 1` (decision 0038); normal timings until one arrives.
+        var remote = false
+        /// Where the peer address sits relative to the Mac (decision 0038 section 5). Only `.local` may pair.
+        var peer: PeerLocality = .local
         /// Set when the connection becomes the active session (`start`), never before: no PING while
         /// `.awaitingHello`, `.lookingUp`, `.pending` or `.proving`.
         var ping: HostPing?
@@ -306,9 +315,13 @@ public struct SessionMachine: Sendable {
 
     // MARK: Control connection events
 
-    public mutating func connectionOpened(_ id: ConnectionID, now: UInt64) -> [SessionAction] {
+    /// `peer` is the host's classification of the peer address (`PeerClassifier`, decision 0038 section 5): a `.remote`
+    /// peer never starts a pairing (PAIRED sessions are unaffected). Required on purpose (fail closed): the session
+    /// server always passes the real classification.
+    public mutating func connectionOpened(_ id: ConnectionID, now: UInt64, peer: PeerLocality) -> [SessionAction] {
         clock = max(clock, now)
-        connections[id] = Conn(phase: .awaitingHello(deadline: now + configuration.helloTimeoutUs), lastReceive: now)
+        connections[id] = Conn(phase: .awaitingHello(deadline: now + configuration.helloTimeoutUs), lastReceive: now,
+                               peer: peer)
         return [.log(.debug, ev: "control_open", conn: id, fields: "")]
     }
 
@@ -586,7 +599,9 @@ public struct SessionMachine: Sendable {
                 }
             case .active:
                 let silent = now >= conn.lastReceive ? now - conn.lastReceive : 0
-                if silent >= configuration.closeSilenceUs {
+                let closeAfter = conn.remote ? max(configuration.closeSilenceUs, configuration.remoteCloseSilenceUs)
+                                             : configuration.closeSilenceUs
+                if silent >= closeAfter {
                     actions += end(id, bye: .timeout, cause: .timeout, close: true, ev: "heartbeat_timeout")
                 } else {
                     if silent >= configuration.releaseSilenceUs, !conn.silenceReleased {
@@ -650,7 +665,7 @@ public struct SessionMachine: Sendable {
         ping.nextSeq &+= 1
         ping.outstanding.append(.init(seq: seq, sentAt: now))
         if ping.outstanding.count > max(1, configuration.maxOutstandingPings) { ping.outstanding.removeFirst() }
-        ping.nextAt = now + interval
+        ping.nextAt = now + (connections[id]?.remote == true ? configuration.remoteHostPingIntervalUs : interval)
         connections[id]?.ping = ping
         return [.send(id, .ping(Ping(seq: seq, senderTimeUs: now)))]
     }
@@ -688,12 +703,21 @@ public struct SessionMachine: Sendable {
             return [.send(id, ack(.versionMismatch)), .close(id),
                     .log(.warning, ev: "version_mismatch", conn: id, fields: "peer_version=\(hello.protocolVersion)")]
         }
-        if persistingOrphans.contains(hello.deviceID) {
+        // A remote peer without a pair key can only be asking for a PAIRING: refuse before anything else (BUSY would
+        // also tell it that a session is live). With an approval record the key lookup decides in `continueHello`.
+        if connections[id]?.peer == .remote, !configuration.allowPaired || !approvedDevices.contains(hello.deviceID) {
+            return refuseRemotePairing(id)
+        }
+        // A remote peer with an approval record skips the BUSY shortcuts below: its key is resolved first, so one that
+        // turns out to need a PAIRING gets REJECTED (never BUSY, which would leak occupancy and invite a retry loop);
+        // one with a key meets the same BUSY rules in `continueHello`.
+        let skipBusyShortcuts = connections[id]?.peer == .remote
+        if !skipBusyShortcuts, persistingOrphans.contains(hello.deviceID) {
             connections[id] = nil
             return [.send(id, ack(.busy)), .close(id), .log(.info, ev: "busy", conn: id, fields: "reason=key_storing")]
         }
         // Another device holding the slot is BUSY whatever the key situation: no lookup needed.
-        if let owner = slotOwner {
+        if !skipBusyShortcuts, let owner = slotOwner {
             var ownerDevice: DeviceID?
             switch connections[owner]?.phase {
             case .pending(let h, _, _)?: ownerDevice = h.deviceID
@@ -721,8 +745,19 @@ public struct SessionMachine: Sendable {
         return continueHello(id, hello, now: now, pairKey: key)
     }
 
+    /// Plaintext `HELLO_ACK(REJECTED, NONE)` and close; nothing is kept for the connection. The peer address is not
+    /// logged.
+    private mutating func refuseRemotePairing(_ id: ConnectionID) -> [SessionAction] {
+        connections[id] = nil
+        return [.send(id, ack(.rejected)), .close(id),
+                .log(.warning, ev: "pairing_refused", conn: id, fields: "reason=remote")]
+    }
+
     private mutating func continueHello(_ id: ConnectionID, _ hello: Hello, now: UInt64,
                                         pairKey: SecretBytes?) -> [SessionAction] {
+        // Decision 0038 section 5: no pairing from a remote peer. Before the BUSY check, the key exchange, any pending
+        // state or approval window (and so before any orphan approval can exist for this peer).
+        if pairKey == nil, connections[id]?.peer == .remote { return refuseRemotePairing(id) }
         // One session at a time. The same device may reconnect, but only with its pair key (PAIRED): its session is
         // then taken over once the new connection proved key possession (`prove`). Anything else is BUSY, so the
         // device_id (sent in the clear) cannot be used by a bystander to knock a live session off.
@@ -843,6 +878,7 @@ public struct SessionMachine: Sendable {
         connections[id]?.phase = .active(Self.makeSession(hello, sessionID: sessionID, config: config, schedule: schedule))
         connections[id]?.lastReceive = now  // heartbeat baseline starts at ACCEPTED, not at HELLO
         connections[id]?.silenceReleased = false
+        connections[id]?.remote = false  // normal timings until the session's first STREAM_PREFS
         connections[id]?.ping = HostPing(nextAt: now)  // the first host PING goes out with the next tick
         return [.send(id, .streamConfig(config)),
                 .sessionStarted(id, sessionID: sessionID, configID: config.configID, hello: hello),
@@ -862,7 +898,11 @@ public struct SessionMachine: Sendable {
             return protocolError(id)
         case .releaseAll(let reason):
             return isActive ? [.releaseInput(id, .clientRequest(reason))] : []
-        case .pen, .key, .pointerRel, .pointerAbs, .scroll, .pinch, .penGesture, .stats, .keyframeRequest, .streamPrefs, .clipboard, .displayRate,
+        case .streamPrefs(let prefs):
+            // Decision 0038: the link of the last STREAM_PREFS sets this session's heartbeat timings.
+            if isActive { connections[id]?.remote = prefs.isRemote }
+            return isActive ? [.deliver(id, message)] : []
+        case .pen, .key, .pointerRel, .pointerAbs, .scroll, .pinch, .penGesture, .stats, .keyframeRequest, .clipboard, .displayRate,
              .filesInfo, .cursorPrefs:
             // Before ACCEPTED input is ignored and nothing is injected (PROTOCOL.md section 3).
             return isActive ? [.deliver(id, message)] : []

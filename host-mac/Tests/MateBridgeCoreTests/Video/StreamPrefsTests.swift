@@ -7,7 +7,7 @@ final class StreamPrefsTests: XCTestCase {
     func testNormalizedFpsAndScale() {
         XCTAssertEqual(StreamPrefs(fps: 120, scalePermille: 750).normalized, StreamPrefs(fps: 120, scalePermille: 750))
         XCTAssertEqual(StreamPrefs(fps: 144, scalePermille: 1000).normalized.fps, 144)
-        for bad: UInt16 in [0, 30, 90, 119, 145, 240, 65535] {
+        for bad: UInt16 in [0, 14, 45, 90, 119, 145, 240, 65535] {  // 15 and 30 are supported since decision 0038
             XCTAssertEqual(StreamPrefs(fps: bad, scalePermille: 800).normalized.fps, 60)
         }
         XCTAssertEqual(StreamPrefs(fps: 60, scalePermille: 0).normalized.scalePermille, 500)
