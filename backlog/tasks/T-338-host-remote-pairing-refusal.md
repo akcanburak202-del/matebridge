@@ -48,4 +48,10 @@ Karar 0038 §5 ve ek madde 1; PROTOCOL.md §3 adım 3 "Uzaktan eşleşme yok". D
 - check.sh: Swift build+test geçer (1165 test). Gradle başarısız: beklenen Kotlin fixture-kapsam testi (T-339 yok). Not: `StallRestartTests.retryJoinsTheHangingReleaseAndRestartsOnceItCompletes` (T-338 ile ilgisiz, zamanlama yarışı) paralel derleme yükü varken iki kez düştü, yük yokken 5 koşuda geçti; taban 5d76aa76 da geçiyor.
 - Codex `--high` incelemesi orkestratörde.
 
+### Review düzeltmeleri (Codex P2 + orkestratör)
+
+- Entegrasyon dalı (ff450dbe) birleştirildi; tam `check.sh` geçer (Kotlin dahil, 1167 Swift testi).
+- P2: uzak eş onay kaydı olsa da BUSY kısayollarını (`persistingOrphans`, başka cihaz yuvası) atlar; anahtar önce çözülür. Anahtarsızsa REJECTED/NONE (BUSY sızıntısı yok), anahtarlıysa `continueHello` aynı BUSY kurallarını uygular. Eşzamanlı ve eşzamansız arama testli, anahtarlı uzak eşin BUSY'si de.
+- `connectionOpened(_:now:peer:)` artık `peer` zorunlu (varsayılan yok, fail closed). `.local` veren aşırı yükleme yalnız test hedefinde (`RemotePairingRefusalTests.swift` içindeki extension). Önceki handoff'taki "varsayılan .local" notu geçersiz.
+
 ## Open questions

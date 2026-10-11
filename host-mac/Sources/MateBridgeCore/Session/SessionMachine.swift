@@ -316,10 +316,9 @@ public struct SessionMachine: Sendable {
     // MARK: Control connection events
 
     /// `peer` is the host's classification of the peer address (`PeerClassifier`, decision 0038 section 5): a `.remote`
-    /// peer never starts a pairing (PAIRED sessions are unaffected). The default `.local` exists for tests only; the
-    /// session server always passes the real classification.
-    public mutating func connectionOpened(_ id: ConnectionID, now: UInt64,
-                                          peer: PeerLocality = .local) -> [SessionAction] {
+    /// peer never starts a pairing (PAIRED sessions are unaffected). Required on purpose (fail closed): the session
+    /// server always passes the real classification.
+    public mutating func connectionOpened(_ id: ConnectionID, now: UInt64, peer: PeerLocality) -> [SessionAction] {
         clock = max(clock, now)
         connections[id] = Conn(phase: .awaitingHello(deadline: now + configuration.helloTimeoutUs), lastReceive: now,
                                peer: peer)
@@ -709,12 +708,16 @@ public struct SessionMachine: Sendable {
         if connections[id]?.peer == .remote, !configuration.allowPaired || !approvedDevices.contains(hello.deviceID) {
             return refuseRemotePairing(id)
         }
-        if persistingOrphans.contains(hello.deviceID) {
+        // A remote peer with an approval record skips the BUSY shortcuts below: its key is resolved first, so one that
+        // turns out to need a PAIRING gets REJECTED (never BUSY, which would leak occupancy and invite a retry loop);
+        // one with a key meets the same BUSY rules in `continueHello`.
+        let skipBusyShortcuts = connections[id]?.peer == .remote
+        if !skipBusyShortcuts, persistingOrphans.contains(hello.deviceID) {
             connections[id] = nil
             return [.send(id, ack(.busy)), .close(id), .log(.info, ev: "busy", conn: id, fields: "reason=key_storing")]
         }
         // Another device holding the slot is BUSY whatever the key situation: no lookup needed.
-        if let owner = slotOwner {
+        if !skipBusyShortcuts, let owner = slotOwner {
             var ownerDevice: DeviceID?
             switch connections[owner]?.phase {
             case .pending(let h, _, _)?: ownerDevice = h.deviceID

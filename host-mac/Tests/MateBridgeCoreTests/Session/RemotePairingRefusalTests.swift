@@ -46,6 +46,13 @@ private func isRefusalLog(_ a: SessionAction) -> Bool {
     if case .log(_, "pairing_refused", _, "reason=remote") = a { true } else { false }
 }
 
+extension SessionMachine {
+    /// Tests that do not care about the peer: a local one. Production code must pass the classification explicitly.
+    mutating func connectionOpened(_ id: ConnectionID, now: UInt64) -> [SessionAction] {
+        connectionOpened(id, now: now, peer: .local)
+    }
+}
+
 @Suite struct RemotePairingRefusalTests {
     @Test func remoteNewDeviceIsRejectedPlaintextAndNothingOpens() {
         var m = makeMachine()
@@ -146,5 +153,34 @@ private func isRefusalLog(_ a: SessionAction) -> Bool {
         _ = m.connectionOpened(A, now: 0, peer: .remote)
         let bad = Message.hello(TestClient(device: 1, version: 9).hello)
         #expect(acks(m.received(A, bad, now: 0), to: A).map(\.status) == [.versionMismatch])
+    }
+
+    /// An approval record without a Keychain key means PAIRING: REJECTED, even while another device holds the slot
+    /// (BUSY would leak occupancy), for the inline and the asynchronous key lookup.
+    @Test func remoteApprovedDeviceWithoutKeyIsRejectedNotBusyWhileAnotherDeviceOwnsTheSlot() {
+        for inline in [true, false] {
+            var m = makeMachine(approved: [device(1)], withKeys: false, inline: inline)
+            _ = m.connectionOpened(A, now: 0)
+            let owner = m.received(A, hello(2), now: 0)  // device 2 (local, new) holds the slot, pending
+            #expect(acks(owner, to: A).map(\.status) == [.pendingApproval])
+            _ = m.connectionOpened(B, now: 1, peer: .remote)
+            var actions = m.received(B, hello(1), now: 1)
+            if !inline { actions = m.pairKeyResolved(B, key: nil, now: 1) }
+            #expect(acks(actions, to: B).map(\.status) == [.rejected])
+            #expect(acks(actions, to: B).first?.keyMode == KeyMode.none)
+            #expect(actions.contains(.close(B)))
+            #expect(actions.contains(where: isRefusalLog))
+            #expect(m.isPendingApproval(A))
+        }
+    }
+
+    /// A remote peer that does hold a key is treated as before: another device owning the slot still means BUSY.
+    @Test func remotePairedDeviceStillGetsBusyWhileAnotherDeviceOwnsTheSlot() {
+        var m = makeMachine(approved: [device(1), device(2)])
+        _ = m.connectionOpened(A, now: 0)
+        _ = m.received(A, hello(2), now: 0)  // paired, proving
+        _ = m.received(A, .ping(Ping(seq: 1, senderTimeUs: 1)), now: 0)  // first record proves the key: device 2 is active
+        _ = m.connectionOpened(B, now: 1, peer: .remote)
+        #expect(acks(m.received(B, hello(1), now: 1), to: B).map(\.status) == [.busy])
     }
 }
