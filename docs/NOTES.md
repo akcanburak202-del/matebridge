@@ -1901,3 +1901,16 @@ Host release, `main`. Tablette ölçüm için debug APK kullanıldı; sonunda da
   2. Oyun 60 Mbps Wi-Fi A/B: `MATEBRIDGE_WIFI_ADAPT` kapalı/açık (VideoToolbox canlı bit hızını izliyor mu: `video ev=bitrate_set`, `ev=adapt`, `adapt_step trigger=`; boşta 5 s içinde tavana dönüş). Taban: 2026-10-09 16:50 oturumu.
   3. T-320 fling pil testi (`task/T-320-fling-measure`, `tools/measure/t320-fling-battery.sh`), tablet ≥ %60 ve şarjsız.
   4. T-147 kurtarma provaları; önce Parsec'in Mac'te gerçekten çalıştığı (2026-10-09 17:45 kontrolünde host süreci yoktu; SSH ve Ekran Paylaşımı kapalı).
+
+## 2026-10-11 gece — Uzaktan bağlantı (karar 0038) birleşti; cihaz testleri bekliyor
+
+- T-336..T-341 `main`'de: "Uzaktan bağlan" düğmesi, uzak profil (1400×920 1x, 15 fps, 0,5/1/2 Mbps, ses varsayılan kapalı), AAC-LC ses (96 kbps), uzaktan eşleşme yasağı (yalnız loopback ve `en*` doğrudan alt ağ), STARTUP keyframe geri çekilmesi (tüm oturumlar). Her kart Codex incelemesinden geçti (T-338 `--high`, 2 tur; diğerleri 2–3 tur).
+- **Güvenlik notu:** loopback yerel sayıldığı için (USB `adb reverse`) MateBridge portlarına (47001–47003) `tailscale serve`/`funnel` ya da SSH tüneliyle yönlendirme **yapılmamalı**; yoksa uzak eş eşleşme isteyebilir.
+- **Cihazda doğrulanacaklar** (Tailscale kurulduktan sonra, tablet mobil veride):
+  1. Normal USB/Wi-Fi oturumu eskisi gibi (kalem, klavye, 500 ms PING, ses PCM).
+  2. "Uzaktan bağlan" → host logu `link=1`, 1400×920, 15 fps, 1 Mbps; panel "Uzak (Tasarruf)"; çıkınca ev ayarları aynı; sonraki ev oturumu 2800×1840 HiDPI açılır.
+  3. Uzak oturumda bir tuşu >10 sn basılı tut: 1,5 sn release-all yanlış tetiklenmez; bağlantı 2–3 sn takılmada düşmez (15 sn).
+  4. Eşleşmemiş cihaz/sıfırlanmış eşleşme ile uzaktan bağlan → tablette "Yeni eşleşme yalnız ev ağında…", Mac'te pencere açılmaz, `ev=pairing_refused reason=remote`.
+  5. Uzak seste aç → `codec=aac`, `format=2`, 1 dk YouTube: kesinti/kayma yok, `audio_aac_error` yok; hızlı kapa-aç.
+  6. Veri ölçümü: durgun ekranda 10 dk, terminal akışında 10 dk (Tailscale/Android veri sayacı).
+  7. Ağ değişimi (Wi-Fi↔mobil, USB takma) uzak oturumu başka yola geçirmez.
