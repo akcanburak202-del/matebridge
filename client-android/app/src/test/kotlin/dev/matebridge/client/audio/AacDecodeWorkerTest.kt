@@ -171,4 +171,42 @@ class AacDecodeWorkerTest {
         assertEquals(2, attempts)
         assertTrue(errors.isEmpty())
     }
+
+    @Test fun aWorkerStoppedWhileWaitingForItsPredecessorNeverAllocatesADecoder() {
+        val created = AtomicInteger()
+        val slowOld = object : AacCodecPort {
+            override fun start(csd0: ByteArray) {}
+            override fun queueInput(data: ByteArray, ptsUs: Long, timeoutUs: Long) = true
+            override fun pollOutput(timeoutUs: Long): AacCodecPort.Output? = null
+            override fun release() { Thread.sleep(300) }
+        }
+        val old = AacDecodeWorker(AacUnitQueue(), { slowOld }, { _, _, _, _ -> }, {})
+        val ot = Thread { old.runLoop() }.also { it.start() }
+        Thread.sleep(30)
+        old.stop()
+        val nw = AacDecodeWorker(AacUnitQueue(), { created.incrementAndGet(); Fake() }, { _, _, _, _ -> }, {}, previous = old)
+        val nt = Thread { nw.runLoop() }.also { it.start() }
+        Thread.sleep(50)
+        nw.stop() // while the old decoder is still being released
+        nt.join(3000); ot.join(3000)
+        assertEquals(0, created.get())
+        assertTrue(nw.awaitReleased(100))
+    }
+
+    @Test fun aWorkerStoppedDuringTheRetryDelayDoesNotRetry() {
+        var attempts = 0
+        val w = AacDecodeWorker(AacUnitQueue(), {
+            object : AacCodecPort {
+                override fun start(csd0: ByteArray) { attempts++; throw IllegalStateException("resource") }
+                override fun queueInput(data: ByteArray, ptsUs: Long, timeoutUs: Long) = true
+                override fun pollOutput(timeoutUs: Long): AacCodecPort.Output? = null
+                override fun release() {}
+            }
+        }, { _, _, _, _ -> }, {})
+        val t = Thread { w.runLoop() }.also { it.start() }
+        Thread.sleep(15)
+        w.stop()
+        t.join(2000)
+        assertTrue(attempts <= 1)
+    }
 }

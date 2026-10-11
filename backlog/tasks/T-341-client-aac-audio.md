@@ -55,6 +55,8 @@ Karar 0038 §4; PROTOCOL.md AUDIO_*. Dal tabanı: `task/0038-remote-integration`
 
 - Codex düzeltmeleri (2 x P2): (1) çözücüye giriş verildikten sonra 300 ms boyunca girdi kuyruğu 5 ms'lik kısa poll'la beklenir ve çıkış hemen boşaltılır (250 ms'lik boşta poll'a takılmaz). (2) `AacDecodeWorker(previous=)`: yeni çözücü, önceki akışın çözücüsü serbest kalana kadar (en çok 1 sn) oluşturulmaz; `start` hata verirse bir kez 50 ms sonra yeniden denenir. Testler: geç çıkış, serbest bırakma sırası, tek yeniden deneme. `task/0038-remote-integration` birleştirildi.
 
+- Codex tur 2 (2 x P2): işçi artık selefin yalnız bırakma mandalını (latch) tutar, işçiyi değil (zincirleme bellek sızıntısı yok); durdurulmuş işçi, selef beklemesinden ve yeniden deneme gecikmesinden sonra `running`'i kontrol eder ve çözücü hiç oluşturmaz. Testler eklendi.
+
 ## Open questions
 
 - Yok. Codex incelemesi orkestratörde.

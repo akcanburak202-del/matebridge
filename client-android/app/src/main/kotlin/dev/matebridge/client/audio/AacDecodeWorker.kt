@@ -38,9 +38,15 @@ class AacDecodeWorker(
     private val onError: (String) -> Unit,
     private val name: String = "mb-aac",
     /** The previous stream's worker: its decoder is released before this one allocates its own (bounded wait). */
-    private val previous: AacDecodeWorker? = null,
+    previous: AacDecodeWorker? = null,
 ) {
     private val released = java.util.concurrent.CountDownLatch(1)
+    /** Only the predecessor's release latch is kept, never the worker (it would chain every earlier stream in memory). */
+    private val previousReleased: java.util.concurrent.CountDownLatch? = previous?.released
+
+    private fun awaitPrevious() {
+        try { previousReleased?.await(PREVIOUS_RELEASE_WAIT_MS, java.util.concurrent.TimeUnit.MILLISECONDS) } catch (_: InterruptedException) {}
+    }
     @Volatile private var running = true
     @Volatile private var thread: Thread? = null
 
@@ -81,8 +87,9 @@ class AacDecodeWorker(
         var port: AacCodecPort? = null
         try {
             val csd = AacRules.audioSpecificConfig(AacRules.SAMPLE_RATE, AacRules.CHANNELS) ?: error("asc")
-            previous?.awaitReleased(PREVIOUS_RELEASE_WAIT_MS)
-            val p = openPort(csd)
+            awaitPrevious()
+            if (!running) return // stopped while waiting: never allocate a decoder
+            val p = openPort(csd) ?: return
             port = p
             val pending = ArrayDeque<Pending>()
             var seq = 0L
@@ -134,9 +141,10 @@ class AacDecodeWorker(
     }
 
     /** Creates and starts the decoder; one retry after a short wait (a resource error while the old one is going away). */
-    private fun openPort(csd: ByteArray): AacCodecPort {
+    private fun openPort(csd: ByteArray): AacCodecPort? {
         var attempt = 0
         while (true) {
+            if (!running) return null
             val p = portFactory()
             try {
                 p.start(csd)
@@ -144,7 +152,7 @@ class AacDecodeWorker(
             } catch (e: Exception) {
                 try { p.release() } catch (_: RuntimeException) {}
                 if (++attempt >= 2 || !running) throw e
-                previous?.awaitReleased(PREVIOUS_RELEASE_WAIT_MS)
+                awaitPrevious()
                 try { Thread.sleep(RETRY_DELAY_MS) } catch (_: InterruptedException) { throw e }
             }
         }
