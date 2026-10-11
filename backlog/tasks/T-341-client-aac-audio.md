@@ -1,7 +1,7 @@
 ---
 id: T-341
 title: İstemci — AAC-LC ses çözme (MediaCodec) ve uzak oturumda AAC isteği
-status: todo
+status: review
 phase: 7
 owner: android-client-dev
 depends_on: [T-339]
@@ -45,4 +45,14 @@ Karar 0038 §4; PROTOCOL.md AUDIO_*. Dal tabanı: `task/0038-remote-integration`
 
 ## Handoff
 
+- Dal: `task/T-341-client-aac-audio` (taban ff450dbe). Commit SHA: `git log -1` (son commit).
+- Dosyalar: `audio/AacRules.kt` (ASC, birim doğrulama, bit14, `RemoteAudio`), `audio/AacUnitQueue.kt`, `audio/AacDecodeWorker.kt` (+ `AacCodecPort`, `MediaCodecAacPort`, `AacDecoderProbe`), `AudioStreamGate.kt`, `AudioPlayout.kt`, `session/RemoteProfile.kt`, `session/SessionMachine.kt`, `session/SessionController.kt` (log: `codec=`), `MainActivity.kt`; testler `AacRulesTest`, `AacUnitQueueTest`, `AacDecodeWorkerTest`, `AacPrefsMachineTest`.
+- Davranış: bit14 yalnız ses açık ve cihazda `audio/mp4a-latm` çözücüsü varsa. Uzak oturumda ses açık ve bit14 varsa `AUDIO_PREFS.codec = 1`, aksi halde 0; normal oturum hep PCM. `format = 2` yalnız çözücü varsa çalınır (48 kHz, 2 kanal). Okuyucu iş parçacığı yalnız `AacUnitQueue.offer` yapar (32 birim, en eskiyi atar); çözme `mb-aac-<id>` iş parçacığında, PCM `core.buffer.write(sample_index, capture_time_us, ...)`. `capture_time_us` hiçbir zaman `sample_index`'ten türetilmez; bir AU birden fazla çıkış verirse sonrakiler kare ofsetiyle ilerler. Geçersiz birim (`frame_count != 1024`, `data_len` 0 / >1536) kapıda atılır. Çözücü hatası: `audio_aac_error` bir kez, akış susar; akış durunca / oturum bitince iş parçacığı çözücüyü bırakır. 60 sn duraklatma (T-287) değişmedi: `onPacket()` çözücü çıkışında çağrılır.
+- Uzak oturum ses başlangıç tamponu: `beginSession(gen, transport, remote)`; uzakta jitter güvenliği en az 100 ms (taban ve tavan), öğrenilen değer SafetyMemory'ye yazılmaz, taşıma değişimi güvenliği değiştirmez.
+- Varsayımlar: Android AAC çözücüsü AU başına 1024 kare verir ve kodlayıcı gecikmesini kendisi kırpmaz (host gecikmeyi `capture_time_us`'tan zaten düştü). `csd-0` = `0x11 0x90`. `MainActivity.remoteSession` artık `@Volatile` (motor iş parçacığı okuyor).
+- Test edilmedi (cihaz gerekir): gerçek `MediaCodec` AAC çözme (T-340 host birleşince), A/V senkronu, 100 ms tampon hissi, `AacDecoderProbe` HarmonyOS'ta.
+- Cihazda kontrol: uzak oturumda ses aç; log: `audio_prefs_sent ... codec=1`, `audio_config ... format=2`, `audio_start ... codec=aac remote=1`, `safety_start used=100`; `audio_aac_error` OLMAMALI; YouTube 1 dk boyunca underrun ve A/V kayması; normal oturumda `codec=pcm` ve davranış aynı.
+
 ## Open questions
+
+- Yok. Codex incelemesi orkestratörde.

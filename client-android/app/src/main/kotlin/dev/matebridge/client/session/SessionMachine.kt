@@ -1,5 +1,6 @@
 package dev.matebridge.client.session
 
+import dev.matebridge.client.audio.AacRules
 import dev.matebridge.client.protocol.AudioPrefs
 import dev.matebridge.client.protocol.CursorPrefs
 import dev.matebridge.client.protocol.Bye
@@ -316,6 +317,8 @@ class SessionMachine(
     private var lastPingUs = 0L
     /** Decision 0038: the remote profile of the current start, null = normal session. */
     private var remote: RemoteProfile? = null
+    /** Decision 0038: HELLO reports bit14 `AUDIO_AAC`; a remote session then asks for AAC when audio is on. */
+    private val aacCapable: Boolean get() = AacRules.hasAacCapability(hello.capabilities)
     private val pongTimeoutUs: Long get() = if (remote != null) RemoteTimings.PONG_TIMEOUT_US else PONG_TIMEOUT_US
     private var lastPongUs = 0L
     private var retryAtUs = 0L
@@ -640,7 +643,7 @@ class SessionMachine(
                     remote = event.profile
                     if (inputAllowed) {
                         if (event.profile.streamPrefs() != was.streamPrefs()) out += Action.Send(event.profile.streamPrefs())
-                        if (audio != null && event.profile.audio != was.audio) out += Action.Send(event.profile.audioPrefs())
+                        if (audio != null && event.profile.audio != was.audio) out += Action.Send(event.profile.audioPrefs(aacCapable))
                     }
                 }
             }
@@ -874,7 +877,7 @@ class SessionMachine(
         lastPingUs = nowUs
         out += Action.Send(remote?.streamPrefs() ?: prefs) // T-050: right after the proof PING, never before it (0038: remote profile)
         if (displayHz > 0) out += Action.Send(DisplayRate(displayHz)) // T-059: once, after STREAM_PREFS
-        audio?.let { out += Action.Send(remote?.audioPrefs() ?: AudioPrefs(it)) } // T-095: after the display messages (0038: remote wish)
+        audio?.let { out += Action.Send(remote?.audioPrefs(aacCapable) ?: AudioPrefs(it)) } // T-095: after the display messages (0038: remote wish)
         cursor?.let { out += Action.Send(CursorPrefs(it)) } // T-276: the session starts without the local cursor (host default 0); tell it ours
         effectiveFiles()?.let { out += Action.Send(it) } // T-135: once per session, after AUDIO_PREFS (never an earlier session's READY)
         nextPingUs = nowUs + pingIntervalUs
