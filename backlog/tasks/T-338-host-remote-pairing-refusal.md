@@ -1,7 +1,7 @@
 ---
 id: T-338
 title: Host — uzaktan eşleşme yasağı (yerel olmayan eşe PAIRING yerine REJECTED)
-status: todo
+status: review
 phase: 7
 owner: mac-host-dev
 depends_on: [T-336, T-337]
@@ -39,5 +39,13 @@ Karar 0038 §5 ve ek madde 1; PROTOCOL.md §3 adım 3 "Uzaktan eşleşme yok". D
 4. Testler: sınıflandırıcı (kart listesi + ek durumlar), makine (uzak anahtarsız -> REJECTED/NONE, onay yok, orphan yok; uzak PAIRED kabul; yerel PAIRING bozulmaz).
 
 ## Handoff
+
+- Dal `task/T-338-host-remote-pairing-refusal` (taban 5d76aa76). Kod commit: 82f2e838 (plan: ondan önceki commit; bu handoff commit'i ayrı).
+- Dosyalar: yeni `MateBridgeCore/Session/PeerClassifier.swift` (`PeerLocality`, `LocalInterface`, `PeerClassifier.classify`), `SessionMachine.swift` (`connectionOpened(_:now:peer:)`, `refuseRemotePairing`), `BsdTcpSocket.swift` (`peerScopeID`), `MateBridgeHost/Session/NetworkInterfaces.swift` (`localInterfaces()` + `peerText`), `SessionServer.swift` (`acceptControl` sınıflar), testler `PeerClassifierTests` (14) ve `RemotePairingRefusalTests` (8). `Security/` dizinine dokunulmadı.
+- Ret iki yerde: `handleHello` (uzak ve onay kaydı yok/`allowPaired` kapalı: BUSY ve orphan kontrolünden önce, böylece uzak eş oturum olup olmadığını öğrenmez) ve `continueHello` başı (arama sonucu anahtarsız; BUSY kontrolünden ve ECDH'den önce). Her ikisi şifresiz `HELLO_ACK(REJECTED, NONE)` + close + `pairing_refused reason=remote` (warning). Pending/onay/orphan/`lookupPairKey` oluşmaz; test bunu doğrular. Sürüm uyuşmazlığı hâlâ önce gelir.
+- Varsayımlar: `connectionOpened`'ın `peer:` varsayılanı `.local` (yalnız 100 mevcut test çağrısı için); üretimde tek çağrı `acceptControl` ve her zaman açıkça sınıf verir. Sınıflandırma bağlantı başına yapılır (getifaddrs her seferinde okunur). Ön eki < 8 olan arayüz girdisi (örn. bozuk /0) yok sayılır; bitişik olmayan maskeli girdi `NetworkInterfaces`'te atlanır. KAME gömülü kapsam baytları (fe80:4::1) sıfırlanır. IPv6 kapsam adı `if_indextoname` ile çözülür; çözülemezse kapsamsız = uzak. Adres hiçbir yerde loglanmaz.
+- Test edilmedi (donanım/ağ gerektirir): gerçek `getpeername`/`getifaddrs` çıktısı (özellikle macOS'ta link-local `sin6_scope_id`/gömülü kapsam, Tailscale `utun` ve Wi-Fi alt ağı), `adb reverse` loopback eşi, bir uzak eşten gerçek RET'in istemcide görünmesi. `peerScopeID` ek bir `getpeername` çağrısıdır.
+- check.sh: Swift build+test geçer (1165 test). Gradle başarısız: beklenen Kotlin fixture-kapsam testi (T-339 yok). Not: `StallRestartTests.retryJoinsTheHangingReleaseAndRestartsOnceItCompletes` (T-338 ile ilgisiz, zamanlama yarışı) paralel derleme yükü varken iki kez düştü, yük yokken 5 koşuda geçti; taban 5d76aa76 da geçiyor.
+- Codex `--high` incelemesi orkestratörde.
 
 ## Open questions
