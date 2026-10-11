@@ -1,7 +1,7 @@
 ---
 id: T-338
 title: Host — uzaktan eşleşme yasağı (yerel olmayan eşe PAIRING yerine REJECTED)
-status: review
+status: done
 phase: 7
 owner: mac-host-dev
 depends_on: [T-336, T-337]
