@@ -1,7 +1,7 @@
 ---
 id: T-337
 title: Host — 0038 protokol kodu (STREAM_PREFS link/fps/taban, AUDIO_* ayrıştırma) ve uzak profil davranışı
-status: review
+status: done
 phase: 7
 owner: mac-host-dev
 depends_on: [T-336]
