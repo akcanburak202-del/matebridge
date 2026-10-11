@@ -414,7 +414,7 @@ class SessionMachine(
             is Event.Start -> {
                 if (phase != Phase.IDLE) byeAndClose(out)
                 clearPrompt()
-                if (event.userInitiated) {
+                if (event.userInitiated || event.remote != null) { // 0038: the remote button is a user tap too (clears the latches, never pairs)
                     cancelLatched = false
                     authFailures.clear() // T-156: the user tries again
                 } else if (cancelLatched) {

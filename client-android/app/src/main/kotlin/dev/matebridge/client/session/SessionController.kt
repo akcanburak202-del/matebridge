@@ -546,8 +546,11 @@ class SessionController(
         }
     }
 
+    /** Decision 0038: the current start is remote; no log line may carry its address (engine thread). */
+    private var remoteLog = false
+
     private fun dispatch(e: SessionMachine.Event) {
-        if (e is SessionMachine.Event.Start) videoFrames.set(0)
+        if (e is SessionMachine.Event.Start) { videoFrames.set(0); remoteLog = e.remote != null }
         logEvent(e)
         val now = nowUs()
         // Only the current connection's PONGs feed the clock (T-096: a retired one may still answer for a moment).
@@ -590,7 +593,7 @@ class SessionController(
         when (a) {
             is SessionMachine.Action.OpenControl -> {
                 MbLog.gen = a.gen
-                MbLog.i("connect_start", "host=${a.endpoint.host} port=${a.endpoint.port} user=${if (a.userInitiated) 1 else 0}")
+                MbLog.i("connect_start", (if (remoteLog) "host=remote" else "host=${a.endpoint.host} port=${a.endpoint.port}") + " user=${if (a.userInitiated) 1 else 0}")
                 listener.onSessionStart()
                 resetArrival()
                 listener.onConnectionGen(a.gen, ConnectMode.transportOf(a.endpoint))

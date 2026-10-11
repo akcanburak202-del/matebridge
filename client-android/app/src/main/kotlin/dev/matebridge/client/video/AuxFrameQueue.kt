@@ -33,6 +33,7 @@ class AuxFrameQueue(
     private val pending = ArrayDeque<VideoFrame>()
     private var config: VideoFrame? = null
     private var waitingKeyframe = true
+    private val retryBackoff = KeyframeRetryBackoff() // decision 0038 section 7
     private var heldRequest = false
     private var hasRequested = false
     private var lastRequestNs = 0L
@@ -58,6 +59,7 @@ class AuxFrameQueue(
                     pending.removeAll { !it.isCodecConfig }
                     pending.addLast(frame)
                     waitingKeyframe = false
+                    retryBackoff.reset()
                     heldRequest = false
                 }
                 waitingKeyframe -> {
@@ -119,7 +121,11 @@ class AuxFrameQueue(
     fun takeRetry(): Boolean = lock.withLock {
         val now = clockNs()
         if (!waitingKeyframe || !mayRequest(now)) return false
+        if (hasRequested && now - lastRequestNs < retryBackoff.delayMs * 1_000_000) return false // decision 0038 section 7
+        val used = retryBackoff.delayMs
         record(now)
+        retryBackoff.restore(used)
+        retryBackoff.onRepeat()
         true
     }
 
@@ -138,6 +144,7 @@ class AuxFrameQueue(
     private fun mayRequest(now: Long) = !hasRequested || now - lastRequestNs >= HOLDOFF_MS * 1_000_000
 
     private fun record(now: Long) {
+        retryBackoff.reset()
         hasRequested = true
         lastRequestNs = now
         kfRequests++

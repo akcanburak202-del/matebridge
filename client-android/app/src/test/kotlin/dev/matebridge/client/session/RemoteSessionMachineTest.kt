@@ -256,4 +256,10 @@ class RemoteSessionMachineTest {
         assertEquals(Endpoint("mac.ts.net", 47001), s.remoteEndpoint()) // an address is not a setting to reset
         assertEquals(RemoteProfile(), s.remoteProfile())
     }
+
+    @Test fun startLogLineNeverCarriesTheRemoteAddress() {
+        val line = SessionController.eventLogLine(Event.Start(ep, remote = profile), "")!!
+        assertFalse(line.fields.contains("mac.example"))
+        assertTrue(line.fields.contains("host=remote"))
+    }
 }

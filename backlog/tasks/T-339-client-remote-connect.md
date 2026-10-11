@@ -67,6 +67,8 @@ PING seyreltme takılı girdi yaratmamalı: herhangi bir tuş/düğme/kalem/aç�
 - Günlükte uzak adres yoktur (`session_start host=remote`).
 - Yeni UI: bağlantı ekranında "Uzaktan bağlan" ve "Uzak adres" düğmeleri + gizli/pasif `remote_endpoint` alanı (HiWrite kuralı: görünür düzenlenebilir alan yok, akış başlayınca gizlenir). İlk kullanımda alan açılır, adres yazılıp tekrar "Uzaktan bağlan" (ya da klavye Bitti) ile kaydedilir ve bağlanılır. Panel: "Görüntü modu: Uzak (Tasarruf)", uzak bit hızı satırı, "Ses (uzak oturum)".
 
+**Codex turu (3 P2) düzeltildi:** (1) `Start.remote != null` artık kullanıcı dokunuşu sayılıp iptal/anahtar-uyuşmazlığı kilitlerini temizler, ama `userInitiated=false` kalır (uzakta yeni eşleşme başlamaz); test `KeyMismatchTest`. (2) `connect_start` günlüğünde uzak oturumda `host=remote` (`remoteLog`, her yeniden denemede); test `startLogLineNeverCarriesTheRemoteAddress` (session_start). (3) `AuxFrameQueue.takeRetry` aynı 500..4000 ms geri çekilmesi, keyframe/yeni istekte sıfırlanır; test `AuxQueueAndPairingTest`.
+
 **Varsayımlar**
 - Uzak başlatma `userInitiated=false` (uzak yolda eşleşme başlatılmaz); tamamlanmamış bir eşleşme varsa makine StoredTrust gösterir -> uzakta aynı "eşleşme yalnız ev ağında" mesajı.
 - `RemoteAddress`: küçük harfe çevirir, sondaki noktayı atar, IPv6 ve alt çizgili ad reddedilir.
