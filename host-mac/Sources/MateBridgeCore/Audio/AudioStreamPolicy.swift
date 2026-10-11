@@ -38,9 +38,16 @@ public struct AudioStreamPolicy: Equatable, Sendable {
     /// Delays before each retry of a transient start failure (T-119): 4 attempts, about 1.85 s in all.
     public static let transientRetryDelaysUs: [UInt64] = [100_000, 250_000, 500_000, 1_000_000]
 
+    /// Which codec a stream uses (decision 0038).
+    public enum Codec: Equatable, Sendable { case pcm, aac }
+
     private struct Session: Equatable, Sendable {
         var id: UInt32
         var clientSupportsAudio: Bool
+        /// HELLO bit14 `AUDIO_AAC`.
+        var clientSupportsAAC = false
+        /// The last `AUDIO_PREFS.codec`.
+        var codec = AudioCodecPreference.pcm
         var enabled = false
         var failed = false
         var unavailableLogged = false
@@ -64,6 +71,10 @@ public struct AudioStreamPolicy: Equatable, Sendable {
     /// Transient start failures retried since the last start, interruption or stop.
     private var transientRetries = 0
     private var retryToken: UInt32 = 0
+    /// Codec of the stream in `capture` (starting or running); `desiredCodec` when none.
+    private var streamCodec = Codec.pcm
+    /// The AAC encoder could not be created or broke down: PCM from now on (logged once).
+    private var aacBroken = false
 
     /// - Parameter disabled: `MATEBRIDGE_AUDIO=off`: never capture.
     public init(disabled: Bool) {
@@ -78,26 +89,47 @@ public struct AudioStreamPolicy: Equatable, Sendable {
 
     public var sessionID: UInt32? { session?.id }
 
-    public static func startedConfig(streamID: UInt16) -> AudioConfig {
-        AudioConfig(streamID: streamID, state: .started, format: .pcmS16LE, sampleRate: sampleRate,
-                    channels: channels, framesPerPacket: framesPerPacket)
+    /// Codec of the stream that was just started (valid right after `.startCapture`) or runs.
+    public var activeCodec: Codec { streamCodec }
+
+    public static let aacFramesPerPacket: UInt16 = 1024
+
+    public static func startedConfig(streamID: UInt16, codec: Codec = .pcm) -> AudioConfig {
+        switch codec {
+        case .pcm:
+            AudioConfig(streamID: streamID, state: .started, format: .pcmS16LE, sampleRate: sampleRate,
+                        channels: channels, framesPerPacket: framesPerPacket)
+        case .aac:
+            AudioConfig(streamID: streamID, state: .started, format: .aacLC, sampleRate: sampleRate,
+                        channels: channels, framesPerPacket: aacFramesPerPacket)
+        }
+    }
+
+    /// AAC only with HELLO bit14, the client's `codec = 1` and a working encoder; otherwise PCM.
+    private var desiredCodec: Codec {
+        guard let s = session, s.clientSupportsAAC, s.codec == .aac, !aacBroken else { return .pcm }
+        return .aac
     }
 
     // MARK: Events
 
     /// A session became ACCEPTED (and encrypted). A previous one, if still known, ends first.
-    public mutating func sessionStarted(sessionID: UInt32, clientSupportsAudio: Bool) -> [Action] {
+    public mutating func sessionStarted(sessionID: UInt32, clientSupportsAudio: Bool,
+                                        clientSupportsAAC: Bool = false) -> [Action] {
         var actions = sessionEnded()
-        session = Session(id: sessionID, clientSupportsAudio: clientSupportsAudio)
-        actions.append(.log(.info, ev: "audio_session", fields: "audio_pcm=\(clientSupportsAudio ? 1 : 0)"))
+        session = Session(id: sessionID, clientSupportsAudio: clientSupportsAudio, clientSupportsAAC: clientSupportsAAC)
+        actions.append(.log(.info, ev: "audio_session",
+                            fields: "audio_pcm=\(clientSupportsAudio ? 1 : 0) audio_aac=\(clientSupportsAAC ? 1 : 0)"))
         return actions
     }
 
     /// `AUDIO_PREFS` from the active session.
-    public mutating func prefs(sessionID: UInt32, enabled: Bool) -> [Action] {
+    public mutating func prefs(sessionID: UInt32, enabled: Bool,
+                               codec: AudioCodecPreference = .pcm) -> [Action] {
         guard var s = session, s.id == sessionID else { return [] }
         if enabled, !s.enabled { s.failed = false }  // an explicit re-enable retries a failed capture
         s.enabled = enabled
+        s.codec = codec
         session = s
         var actions: [Action] = []
         if enabled, disabled, !disabledLogged {
@@ -120,8 +152,9 @@ public struct AudioStreamPolicy: Equatable, Sendable {
         capture = .running(streamID)
         retriesLeft = 0
         transientRetries = 0
-        return [.send(sessionID: s.id, Self.startedConfig(streamID: streamID)),
-                .log(.info, ev: "audio_started", fields: "stream_id=\(streamID)")]
+        return [.send(sessionID: s.id, Self.startedConfig(streamID: streamID, codec: streamCodec)),
+                .log(.info, ev: "audio_started",
+                     fields: "stream_id=\(streamID)" + (streamCodec == .aac ? " codec=aac" : ""))]
     }
 
     /// The capture of `streamID` could not start or broke down. `reason` is a short token, `status` the OSStatus.
@@ -182,6 +215,17 @@ public struct AudioStreamPolicy: Equatable, Sendable {
         return actions + reconcile(stopReason: reason)
     }
 
+    /// The AAC encoder of `streamID` could not be created or failed: the stream restarts as PCM (logged once).
+    public mutating func aacEncoderFailed(streamID: UInt16, reason: String) -> [Action] {
+        guard streamCodec == .aac, capture == .starting(streamID) || capture == .running(streamID) else { return [] }
+        var actions: [Action] = []
+        if !aacBroken {
+            aacBroken = true
+            actions.append(.log(.warning, ev: "audio_aac_unavailable", fields: "reason=\(reason) fallback=pcm"))
+        }
+        return actions + stop(sendStopped: true, reason: "aac_failed") + reconcile(stopReason: "aac_failed")
+    }
+
     /// The retry timer of `token` fired.
     public mutating func retryDue(token: UInt32) -> [Action] {
         guard capture == .waitingRetry(token: token) else { return [] }
@@ -198,10 +242,21 @@ public struct AudioStreamPolicy: Equatable, Sendable {
 
     private mutating func reconcile(stopReason: String) -> [Action] {
         if wanted {
-            guard capture == .idle else { return [] }
+            var actions: [Action] = []
+            switch capture {
+            case .starting, .running:
+                // A codec change restarts the stream (new stream_id, decision 0038).
+                guard streamCodec != desiredCodec else { return [] }
+                actions = stop(sendStopped: true, reason: "codec")
+            case .idle:
+                break
+            case .waitingRetry:
+                return []
+            }
             let id = nextStreamID()
+            streamCodec = desiredCodec
             capture = .starting(id)
-            return [.startCapture(streamID: id)]
+            return actions + [.startCapture(streamID: id)]
         }
         return stop(sendStopped: true, reason: stopReason)
     }

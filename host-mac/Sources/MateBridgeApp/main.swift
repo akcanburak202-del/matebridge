@@ -183,7 +183,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             coordinator.sessionStarted(sessionID: sid, configID: cid, hello: hello, transport: transport)
             input.sessionStarted(sessionID: sid, configID: cid)
             clipboard.sessionStarted(sessionID: sid)
-            audio.sessionStarted(sessionID: sid, clientSupportsAudio: hello.capabilities.contains(.audioPCM))
+            audio.sessionStarted(sessionID: sid, clientSupportsAudio: hello.capabilities.contains(.audioPCM),
+                                 clientSupportsAAC: hello.capabilities.contains(.audioAAC))
             tabletFiles.sessionStarted(sessionID: sid, transport: transport, capabilities: hello.capabilities)
         }
         handlers.sessionEnded = {
@@ -194,7 +195,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             tabletFiles.sessionEnded()  // unmount the tablet volume, remove the forward
         }
         handlers.streamBitrate = { kbps in tabletFiles.streamBitrateChanged(kbps: kbps) }  // Wi-Fi file budget (T-268)
-        handlers.audioPrefs = { sid, prefs in audio.prefs(sessionID: sid, enabled: prefs.enabled) }
+        handlers.audioPrefs = { sid, prefs in audio.prefs(sessionID: sid, enabled: prefs.enabled, codec: prefs.codec) }
         handlers.networkProfileChanged = { [weak self] applied, pending in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.showNetworkProfile(applied, pending) } }
         }
