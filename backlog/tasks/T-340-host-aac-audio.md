@@ -1,7 +1,7 @@
 ---
 id: T-340
 title: Host — AAC-LC ses kodlama (AUDIO_PREFS.codec = 1 ve HELLO bit14)
-status: review
+status: done
 phase: 7
 owner: mac-host-dev
 depends_on: [T-337]
@@ -9,6 +9,8 @@ decisions: [0038, 0011]
 files:
   - host-mac/Sources/MateBridgeCore/Audio/
   - host-mac/Sources/MateBridgeHost/Audio/
+  - host-mac/Sources/MateBridgeHost/Session/SessionServer.swift  # orchestrator-approved 2026-10-11 (audio queue accounting, review fixes)
+  - host-mac/Sources/MateBridgeApp/main.swift  # orchestrator-approved (codec wiring)
   - host-mac/Tests/
   - backlog/tasks/T-340-host-aac-audio.md
 ---
