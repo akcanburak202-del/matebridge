@@ -280,7 +280,8 @@ public final class SessionServer: @unchecked Sendable {
 
     static let maxInflightBytes = 256 * 1024
     /// Sealed size of one 10 ms AUDIO_FRAME: record length (4) + type and tag (17) + fixed part (28) + 1920 PCM bytes.
-    static let sealedAudioFrameBytes = 4 + ProtocolConstants.recordOverhead + AudioFrame.fixedSize
+    static let sealedAudioFrameFramingBytes = 4 + ProtocolConstants.recordOverhead + AudioFrame.fixedSize
+    static let sealedAudioFrameBytes = sealedAudioFrameFramingBytes
         + Int(AudioStreamPolicy.framesPerPacket) * Int(AudioStreamPolicy.channels) * 2
     /// 100 ms of audio (PROTOCOL.md 5), about 19.2 KiB. An AUDIO_FRAME that would take the unsent control bytes above
     /// this is dropped: audio never pushes the connection to `maxInflightBytes` or queues far behind other sends.
@@ -790,7 +791,14 @@ public final class SessionServer: @unchecked Sendable {
         let items = audioLock.withLock { audioOutbox.take() }
         let now = nowUs()
         for item in items {
-            if case .audioConfig = item.message { closeAudioTimingWindow() }  // stream boundary, sent or not
+            if case .audioConfig(let config) = item.message {
+                closeAudioTimingWindow()  // stream boundary, sent or not
+                if config.state == .started, let id = activeControl {
+                    // The kernel's unsent mark follows the codec: 100 ms of AAC is far fewer bytes than of PCM.
+                    controlConnections[id]?.setNotSentLowat(AudioOutbox.notSentLowatBytes(
+                        for: config, framingBytes: Self.sealedAudioFrameFramingBytes))
+                }
+            }
             guard !stopped, item.sessionID != 0, item.sessionID == currentSessionID, let id = activeControl,
                   sealers[id] != nil else { continue }
             guard case .audioFrame(let frame) = item.message else {
@@ -799,7 +807,8 @@ public final class SessionServer: @unchecked Sendable {
             }
             let size = 4 + ProtocolConstants.recordOverhead + AudioFrame.fixedSize + frame.data.count
             guard !AudioOutbox.isStale(frame, nowUs: now),
-                  inflightBytes[id, default: 0] + size <= Self.audioBacklogBytes,
+                  inflightBytes[id, default: 0] + size
+                      <= AudioOutbox.backlogFrames(frameCount: Int(frame.frameCount)) * size,
                   !kernelAudioBacklog(id) else {
                 audioWireDrops.add(1, ordering: .relaxed)
                 continue

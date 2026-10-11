@@ -50,6 +50,14 @@ Karar 0038 §4; PROTOCOL.md AUDIO_PREFS/CONFIG/FRAME. Dal tabanı: `task/0038-re
 - Test edilmedi: gercek tablet/istemci kod cozumu, gercek sistem ses tap'i ile uzun sure calisma, CPU maliyeti.
 - check.sh: Swift gecti; Kotlin fixture-coverage testi beklendigi gibi basarisiz (T-339). Not: `ControlSocketTests.testLargeAndSmallRecordsKeepOrder` (XCTest) yuk altinda bir kez titreme gosterdi, tekrarda gecti; bu gorevle ilgisiz.
 
+### Review fixes (Codex round 1)
+
+- Integration branch merged (ff450dbe); full `check.sh` ALL OK (Kotlin included).
+- Timestamps: `capture_time_us` of each AU is now anchored to the real capture time of the PCM packet holding the AU's first decoded frame (source index `first + k*1024 - priming`, interpolated at 48 kHz inside the packet; extrapolated backwards only before the first packet). No accumulation of clock skew. Test: 100 ppm skew over 40 s. `sample_index` stays continuity-only (comments/tests say so, matching PROTOCOL.md).
+- Segment end: after completing the partial block, zeros for `ceil(priming/1024)` blocks are fed so the audio inside the encoder comes out, then reset. Test updated (5 units before reset).
+- Queue limits time-based for AAC: `AudioOutbox` drops oldest frames beyond 4800 sample frames (100 ms; AAC keeps 4 units, PCM still 10). `SessionServer.drainAudio` (minimal edit, Session/): user-space limit is `backlogFrames(frameCount) * frameSize`, and the control socket's `TCP_NOTSENT_LOWAT` is set at AUDIO_CONFIG(STARTED) from the codec (AAC about 3 nominal AUs = 915 B vs PCM 9 packets). `isStale` allows 66 ms extra for AAC units (their time is the first decoded frame, earlier by priming + own length). Tests in AudioOutboxTests. Pairing/HELLO_ACK paths untouched.
+- Not verified on hardware: kernel unsent mark behaviour with AAC on a real Wi-Fi link.
+
 ## Open questions
 
 - Index/zaman priming farki yukaridaki gibi; PROTOCOL.md AUDIO_FRAME'de sample_index anlami "blok ilk giris karesi (priming dusulmemis)" diye yazilmali mi (orkestrator karari).

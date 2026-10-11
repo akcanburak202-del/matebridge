@@ -100,21 +100,43 @@ import Testing
         #expect(units.map { Int64($0.captureTimeUs) } == expected)
     }
 
-    @Test func smallGapIsZeroFilledAndLargeGapResets() throws {
+    @Test func smallGapIsZeroFilledAndLargeGapFlushesThenResets() throws {
         let fake = FakeConverter()
         let stage = AACStage(converter: fake)
         var units = try stage.feed(pcm: packet(), sampleIndex: 0, captureTimeUs: 1_000_000)
         // Gap of 960 frames (< 4096): filled with zeros; 480 + 960 + 480 = 1920 -> 1 block.
         units += try stage.feed(pcm: packet(), sampleIndex: 1440, captureTimeUs: 1_030_000)
         #expect(units.count == 1 && fake.resets == 0)
-        // Large gap: partial block (896 pending) is completed and encoded, converter reset, new segment.
+        // Large gap: the partial block (896 pending) is completed (1 unit) and the encoder delay is flushed with
+        // silence (ceil(2112 / 1024) = 3 units) before the reset, so no audio stays inside the encoder.
         units += try stage.feed(pcm: packet(), sampleIndex: 100_000, captureTimeUs: 3_000_000)
-        #expect(units.count == 2 && fake.resets == 1)
+        #expect(units.count == 5 && fake.resets == 1)
+        #expect(units.map(\.sampleIndex) == [0, 1024, 2048, 3072, 4096])  // tail units keep stepping by 1024
         units += try stage.feed(pcm: packet(), sampleIndex: 100_480, captureTimeUs: 3_010_000)
         units += try stage.feed(pcm: packet(), sampleIndex: 100_960, captureTimeUs: 3_020_000)
-        #expect(units.count == 3)
-        #expect(units[2].sampleIndex == 100_000)  // new segment starts at its first packet
-        #expect(Int64(units[2].captureTimeUs) == 3_000_000 - 2112 * 1_000_000 / 48_000)
+        #expect(units.count == 6)
+        #expect(units[5].sampleIndex == 100_000)  // new segment starts at its first packet
+        #expect(Int64(units[5].captureTimeUs) == 3_000_000 - 2112 * 1_000_000 / 48_000)
+    }
+
+    @Test func timestampsFollowRealPacketTimesNotAnExact48kHzClock() throws {
+        let fake = FakeConverter(priming: 2112)
+        let stage = AACStage(converter: fake)
+        // The device clock runs 100 ppm fast against the host clock: each 480-frame packet takes 9_999 us.
+        var units: [AACUnit] = []
+        for k in 0..<4_000 {  // 40 s
+            units += try stage.feed(pcm: packet(), sampleIndex: UInt64(k * 480),
+                                    captureTimeUs: 5_000_000 + UInt64(k) * 9_999)
+        }
+        let last = units.last!
+        let position = Int64(last.sampleIndex) - 2112  // source frame of the unit's first decoded frame
+        let packetIndex = Int(position) / 480
+        let within = Int64(position) - Int64(packetIndex) * 480
+        let expected = 5_000_000 + Int64(packetIndex) * 9_999 + within * 1_000_000 / 48_000
+        #expect(Int64(last.captureTimeUs) == expected)
+        // Extrapolating from the segment start at exactly 48 kHz would be about 4 ms off by now (100 ppm over 40 s).
+        let naive = 5_000_000 + position * 1_000_000 / 48_000
+        #expect(abs(Int64(last.captureTimeUs) - naive) > 3_000)
     }
 
     // MARK: Real AudioConverter
