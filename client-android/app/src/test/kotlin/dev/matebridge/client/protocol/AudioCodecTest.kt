@@ -54,6 +54,15 @@ class AudioCodecTest {
     }
 
     @Test
+    fun prefsCodecOnlyOneIsAac() {
+        for (raw in listOf(0, 2, 0xff)) {
+            assertEquals(AudioPrefs.CODEC_PCM, (decode(frame(MsgType.AUDIO_PREFS, byteArrayOf(1, raw.toByte(), 0, 0))) as AudioPrefs).codec)
+        }
+        assertEquals(AudioPrefs.CODEC_AAC, (decode(frame(MsgType.AUDIO_PREFS, byteArrayOf(1, 1, 0, 0))) as AudioPrefs).codec)
+        assertEquals(1 shl 14, Capabilities.AUDIO_AAC)
+    }
+
+    @Test
     fun prefsEncodeDisabled() {
         assertArrayEquals(byteArrayOf(0x30, 4, 0, 0, 0, 0, 0, 0, 0), Codec.encode(AudioPrefs(false)))
     }
@@ -79,7 +88,7 @@ class AudioCodecTest {
 
     @Test
     fun frameCountOutOfRangeIsAnError() {
-        for (count in listOf(0, 961, 0xffff)) {
+        for (count in listOf(0, 1025, 0xffff)) {
             expectError(ProtocolException.Kind.INVALID_VALUE, frame(MsgType.AUDIO_FRAME, audioFramePayload(count, 4, 4)))
         }
     }
@@ -89,9 +98,9 @@ class AudioCodecTest {
         val one = decode(frame(MsgType.AUDIO_FRAME, audioFramePayload(1, 4, 4))) as AudioFrame
         assertEquals(1, one.frameCount)
         assertEquals(4, one.data.size)
-        val max = decode(frame(MsgType.AUDIO_FRAME, audioFramePayload(960, 3840, 3840))) as AudioFrame
-        assertEquals(960, max.frameCount)
-        assertEquals(3840, max.data.size)
+        val max = decode(frame(MsgType.AUDIO_FRAME, audioFramePayload(1024, 4096, 4096))) as AudioFrame
+        assertEquals(1024, max.frameCount)
+        assertEquals(4096, max.data.size)
     }
 
     @Test
@@ -116,7 +125,7 @@ class AudioCodecTest {
 
     @Test
     fun encodeRejectsInvalidFrames() {
-        for ((count, size) in listOf(0 to 0, 961 to 0, 960 to 65_536)) {
+        for ((count, size) in listOf(0 to 0, 1025 to 0, 1024 to 65_536)) {
             try {
                 Codec.encode(AudioFrame(1, 0, 0, 0, count, Bytes(ByteArray(size))))
                 fail("frame_count=$count size=$size must be refused")

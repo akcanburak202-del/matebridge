@@ -623,7 +623,7 @@ Host bir sonraki kareyi (istenen akışta) keyframe olarak kodlar. Art arda gele
 
 - Payload `28 + data_len`'den kısaysa ya da `frame_count` 0 veya 1024'ten büyükse **protokol hatasıdır** (fixture `invalid_audio_frame_short`, `invalid_audio_frame_count`; sınır karar 0038'den önce 960'tı).
 - `data_len`, güncel `AUDIO_CONFIG` biçimiyle uyuşmuyorsa (PCM: `frame_count × channels × 2`; AAC_LC: `frame_count ≠ 1024` ya da `data_len` 0 veya 1536'dan büyük): istemci paketi atar. Protokol hatası değildir.
-- AAC_LC'de `sample_index` ve `capture_time_us`, erişim birimi çözülünce çıkan 1024 karenin ilkine aittir (kodlayıcı gecikmesi host'ta düşülür); ardışık birimlerde `sample_index` 1024 artar.
+- AAC_LC'de `capture_time_us`, erişim birimi çözülünce çıkan 1024 karenin ilkinin yakalama zamanıdır (kodlayıcı gecikmesi, ~2112 kare, host'ta düşülür; A/V senkronu bununla yapılır). `sample_index` yalnız süreklilik ve boşluk içindir: ardışık birimlerde 1024 artar, sıçrama boşluk demektir; PCM karşılığından sabit bir kodlayıcı gecikmesi kadar farklıdır ve işaretsiz kalsın diye bu gecikme düşülmez. İstemci `sample_index`'ten zaman türetmez (T-340).
 - Ses içeriği asla loglanmaz.
 
 ### 0x40 VIDEO_HELLO (C→H, video bağlantısı)

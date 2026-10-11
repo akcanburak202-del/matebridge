@@ -48,6 +48,27 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
 
     fun saveEndpoint(endpoint: Endpoint) = store.putString(KEY_ENDPOINT, endpoint.toString())
 
+    /**
+     * Remote address (decision 0038 section 1): kept apart from the manual address ([lastEndpoint]); null until the user
+     * enters one. Stored as `host[:port]`, parsed by [RemoteAddress].
+     */
+    fun remoteEndpoint(): Endpoint? = store.getString(KEY_REMOTE_ENDPOINT)?.let { RemoteAddress.parse(it) }
+
+    fun saveRemoteEndpoint(endpoint: Endpoint) = store.putString(KEY_REMOTE_ENDPOINT, RemoteAddress.display(endpoint))
+
+    /** Remote bit rate (decision 0038): one of [RemoteProfile.BITRATE_OPTIONS_KBPS], default 1 Mbps; apart from [bitrateKbps]. */
+    fun remoteBitrateKbps(): Long = RemoteProfile.sanitizeBitrate(store.getString(KEY_REMOTE_BITRATE)?.toLongOrNull())
+
+    fun setRemoteBitrateKbps(kbps: Long) = store.putString(KEY_REMOTE_BITRATE, RemoteProfile.sanitizeBitrate(kbps).toString())
+
+    /** Remote audio (decision 0038); default OFF (unlike [audioEnabled]), only a stored "1" enables. */
+    fun remoteAudio(): Boolean = (store.getString(KEY_REMOTE_AUDIO) ?: if (RemoteProfile.DEFAULT_AUDIO) "1" else "0") == "1"
+
+    fun setRemoteAudio(on: Boolean) = store.putString(KEY_REMOTE_AUDIO, if (on) "1" else "0")
+
+    /** The stored remote profile (bit rate and audio). */
+    fun remoteProfile(): RemoteProfile = RemoteProfile(remoteBitrateKbps(), remoteAudio())
+
     /** Whether the on-screen statistics overlay is enabled (default off). */
     fun statsOverlay(): Boolean = store.getString(KEY_STATS) == "1"
 
@@ -234,11 +255,14 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
         val USER_KEYS: List<String> get() = listOf(
             KEY_STATS, KEY_STREAM_MODE, KEY_BITRATE, KEY_PAD_SPEED, KEY_MOUSE_SPEED, KEY_CLIPBOARD, KEY_FILES,
             KEY_FILES_ROOT, KEY_FILES_RO, KEY_AUDIO, KEY_AUDIO_OUT, KEY_PEN_TRAIL, KEY_PEN_DOT, KEY_FINGER_OFF,
-            KEY_TRANSPORT, KEY_GAME_RESOLUTION, KEY_FPS_DAILY, KEY_FPS_GAME, KEY_HDR_GAME, KEY_HDR_DAILY, KEY_CURSOR,
+            KEY_TRANSPORT, KEY_GAME_RESOLUTION, KEY_FPS_DAILY, KEY_FPS_GAME, KEY_HDR_GAME, KEY_HDR_DAILY, KEY_CURSOR, KEY_REMOTE_BITRATE, KEY_REMOTE_AUDIO,
         )
 
         const val KEY_DEVICE_ID = "device_id"
         const val KEY_ENDPOINT = "last_endpoint"
+        const val KEY_REMOTE_ENDPOINT = "remote_endpoint" // kept by "Varsayılanlara dön", like the last endpoint
+        const val KEY_REMOTE_BITRATE = "remote_bitrate_kbps"
+        const val KEY_REMOTE_AUDIO = "remote_audio"
         const val KEY_TRANSPORT = "transport"
         const val KEY_STATS = "stats_overlay"
         const val KEY_STREAM_MODE = "stream_mode"

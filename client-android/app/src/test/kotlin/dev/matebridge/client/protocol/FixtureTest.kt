@@ -67,6 +67,9 @@ class FixtureTest {
             "stream_config_packed444" to StreamConfig(
                 4, StreamConfig.CODEC_HEVC, 2800, 1840, 1400, 920, 60, 30000, 1, 13, 1, 1, StreamConfig.CHROMA_LAYOUT_PACKED_444,
             ),
+            "stream_prefs_remote" to StreamPrefs(
+                15, 1000, 1000, 1400, 920, StreamPrefs.DYNAMIC_RANGE_SDR, StreamPrefs.CHROMA_NORMAL, StreamPrefs.LINK_REMOTE,
+            ),
             "bye" to Bye(Bye.NORMAL),
             "bye_host_sleep" to Bye(Bye.HOST_SLEEP),
             "stream_prefs" to StreamPrefs(120, 750, 0),
@@ -135,6 +138,9 @@ class FixtureTest {
             "keyframe_request" to KeyframeRequest(KeyframeRequest.DECODE_ERROR),
             "keyframe_request_view" to KeyframeRequest(KeyframeRequest.DECODE_ERROR, KeyframeRequest.VIEW_AUX),
             "audio_prefs" to AudioPrefs(true),
+            "audio_prefs_aac" to AudioPrefs(true, AudioPrefs.CODEC_AAC),
+            "audio_config_aac" to AudioConfig(4, AudioConfig.STATE_STARTED, AudioConfig.FORMAT_AAC_LC, 48000, 2, 1024),
+            "audio_frame_aac" to AudioFrame(4, 5, 5120, 123456789012L, 1024, Bytes(hex("211004608c1c"))),
             "audio_config" to AudioConfig(3, AudioConfig.STATE_STARTED, AudioConfig.FORMAT_PCM_S16LE, 48000, 2, 480),
             "audio_config_stopped" to AudioConfig.stopped(3),
             "audio_frame" to AudioFrame(3, 7, 3360, 123456789012L, 4, Bytes(hex("00000000e80318fcff7f0080ffff0100"))),
@@ -156,7 +162,7 @@ class FixtureTest {
         val invalid = setOf(
             "invalid_key_short", "invalid_pen_count_zero", "invalid_audio_frame_short", "invalid_stream_prefs_partial",
             "invalid_stream_prefs_hdr_partial", "invalid_files_hello_short", "invalid_files_data_empty", "invalid_cursor_shape_short",
-            "invalid_str8_utf8",
+            "invalid_str8_utf8", "invalid_stream_prefs_link_partial", "invalid_audio_frame_count",
         )
         val skipped = setOf("unknown_type")
 
