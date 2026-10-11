@@ -245,6 +245,8 @@ public struct SessionMachine: Sendable {
         var silenceReleased = false
         /// The last `STREAM_PREFS` of this session had `link = 1` (decision 0038); normal timings until one arrives.
         var remote = false
+        /// Where the peer address sits relative to the Mac (decision 0038 section 5). Only `.local` may pair.
+        var peer: PeerLocality = .local
         /// Set when the connection becomes the active session (`start`), never before: no PING while
         /// `.awaitingHello`, `.lookingUp`, `.pending` or `.proving`.
         var ping: HostPing?
@@ -313,9 +315,13 @@ public struct SessionMachine: Sendable {
 
     // MARK: Control connection events
 
-    public mutating func connectionOpened(_ id: ConnectionID, now: UInt64) -> [SessionAction] {
+    /// `peer` is the host's classification of the peer address (`PeerClassifier`, decision 0038 section 5): a `.remote`
+    /// peer never starts a pairing (PAIRED sessions are unaffected). Required on purpose (fail closed): the session
+    /// server always passes the real classification.
+    public mutating func connectionOpened(_ id: ConnectionID, now: UInt64, peer: PeerLocality) -> [SessionAction] {
         clock = max(clock, now)
-        connections[id] = Conn(phase: .awaitingHello(deadline: now + configuration.helloTimeoutUs), lastReceive: now)
+        connections[id] = Conn(phase: .awaitingHello(deadline: now + configuration.helloTimeoutUs), lastReceive: now,
+                               peer: peer)
         return [.log(.debug, ev: "control_open", conn: id, fields: "")]
     }
 
@@ -697,12 +703,21 @@ public struct SessionMachine: Sendable {
             return [.send(id, ack(.versionMismatch)), .close(id),
                     .log(.warning, ev: "version_mismatch", conn: id, fields: "peer_version=\(hello.protocolVersion)")]
         }
-        if persistingOrphans.contains(hello.deviceID) {
+        // A remote peer without a pair key can only be asking for a PAIRING: refuse before anything else (BUSY would
+        // also tell it that a session is live). With an approval record the key lookup decides in `continueHello`.
+        if connections[id]?.peer == .remote, !configuration.allowPaired || !approvedDevices.contains(hello.deviceID) {
+            return refuseRemotePairing(id)
+        }
+        // A remote peer with an approval record skips the BUSY shortcuts below: its key is resolved first, so one that
+        // turns out to need a PAIRING gets REJECTED (never BUSY, which would leak occupancy and invite a retry loop);
+        // one with a key meets the same BUSY rules in `continueHello`.
+        let skipBusyShortcuts = connections[id]?.peer == .remote
+        if !skipBusyShortcuts, persistingOrphans.contains(hello.deviceID) {
             connections[id] = nil
             return [.send(id, ack(.busy)), .close(id), .log(.info, ev: "busy", conn: id, fields: "reason=key_storing")]
         }
         // Another device holding the slot is BUSY whatever the key situation: no lookup needed.
-        if let owner = slotOwner {
+        if !skipBusyShortcuts, let owner = slotOwner {
             var ownerDevice: DeviceID?
             switch connections[owner]?.phase {
             case .pending(let h, _, _)?: ownerDevice = h.deviceID
@@ -730,8 +745,19 @@ public struct SessionMachine: Sendable {
         return continueHello(id, hello, now: now, pairKey: key)
     }
 
+    /// Plaintext `HELLO_ACK(REJECTED, NONE)` and close; nothing is kept for the connection. The peer address is not
+    /// logged.
+    private mutating func refuseRemotePairing(_ id: ConnectionID) -> [SessionAction] {
+        connections[id] = nil
+        return [.send(id, ack(.rejected)), .close(id),
+                .log(.warning, ev: "pairing_refused", conn: id, fields: "reason=remote")]
+    }
+
     private mutating func continueHello(_ id: ConnectionID, _ hello: Hello, now: UInt64,
                                         pairKey: SecretBytes?) -> [SessionAction] {
+        // Decision 0038 section 5: no pairing from a remote peer. Before the BUSY check, the key exchange, any pending
+        // state or approval window (and so before any orphan approval can exist for this peer).
+        if pairKey == nil, connections[id]?.peer == .remote { return refuseRemotePairing(id) }
         // One session at a time. The same device may reconnect, but only with its pair key (PAIRED): its session is
         // then taken over once the new connection proved key possession (`prove`). Anything else is BUSY, so the
         // device_id (sent in the clear) cannot be used by a bystander to knock a live session off.

@@ -1170,7 +1170,12 @@ public final class SessionServer: @unchecked Sendable {
         })
         controlConnections[id] = connection
         inbounds[id] = ControlInbound()
-        apply(machine.connectionOpened(id, now: nowUs()))
+        // Decision 0038 section 5: classified once, here, from the peer address (never from anything the client says).
+        // Interfaces are read per connection so a network change is seen. Not logged: only the verdict is used.
+        let locality = PeerClassifier.classify(
+            peerHost: NetworkInterfaces.peerText(host: connection.peerHost, scopeID: connection.peerScopeID),
+            interfaces: NetworkInterfaces.localInterfaces())
+        apply(machine.connectionOpened(id, now: nowUs(), peer: locality))
     }
 
     /// Control connection input: plain frames until the handshake answer went out, encrypted records afterwards.

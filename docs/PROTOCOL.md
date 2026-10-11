@@ -706,7 +706,7 @@ Gönderen bir kayda en çok `size` bayt koyar; Wi-Fi'da öneri ≤ 16 KiB (§5, 
 - **Paketlenmiş tam renk (karar 0034):** yardımcı akışın kendi sınırlı kuyruğu vardır (ana ile aynı derinlik). Yardımcı kuyruğu taşarsa yalnız yardımcı kareler atılır, `KEYFRAME_REQUEST(view = 1)` gider; bu sırada ana kareler yalnız-ana gösterilir. Ana akışın kuralları yukarıdaki gibidir. Host'ta yardımcı kareler de en çok 2 kare bekler; soket tıkanınca önce yardımcı atılır.
 
 **Ses (karar 0011):**
-- Host: gönderilmeyi bekleyen ses en çok **100 ms** (10 paket). Taşarsa en eski paketler atılır; `sample_index` boşluğu oluşur. Ses paketleri kontrol bağlantısının H→C yönündedir, girdiyi (C→H) bekletmez.
+- Host: gönderilmeyi bekleyen ses en çok **100 ms** (PCM'de 10 paket; sınır bayt değil kare sayısıyla tutulur). Taşarsa en eski paketler atılır; `sample_index` boşluğu oluşur. AAC'de çekirdek gönderim tamponundaki ses yalnız bayt eşiğiyle (~1 KB) sınırlanabilir; küçük (sessize yakın) erişim birimlerinde bu süre 100 ms'yi aşabilir. Üst sınır istemcinin 300 ms titreşim tamponudur (karar 0038, T-340). Ses paketleri kontrol bağlantısının H→C yönündedir, girdiyi (C→H) bekletmez.
 - İstemci: titreşim tamponu en çok **300 ms**. Taşarsa en eski ses atılır (kısa sönümle).
 
 **Dosya bağlantıları (karar 0035):**
