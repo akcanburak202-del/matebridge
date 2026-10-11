@@ -463,6 +463,16 @@ public final class BsdTcpConnection: @unchecked Sendable {
     /// Bytes queued in user space and not yet handed to the kernel.
     public var pendingBytes: Int { lock.withLock { outbound.pendingBytes } }
 
+    /// Changes `TCP_NOTSENT_LOWAT` of the open connection (decision 0038: the video socket's mark follows the remote
+    /// profile's bit rate). Takes effect for the next writability check. False after close or when the call fails.
+    @discardableResult
+    public func setNotSentLowat(_ bytes: Int) -> Bool {
+        lock.withLock {
+            guard !fdClosed else { return false }
+            return (try? setOption(fd, IPPROTO_TCP, TCP_NOTSENT_LOWAT, Int32(clamping: bytes), "TCP_NOTSENT_LOWAT")) != nil
+        }
+    }
+
     /// `getsockopt(TCP_CONNECTION_INFO)` while the descriptor is open; nil after close or on failure.
     public func connectionInfo() -> tcp_connection_info? {
         lock.withLock {

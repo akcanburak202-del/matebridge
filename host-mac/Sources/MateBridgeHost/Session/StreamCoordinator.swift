@@ -585,7 +585,7 @@ public final class StreamCoordinator: @unchecked Sendable {
             + "display=\(derived.displayModeText) requested_display=\(prefs.displayWidthPx)x\(prefs.displayHeightPx) "
             + "game_display=\(game.logName) dynamic_range=\(derived.dynamicRange.logName) "
             + "requested_dynamic_range=\(prefs.dynamicRange) chroma=\(derived.chromaPreference.logName) "
-            + "requested_chroma=\(prefs.chroma)")
+            + "requested_chroma=\(prefs.chroma) link=\(p.link)")
         if let now = prefsGate.offer(p, now: HostClock.nowUs()) { await applyPrefs(now) }
     }
 
@@ -633,9 +633,15 @@ public final class StreamCoordinator: @unchecked Sendable {
             if breakerBefore.state != .closed { log(.info, "pipeline_breaker_reset", "reason=prefs_change") }
             logBreaker(from: breakerBefore)
         }
-        prefsStore.save(prefs, device: live.deviceID)  // the next connection of this tablet starts in this mode
+        // The next connection of this tablet starts in this mode. A remote session (`link = 1`, decision 0038) is
+        // never remembered: the next ordinary connection must not open with the remote settings.
+        if RemoteLinkProfile.persistsPrefs(prefs) { prefsStore.save(prefs, device: live.deviceID) }
         live.prefs = prefs
         session = live
+        // Decision 0038: the refinement ceiling follows the link whether or not the video settings change (a pipeline
+        // built below resolves it by itself; the running one is adjusted live, no rebuild, no new config_id).
+        pipeline?.setRefineMaxBytes(refineConfig(prefs: prefs, transport: live.transport,
+                                                  bitrateKbps: wanted.bitrateKbps).maxBytes)
         guard wanted != live.settings else { return }
         let old = live.settings
         live.settings = wanted
@@ -999,13 +1005,19 @@ public final class StreamCoordinator: @unchecked Sendable {
         p.display.invalidate()
     }
 
+    private func refineConfig(prefs: StreamPrefs?, transport: SessionTransport, bitrateKbps: Int) -> StillRefineConfig {
+        StillRefineConfig.resolve(env: ProcessInfo.processInfo.environment, transport: transport,
+                                  remoteKbps: prefs?.isRemote == true ? bitrateKbps : nil)
+    }
+
     private func createPipeline(settings: VideoSettings, reusing display: VirtualDisplay? = nil) async {
         guard !isShuttingDown else { return }
         pipelineID += 1
         let id = pipelineID
         // T-253: the byte ceiling of a refinement train depends on the link (USB or network).
-        let refine = StillRefineConfig.resolve(env: ProcessInfo.processInfo.environment,
-                                               transport: session?.transport ?? .usb)
+        // Decision 0038: a remote session (`link = 1`) budgets 250 ms of its target bit rate (at least 16 KB).
+        let refine = refineConfig(prefs: session?.prefs, transport: session?.transport ?? .usb,
+                                  bitrateKbps: settings.bitrateKbps)
         let p = VideoPipeline(settings: settings, reusing: display, refine: refine,
                               onPackedFallback: { [weak self] reason in self?.post(.packedFallback(id: id, reason: reason)) },
                               onFailure: { [weak self] error in

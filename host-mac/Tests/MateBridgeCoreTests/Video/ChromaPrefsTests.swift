@@ -64,7 +64,7 @@ final class ChromaPrefsTests: XCTestCase {
     }
 
     func testLongerPayloadKeepsChromaAndIgnoresTheTail() throws {
-        let payload: [UInt8] = [0x3c, 0, 0xe8, 0x03, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0xAA, 0xBB]
+        let payload: [UInt8] = [0x3c, 0, 0xe8, 0x03, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0xAA, 0xBB]  // 14 + link group + tail
         XCTAssertEqual(try decode(frame(payload)), .streamPrefs(prefs(chroma: 1)))
     }
 

@@ -26,8 +26,8 @@ extension VideoSettings {
         return min(max(Int(kbps.rounded()), 20_000), 80_000)
     }
 
-    /// Range a non-zero `STREAM_PREFS.bitrate_kbps` is clamped to (PROTOCOL.md 0x05, decision 0013).
-    public static let userBitrateRangeKbps = 5_000...150_000
+    /// Range a non-zero `STREAM_PREFS.bitrate_kbps` is clamped to (PROTOCOL.md 0x05, decision 0013; the lower bound was 5 000 before decision 0038).
+    public static let userBitrateRangeKbps = 500...150_000
 
     /// `STREAM_PREFS.bitrate_kbps` as the host applies it: 0 = the mode default (nil), anything else clamped to
     /// `userBitrateRangeKbps`.

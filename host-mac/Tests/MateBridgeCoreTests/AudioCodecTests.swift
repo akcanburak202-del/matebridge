@@ -47,6 +47,24 @@ import Testing
         #expect(try decodeOne(frame(0x30, [raw, 0, 0, 0])) == .audioPrefs(AudioPrefs(enabled: false)))
     }
 
+    /// Decision 0038: the second byte (the former `reserved`) is `codec`; unknown values count as PCM.
+    @Test(arguments: [(UInt8(0), AudioCodecPreference.pcm), (1, .aac), (2, .pcm), (0xff, .pcm)])
+    func prefsCodecByte(raw: UInt8, expected: AudioCodecPreference) throws {
+        guard case .audioPrefs(let p)? = try decodeOne(frame(0x30, [1, raw, 0, 0])) else {
+            Issue.record("not audio prefs"); return
+        }
+        #expect(p.enabled && p.codecWire == raw && p.codec == expected)
+    }
+
+    @Test func prefsEncodeCodec() throws {
+        #expect(try Message.audioPrefs(AudioPrefs(enabled: true, codecWire: 1)).encode() == [0x30, 4, 0, 0, 0, 1, 1, 0, 0])
+    }
+
+    @Test func aacConstants() {
+        #expect(AudioFormat.aacLC.rawValue == 2)
+        #expect(Capabilities.audioAAC.rawValue == 1 << 14)
+    }
+
     @Test func prefsEncodeDisabled() throws {
         #expect(try Message.audioPrefs(AudioPrefs(enabled: false)).encode() == [0x30, 4, 0, 0, 0, 0, 0, 0, 0])
     }
@@ -70,7 +88,7 @@ import Testing
         }
     }
 
-    @Test(arguments: [UInt16(0), 961, 0xffff])
+    @Test(arguments: [UInt16(0), 1025, 0xffff])
     func frameCountOutOfRangeIsAnError(count: UInt16) {
         #expect(throws: ProtocolError.invalidField("frame_count")) {
             try decodeOne(frame(0x32, audioFramePayload(frameCount: count, dataLen: 4, dataBytes: 4)))
@@ -81,9 +99,9 @@ import Testing
         let one = try decodeOne(frame(0x32, audioFramePayload(frameCount: 1, dataLen: 4, dataBytes: 4)))
         guard case .audioFrame(let a)? = one else { Issue.record("not an audio frame"); return }
         #expect(a.frameCount == 1 && a.data.count == 4)
-        let max = try decodeOne(frame(0x32, audioFramePayload(frameCount: 960, dataLen: 3840, dataBytes: 3840)))
+        let max = try decodeOne(frame(0x32, audioFramePayload(frameCount: 1024, dataLen: 4096, dataBytes: 4096)))
         guard case .audioFrame(let b)? = max else { Issue.record("not an audio frame"); return }
-        #expect(b.frameCount == 960 && b.data.count == 3840)
+        #expect(b.frameCount == 1024 && b.data.count == 4096)
     }
 
     @Test func frameShortDataIsAnError() {
@@ -115,7 +133,7 @@ import Testing
                                               data: [])).encode()
         }
         #expect(throws: ProtocolError.invalidField("frame_count")) {
-            try Message.audioFrame(AudioFrame(streamID: 1, seq: 0, sampleIndex: 0, captureTimeUs: 0, frameCount: 961,
+            try Message.audioFrame(AudioFrame(streamID: 1, seq: 0, sampleIndex: 0, captureTimeUs: 0, frameCount: 1025,
                                               data: [])).encode()
         }
         #expect(throws: ProtocolError.invalidField("data_len")) {
