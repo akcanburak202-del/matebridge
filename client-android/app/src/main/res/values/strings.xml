@@ -59,4 +59,11 @@
     <!-- T-156: terminal after repeated PAIRED connections that never authenticated a host record -->
     <string name="key_mismatch">Bu Mac\'in anahtarı uyuşmuyor. Önce Mac\'in açık ve doğru Mac olduğundan emin ol; sonra tablette \'Bu Mac\'i unut\' ve Mac\'te \'Onaylı cihazları unut\' deyip yeniden eşleş.</string>
     <string name="forget_none">Bu tablette unutulacak bir Mac yok (önce Mac\'e bağlan).</string>
+    <!-- T-339 remote connection (decision 0038) -->
+    <string name="remote_connect">Uzaktan bağlan</string>
+    <string name="remote_edit">Uzak adres</string>
+    <string name="remote_endpoint_hint">Uzak adres (örn. mac.tailnet.ts.net)</string>
+    <string name="invalid_remote_endpoint">Geçersiz uzak adres: IPv4 ya da ad yaz, istersen :port ekle</string>
+    <string name="remote_pairing_refused">Yeni eşleşme yalnız ev ağında ya da USB ile yapılabilir.</string>
+    <string name="remote_no_mode_change">Uzak oturumda görüntü modu değişmez.</string>
 </resources>

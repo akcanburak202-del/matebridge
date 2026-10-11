@@ -99,6 +99,12 @@ object Capabilities {
 
     /** Draws the cursor itself: sends `CURSOR_PREFS`, handles `CURSOR_SHAPE` and `CURSOR_STATE` (decision 0036, T-276). */
     const val LOCAL_CURSOR = 1 shl 13
+
+    /**
+     * Decodes AAC-LC 48 kHz stereo (`AUDIO_CONFIG.format = 2`) and writes `AUDIO_PREFS.codec` (decision 0038). Defined
+     * here for the codec tests; NOT reported in HELLO until the AAC decoder lands (T-341).
+     */
+    const val AUDIO_AAC = 1 shl 14
 }
 
 // ---- Session ----
@@ -205,6 +211,11 @@ data class StreamPrefs(
      * (decision 0034, [CHROMA_FULL]). Same group as [dynamicRange].
      */
     val chroma: Int = CHROMA_NORMAL,
+    /**
+     * Decision 0038, third optional group (with a reserved byte): [LINK_NORMAL] or [LINK_REMOTE]. Written only when
+     * non-zero (then the two earlier groups are written too, possibly all zero); a 15-byte payload is a protocol error.
+     */
+    val link: Int = LINK_NORMAL,
 ) : Message {
     override val type get() = MsgType.STREAM_PREFS
 
@@ -216,6 +227,11 @@ data class StreamPrefs(
 
         /** Decision 0034: packed full colour (only sent in Gunluk 60, native display, SDR, capability passed). */
         const val CHROMA_FULL = 2
+
+        const val LINK_NORMAL = 0
+
+        /** Decision 0038: remote (minimum data) session; sent only by the "Uzaktan baglan" session. */
+        const val LINK_REMOTE = 1
     }
 }
 
@@ -564,8 +580,15 @@ data class KeyframeRequest(val reason: Int, val view: Int = VIEW_UNSPECIFIED) : 
 // ---- Audio (decision 0011) ----
 
 /** Client audio request (C to H, PROTOCOL.md 0x30). On the wire any value other than 1 decodes as false. */
-data class AudioPrefs(val enabled: Boolean) : Message {
+data class AudioPrefs(val enabled: Boolean, val codec: Int = CODEC_PCM) : Message {
     override val type get() = MsgType.AUDIO_PREFS
+
+    companion object {
+        const val CODEC_PCM = 0
+
+        /** Decision 0038; only written when HELLO reported [Capability.AUDIO_AAC]. On the wire any other value decodes as PCM. */
+        const val CODEC_AAC = 1
+    }
 }
 
 /**
@@ -587,6 +610,9 @@ data class AudioConfig(
         const val STATE_STARTED = 1
         const val FORMAT_PCM_S16LE = 1
 
+        /** Decision 0038: raw AAC-LC access units (no ADTS), 48 kHz stereo, 1024 frames per packet. */
+        const val FORMAT_AAC_LC = 2
+
         fun stopped(streamId: Int) = AudioConfig(streamId, STATE_STOPPED, 0, 0, 0, 0)
     }
 }
@@ -597,7 +623,7 @@ data class AudioFrame(
     val seq: Long, // u32
     val sampleIndex: Long, // u64, first frame's index in the stream
     val captureTimeUs: Long, // u64, host clock shared with VIDEO_FRAME.capture_time_us
-    val frameCount: Int, // 1..960
+    val frameCount: Int, // 1..1024
     val data: Bytes,
 ) : Message {
     override val type get() = MsgType.AUDIO_FRAME
@@ -605,7 +631,7 @@ data class AudioFrame(
     companion object {
         /** stream_id, reserved, seq, sample_index, capture_time_us, frame_count, data_len. */
         const val FIXED_BYTES = 28
-        const val MAX_FRAMES = 960
+        const val MAX_FRAMES = 1024
     }
 }
 

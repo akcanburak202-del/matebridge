@@ -77,6 +77,8 @@ class AuxQueueAndPairingTest {
         assertTrue(q.takeRetry()) // never requested yet, gate closed
         assertTrue(!q.takeRetry())
         now += 600_000_000L
+        assertTrue(!q.takeRetry()) // decision 0038: the second repeat waits 1 s
+        now += 500_000_000L
         assertTrue(q.takeRetry())
         q.offer(frame(1, kf))
         now += 600_000_000L
@@ -147,5 +149,35 @@ class AuxQueueAndPairingTest {
         assertEquals(50.0, p50, 1e-9)
         assertEquals(95.0, p95, 1e-9)
         assertNull(t.percentiles()) // reset
+    }
+
+    @Test
+    fun auxRetryBacksOffTo4sAndAKeyframeResets() {
+        val q = queue()
+        q.reset(0) // the start request
+        val gaps = ArrayList<Int>()
+        var t = 0
+        while (gaps.size < 5) {
+            now += 100_000_000L; t += 100
+            if (q.takeRetry()) { gaps += t; t = 0 }
+        }
+        assertEquals(listOf(500, 1000, 2000, 4000, 4000), gaps)
+    }
+
+    @Test
+    fun retryAnswersAHeldOverflowRequestSoNoRedundantFramesDroppedFollows() {
+        val q = queue(depth = 2)
+        q.reset(KeyframeRequest.STARTUP)
+        q.offer(frame(1, kf))
+        q.offer(frame(2, 0)); q.offer(frame(3, 0))
+        assertNull(q.offer(frame(4, 0))) // overflow inside the hold-off: held
+        now += 600_000_000L
+        assertTrue(q.takeRetry()) // the retry goes out first
+        now += 600_000_000L
+        assertNull(q.offer(frame(5, 0))) // no redundant FRAMES_DROPPED, the backoff is not reset
+        now += 300_000_000L
+        assertTrue(!q.takeRetry()) // 900 ms since the retry: still waiting out its 1 s delay
+        now += 200_000_000L
+        assertTrue(q.takeRetry())
     }
 }

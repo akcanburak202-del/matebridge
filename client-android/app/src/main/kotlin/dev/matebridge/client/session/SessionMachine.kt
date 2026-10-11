@@ -79,6 +79,12 @@ class SessionMachine(
     private val recordAuthenticated: (Int) -> Boolean = { false },
     /** T-276 (decision 0036): CURSOR_PREFS wish; null = this client does not draw the cursor (nothing is sent). */
     initialCursor: Boolean? = null,
+    /**
+     * Decision 0038 section 6: whether input is active at `nowUs` (something held, or an input event less than 2 s ago;
+     * [RemoteTimings.inputActive]). Read by the engine thread on each tick of a remote session to pick the 500 ms or 2 s
+     * PING rate; the default (always active) keeps the fast rate.
+     */
+    private val inputActive: (Long) -> Boolean = { true },
     /** T-150: log sink (level, ev, fields) for the trust lines; never given a code, key, host_id or host name. */
     private val log: (Char, String, String) -> Unit = { _, _, _ -> },
 ) {
@@ -98,6 +104,12 @@ class SessionMachine(
             val wake: WakeTag? = null,
             val userInitiated: Boolean = false,
             val expectHost: HostTag? = null,
+            /**
+             * Decision 0038: non-null = a remote ("Uzaktan bağlan") session with this profile (also for its automatic
+             * retries). STREAM_PREFS / AUDIO_PREFS then come from the profile, FILES_INFO is OFF, PING is slow when idle,
+             * the PONG timeout is 10 s and no migration happens. Null = the normal session.
+             */
+            val remote: RemoteProfile? = null,
         ) : Event
         data object Stop : Event
         /**
@@ -144,6 +156,8 @@ class SessionMachine(
         data class KeyStoreFailed(val gen: Int) : Event
         /** The user picked a display mode (T-050): remembered for this and later connections, sent now when input is allowed. */
         data class SetPrefs(val prefs: StreamPrefs) : Event
+        /** Decision 0038: the remote profile changed (bit rate, audio); sent now when a remote session is accepted. */
+        data class SetRemote(val profile: RemoteProfile) : Event
         /** The debounced panel rate (T-059): remembered, sent now when input is allowed and the value changed. */
         data class SetDisplayRate(val hz: Int) : Event
         /** The user's audio setting (T-095): remembered, and sent as AUDIO_PREFS now when input is allowed. */
@@ -298,6 +312,11 @@ class SessionMachine(
     private var tunnelPlan: FilesTunnelPlan? = null
     private var pingSeq = 0L
     private var nextPingUs = 0L
+    /** Decision 0038: when the last PING went out (remote sessions pick their interval from it). */
+    private var lastPingUs = 0L
+    /** Decision 0038: the remote profile of the current start, null = normal session. */
+    private var remote: RemoteProfile? = null
+    private val pongTimeoutUs: Long get() = if (remote != null) RemoteTimings.PONG_TIMEOUT_US else PONG_TIMEOUT_US
     private var lastPongUs = 0L
     private var retryAtUs = 0L
     private var backoffUs = BACKOFF_START_US
@@ -395,7 +414,7 @@ class SessionMachine(
             is Event.Start -> {
                 if (phase != Phase.IDLE) byeAndClose(out)
                 clearPrompt()
-                if (event.userInitiated) {
+                if (event.userInitiated || event.remote != null) { // 0038: the remote button is a user tap too (clears the latches, never pairs)
                     cancelLatched = false
                     authFailures.clear() // T-156: the user tries again
                 } else if (cancelLatched) {
@@ -420,6 +439,7 @@ class SessionMachine(
                 wakeAttempt = event.wake
                 userInitiated = event.userInitiated
                 expectHost = event.expectHost
+                remote = event.remote
                 // T-150: an automatic start never touches an unresolved pairing (it would replace the Mac's pending code).
                 val stored = if (event.userInitiated) null else storedPrompt()
                 if (stored != null) showStoredPrompt(stored, nowUs, out) else openControl(out)
@@ -430,6 +450,7 @@ class SessionMachine(
                 if (id != null && HostTag.of(id) != event.host) refuseWrongHost(out)
             }
             Event.Stop -> {
+                remote = null
                 wakeAttempt = null
                 userInitiated = false
                 expectHost = null
@@ -450,6 +471,7 @@ class SessionMachine(
                 phase = Phase.AWAIT_ACK
                 lastPongUs = nowUs
                 nextPingUs = nowUs + pingIntervalUs
+                lastPingUs = nowUs
                 out += Action.Send(hello)
             }
             is Event.ControlClosed -> if (isCandidate(event.gen)) {
@@ -594,7 +616,8 @@ class SessionMachine(
             is Event.SetPrefs -> {
                 if (event.prefs != prefs) {
                     prefs = event.prefs
-                    if (inputAllowed) out += Action.Send(prefs)
+                    // Decision 0038: a remote session keeps its own profile; the normal choice is only remembered.
+                    if (inputAllowed && remote == null) out += Action.Send(prefs)
                 }
             }
             is Event.SetDisplayRate -> {
@@ -608,7 +631,17 @@ class SessionMachine(
                 // the host's state is what matters, and a repeat is harmless.
                 if (audio != null) {
                     audio = event.enabled
-                    if (inputAllowed) out += Action.Send(AudioPrefs(event.enabled))
+                    if (inputAllowed && remote == null) out += Action.Send(AudioPrefs(event.enabled))
+                }
+            }
+            is Event.SetRemote -> {
+                val was = remote
+                if (was != null && was != event.profile) {
+                    remote = event.profile
+                    if (inputAllowed) {
+                        if (event.profile.streamPrefs() != was.streamPrefs()) out += Action.Send(event.profile.streamPrefs())
+                        if (audio != null && event.profile.audio != was.audio) out += Action.Send(event.profile.audioPrefs())
+                    }
                 }
             }
             is Event.SetMode -> {
@@ -691,6 +724,7 @@ class SessionMachine(
     /** The FILES_INFO this session may announce: a READY of another session's server (or none) is OFF. */
     private fun effectiveFiles(): FilesInfo? {
         val f = files ?: return null
+        if (remote != null) return FilesInfo.OFF // decision 0038: no tablet files in a remote session
         return if (f.ready && filesScope.generation != controlGen) FilesInfo.OFF else f
     }
 
@@ -837,9 +871,10 @@ class SessionMachine(
         pairingCode = null
         // First authenticated record: the host activates/keeps this connection only after it (PROTOCOL.md section 3).
         if (!proofSent) out += Action.Send(Ping(pingSeq++, nowUs))
-        out += Action.Send(prefs) // T-050: right after the proof PING, never before it
+        lastPingUs = nowUs
+        out += Action.Send(remote?.streamPrefs() ?: prefs) // T-050: right after the proof PING, never before it (0038: remote profile)
         if (displayHz > 0) out += Action.Send(DisplayRate(displayHz)) // T-059: once, after STREAM_PREFS
-        audio?.let { out += Action.Send(AudioPrefs(it)) } // T-095: after the display messages
+        audio?.let { out += Action.Send(remote?.audioPrefs() ?: AudioPrefs(it)) } // T-095: after the display messages (0038: remote wish)
         cursor?.let { out += Action.Send(CursorPrefs(it)) } // T-276: the session starts without the local cursor (host default 0); tell it ours
         effectiveFiles()?.let { out += Action.Send(it) } // T-135: once per session, after AUDIO_PREFS (never an earlier session's READY)
         nextPingUs = nowUs + pingIntervalUs
@@ -1123,7 +1158,7 @@ class SessionMachine(
         // (that would also drop the candidate and its authenticated STREAM_CONFIG; the host may have superseded the old
         // connection and its PONG baseline is older than the proof). It is marked *stale*: provisional, unlike a close or
         // BYE(SUPERSEDED) ([oldGone]); a later valid PONG on it clears the mark ([onMessage]).
-        if (candAck != null && !oldGone && !oldStale && nowUs - lastPongUs >= PONG_TIMEOUT_US) {
+        if (candAck != null && !oldGone && !oldStale && nowUs - lastPongUs >= pongTimeoutUs) {
             oldStale = true
             log('I', "migration_old_stale", "")
         }
@@ -1133,16 +1168,26 @@ class SessionMachine(
         when (phase) {
             Phase.WAIT_RETRY -> if (nowUs >= retryAtUs) openControl(out)
             Phase.AWAIT_ACK, Phase.PENDING, Phase.HOST_ACCEPTED_UNTRUSTED, Phase.ACCEPTED, Phase.STREAMING -> {
-                if (nowUs - lastPongUs >= PONG_TIMEOUT_US) {
+                if (nowUs - lastPongUs >= pongTimeoutUs) {
                     lose(out, nowUs, SessionUi.Cause.LOST)
                     return
                 }
                 // Nothing but HELLO may go out before the first HELLO_ACK: encryption starts with it (section 9).
-                if (phase != Phase.AWAIT_ACK && nowUs >= nextPingUs) {
-                    out += Action.Send(Ping(pingSeq++, nowUs))
-                    // Fixed rate (T-089): tick jitter does not stretch the interval; after a stall, no burst of pings.
-                    nextPingUs += pingIntervalUs
-                    if (nextPingUs <= nowUs) nextPingUs = nowUs + pingIntervalUs
+                if (phase != Phase.AWAIT_ACK) {
+                    if (remote != null) {
+                        // Decision 0038 section 6: 500 ms while input is held or recent, else 2 s, judged against the PING
+                        // actually sent last, so the first input event after an idle gap brings the fast rate back at once.
+                        if (RemoteTimings.pingDue(nowUs, lastPingUs, inputActive(nowUs))) {
+                            out += Action.Send(Ping(pingSeq++, nowUs))
+                            lastPingUs = nowUs
+                        }
+                    } else if (nowUs >= nextPingUs) {
+                        out += Action.Send(Ping(pingSeq++, nowUs))
+                        lastPingUs = nowUs
+                        // Fixed rate (T-089): tick jitter does not stretch the interval; after a stall, no burst of pings.
+                        nextPingUs += pingIntervalUs
+                        if (nextPingUs <= nowUs) nextPingUs = nowUs + pingIntervalUs
+                    }
                 }
                 if (phase == Phase.STREAMING) {
                     if (!videoOpen && nowUs >= videoRetryAtUs) openVideo(out)
@@ -1268,6 +1313,7 @@ class SessionMachine(
 
     private fun onMigrate(target: Endpoint, nowUs: Long, out: MutableList<Action>) {
         val reason = when {
+            remote != null -> REASON_REMOTE
             candGen >= 0 -> REASON_IN_PROGRESS
             !inputAllowed -> REASON_NOT_CONNECTED
             target == endpoint -> REASON_SAME_ENDPOINT
@@ -1437,6 +1483,8 @@ class SessionMachine(
         const val REASON_TIMEOUT = "timeout"
         const val REASON_IN_PROGRESS = "in_progress"
         const val REASON_NOT_CONNECTED = "not_connected"
+        /** Decision 0038: a remote session never changes its path. */
+        const val REASON_REMOTE = "remote"
         const val REASON_SAME_ENDPOINT = "same_endpoint"
         const val REASON_SESSION_CLOSED = "session_closed"
         const val REASON_CANCELLED = "cancelled"

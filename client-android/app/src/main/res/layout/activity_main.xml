@@ -89,6 +89,36 @@
                 android:text="@string/wol_button"
                 android:visibility="gone" />
 
+            <!-- T-339 (decision 0038): the remote address field, hidden and disabled by default for the same HiWrite reason as
+                 the manual address field above. Opened by "Uzak adres" (or by the first "Uzaktan bağlan"). -->
+            <EditText
+                android:id="@+id/remote_endpoint"
+                android:layout_width="360dp"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:enabled="false"
+                android:hint="@string/remote_endpoint_hint"
+                android:imeOptions="actionDone"
+                android:inputType="textUri"
+                android:singleLine="true"
+                android:textColor="#FFFFFF"
+                android:textColorHint="#888888"
+                android:visibility="gone" />
+
+            <Button
+                android:id="@+id/remote_connect"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/remote_connect" />
+
+            <Button
+                android:id="@+id/remote_edit"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/remote_edit" />
+
             <Button
                 android:id="@+id/endpoint_toggle"
                 android:layout_width="wrap_content"

@@ -18,7 +18,8 @@ import dev.matebridge.client.stream.StreamMode
  *   wish (the user, a mode switch) is applied at once.
  */
 class CursorPrefsPolicy(
-    private val timeoutMs: Long = TIMEOUT_MS,
+    /** Decision 0038: 5 s in a remote session ([TIMEOUT_REMOTE_MS]); the UI sets it with the session kind. */
+    var timeoutMs: Long = TIMEOUT_MS,
     private val retryMs: Long = RETRY_MS,
     private val maxRetryMs: Long = MAX_RETRY_MS,
 ) {
@@ -123,5 +124,11 @@ class CursorPrefsPolicy(
 
         /** The tablet draws the cursor: Günlük and Çizim with the "Tablette" setting; never in Oyun. */
         fun wishOf(mode: StreamMode, onTablet: Boolean): Boolean = onTablet && !mode.isGame
+
+        /** Decision 0038: the remote profile always draws the cursor on the tablet (no video frame per cursor move at 15 fps). */
+        fun wishOf(mode: StreamMode, onTablet: Boolean, remote: Boolean): Boolean = remote || wishOf(mode, onTablet)
+
+        /** Decision 0038: the cursor timeout of a remote session (the host's liveness state is 2 s apart there). */
+        const val TIMEOUT_REMOTE_MS = 5_000L
     }
 }

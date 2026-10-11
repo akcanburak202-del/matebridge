@@ -376,6 +376,14 @@ class KeyMismatchTest {
         }
     }
 
+    /** T-339 (decision 0038): the remote button is a user tap: it clears the mismatch latch, yet never starts a pairing. */
+    @Test fun remoteStartClearsTheMismatchLatchWithoutBeingAPairingStart() {
+        reachMismatch(wifi)
+        assertEquals(listOf<SessionUi>(mismatch), step(Event.Start(wifi)).ui()) // automatic: still latched
+        val open = step(Event.Start(wifi, remote = RemoteProfile()))
+        assertFalse(open.only<Action.OpenControl>().userInitiated)
+    }
+
     private fun reachMismatch(ep: Endpoint) {
         var gen = genOf(step(Event.Start(ep)))
         repeat(SessionMachine.KEY_MISMATCH_LIMIT) {
