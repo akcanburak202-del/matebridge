@@ -301,6 +301,8 @@ public final class BsdTcpConnection: @unchecked Sendable {
 
     /// Peer address in text form (`::ffff:192.168.1.20`, `::1`), for transport classification; nil if unknown.
     public let peerHost: String?
+    /// `sin6_scope_id` of an IPv6 peer (the interface index of a link-local peer); 0 when none or not IPv6 (T-338).
+    public let peerScopeID: UInt32
     public let localPort: UInt16?
     public let remotePort: UInt16?
     /// errno when `BsdTcpOptions.ipTos` was set but the kernel refused it (`IP_TOS` and `IPV6_TCLASS` both failed);
@@ -368,6 +370,7 @@ public final class BsdTcpConnection: @unchecked Sendable {
         maxPendingBytes = options.maxPendingBytes
         let peer = Self.address(fd, getpeername)
         peerHost = peer?.host
+        peerScopeID = Self.peerScopeID(fd)
         remotePort = peer?.port
         localPort = Self.localPort(fd)
     }
@@ -653,6 +656,18 @@ public final class BsdTcpConnection: @unchecked Sendable {
         guard poll(&p, 1, 0) == 1 else { return false }
         // Errors and hang-ups count as writable: the next write fails and closes the connection.
         return p.revents & Int16(POLLOUT | POLLERR | POLLHUP | POLLNVAL) != 0
+    }
+
+    private static func peerScopeID(_ fd: Int32) -> UInt32 {
+        var storage = sockaddr_storage()
+        var len = socklen_t(MemoryLayout<sockaddr_storage>.size)
+        let rc = withUnsafeMutablePointer(to: &storage) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getpeername(fd, $0, &len) }
+        }
+        guard rc == 0, Int32(storage.ss_family) == AF_INET6 else { return 0 }
+        return withUnsafePointer(to: &storage) {
+            $0.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { $0.pointee.sin6_scope_id }
+        }
     }
 
     static func localPort(_ fd: Int32) -> UInt16? { address(fd, getsockname)?.port }
