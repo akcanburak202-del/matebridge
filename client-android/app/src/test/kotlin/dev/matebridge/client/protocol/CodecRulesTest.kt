@@ -111,7 +111,7 @@ class CodecRulesTest {
         val p = Codec.encodePayload(prefs)
         assertEquals(8, p.size)
         // Extra bytes after the (here 0x0) optional groups are ignored; 9-11 and 13 bytes are short (see below).
-        assertEquals(prefs, decode(frame(MsgType.STREAM_PREFS, p + byteArrayOf(0, 0, 0, 0, 0, 0, 9, 9))))
+        assertEquals(prefs, decode(frame(MsgType.STREAM_PREFS, p + byteArrayOf(0, 0, 0, 0, 0, 0, 0, 0))))
         // Full u32 range survives the round trip.
         val max = byteArrayOf(0x78, 0, 0xe8.toByte(), 3, -1, -1, -1, -1)
         assertEquals(StreamPrefs(120, 1000, 0xFFFFFFFFL), decode(frame(MsgType.STREAM_PREFS, max)))
@@ -133,8 +133,12 @@ class CodecRulesTest {
         val p = Codec.encodePayload(game)
         assertEquals(12, p.size)
         assertEquals(game, decode(frame(MsgType.STREAM_PREFS, p)))
-        // 15 bytes: dynamic_range 0 (SDR), chroma 7 (unknown, decoded as is; the host treats it as normal), excess ignored.
-        assertEquals(game.copy(chroma = 7), decode(frame(MsgType.STREAM_PREFS, p + byteArrayOf(0, 7, 7))))
+        // 14 bytes: dynamic_range 0 (SDR), chroma 7 (unknown, decoded as is; the host treats it as normal).
+        assertEquals(game.copy(chroma = 7), decode(frame(MsgType.STREAM_PREFS, p + byteArrayOf(0, 7))))
+        // 15 bytes: half of the link group (decision 0038) is a short payload.
+        val half = FrameDecoder.control()
+        half.feed(frame(MsgType.STREAM_PREFS, p + byteArrayOf(0, 7, 7)))
+        expectError(ProtocolException.Kind.SHORT_PAYLOAD, half)
         // Either non-zero field writes the whole group.
         assertEquals(12, Codec.encodePayload(StreamPrefs(120, 660, 0, 1848, 0)).size)
         assertEquals(12, Codec.encodePayload(StreamPrefs(120, 660, 0, 0, 1214)).size)
@@ -157,8 +161,9 @@ class CodecRulesTest {
         assertEquals(14, p.size)
         assertArrayEquals(byteArrayOf(0, 0, 0, 0, 1, 0), p.copyOfRange(8, 14))
         assertEquals(native, decode(frame(MsgType.STREAM_PREFS, p)))
-        // Longer payloads: the excess is ignored.
-        assertEquals(native, decode(frame(MsgType.STREAM_PREFS, p + byteArrayOf(5, 5))))
+        // Longer payloads: 16 bytes carry the link group (decision 0038, zero here); the excess beyond it is ignored.
+        assertEquals(native, decode(frame(MsgType.STREAM_PREFS, p + byteArrayOf(0, 0))))
+        assertEquals(native, decode(frame(MsgType.STREAM_PREFS, p + byteArrayOf(0, 0, 5, 5))))
         // Unknown values decode as is (the host treats them as SDR / normal).
         val odd = p.copyOf().also { it[12] = 7; it[13] = 3 }
         assertEquals(native.copy(dynamicRange = 7, chroma = 3), decode(frame(MsgType.STREAM_PREFS, odd)))
@@ -496,5 +501,25 @@ class CodecRulesTest {
     fun feedLargerThanReadChunkIsCallerBug() {
         val dec = FrameDecoder.control()
         try { dec.feed(ByteArray(FrameDecoder.READ_CHUNK + 1)); fail() } catch (e: IllegalArgumentException) { }
+    }
+
+    @Test
+    fun linkGroupWrittenOnlyWhenNonZeroAndNormalSessionsKeepTheirBytes() {
+        assertEquals(8, Codec.encodePayload(StreamPrefs(60, 1000)).size)
+        assertEquals(14, Codec.encodePayload(StreamPrefs(60, 1000, 0, 0, 0, StreamPrefs.DYNAMIC_RANGE_HDR10)).size)
+        // link without any other optional field still writes the two earlier groups (zero)
+        val onlyLink = Codec.encodePayload(StreamPrefs(60, 1000, 0, 0, 0, 0, 0, StreamPrefs.LINK_REMOTE))
+        assertEquals(16, onlyLink.size)
+        assertEquals(StreamPrefs(60, 1000, 0, 0, 0, 0, 0, StreamPrefs.LINK_REMOTE), decode(frame(MsgType.STREAM_PREFS, onlyLink)))
+    }
+
+    @Test
+    fun linkGroupPartialIsShortPayloadAndUnknownLinkKept() {
+        val full = Codec.encodePayload(StreamPrefs(15, 1000, 1000, 1400, 920, 0, 0, 1))
+        val dec = FrameDecoder.control()
+        dec.feed(frame(MsgType.STREAM_PREFS, full.copyOf(15)))
+        expectError(ProtocolException.Kind.SHORT_PAYLOAD, dec)
+        val odd = full.copyOf(); odd[14] = 7
+        assertEquals(7, (decode(frame(MsgType.STREAM_PREFS, odd)) as StreamPrefs).link)
     }
 }

@@ -185,11 +185,13 @@ object Codec {
                 w.u16(msg.fps); w.u16(msg.scalePermille); w.u32(msg.bitrateKbps)
                 // PROTOCOL.md 0x05: the display group when either size is non-zero or the dynamic range group follows
                 // (then 0x0 is fine); the dynamic range group only when dynamic_range or chroma is non-zero (0032, 0033).
-                val drGroup = msg.dynamicRange != StreamPrefs.DYNAMIC_RANGE_SDR || msg.chroma != StreamPrefs.CHROMA_NORMAL
+                val linkGroup = msg.link != StreamPrefs.LINK_NORMAL
+                val drGroup = linkGroup || msg.dynamicRange != StreamPrefs.DYNAMIC_RANGE_SDR || msg.chroma != StreamPrefs.CHROMA_NORMAL
                 if (msg.displayWidthPx != 0 || msg.displayHeightPx != 0 || drGroup) {
                     w.u16(msg.displayWidthPx); w.u16(msg.displayHeightPx)
                 }
                 if (drGroup) { w.u8(msg.dynamicRange); w.u8(msg.chroma) }
+                if (linkGroup) { w.u8(msg.link); w.u8(0) }
             }
             is SettingsOpen -> w.u32(0)
             is FilesInfo -> { w.u8(msg.state); w.u16(msg.port); w.str8(msg.token) }
@@ -266,7 +268,7 @@ object Codec {
                 w.u32(msg.decodeTimeAvgUs); w.u32(msg.latencyAvgUs); w.u32(msg.bytesReceived)
             }
             is KeyframeRequest -> { w.u8(msg.reason); if (msg.view != KeyframeRequest.VIEW_UNSPECIFIED) w.u8(msg.view) }
-            is AudioPrefs -> { w.u8(if (msg.enabled) 1 else 0); w.u8(0); w.u16(0) }
+            is AudioPrefs -> { w.u8(if (msg.enabled) 1 else 0); w.u8(if (msg.codec == AudioPrefs.CODEC_AAC) 1 else 0); w.u16(0) }
             is AudioConfig -> {
                 w.u16(msg.streamId); w.u8(msg.state); w.u8(msg.format)
                 w.u32(msg.sampleRate); w.u8(msg.channels); w.u8(0); w.u16(msg.framesPerPacket)
@@ -356,7 +358,9 @@ object Codec {
                 val dw = r.u16(); val dh = r.u16()
                 if (r.remaining() == 0) return StreamPrefs(fps, pm, kbps, dw, dh)
                 val dr = r.u8(); val chroma = r.u8()
-                StreamPrefs(fps, pm, kbps, dw, dh, dr, chroma)
+                if (r.remaining() == 0) return StreamPrefs(fps, pm, kbps, dw, dh, dr, chroma)
+                val link = r.u8(); r.skip(1)
+                StreamPrefs(fps, pm, kbps, dw, dh, dr, chroma, link)
             }
             MsgType.SETTINGS_OPEN -> { r.skip(4); SettingsOpen }
             MsgType.FILES_INFO -> FilesInfo(r.u8(), r.u16(), r.str8()) // unknown state kept: the receiver treats it as OFF
@@ -424,7 +428,10 @@ object Codec {
                 val reason = r.u8()
                 KeyframeRequest(reason, if (r.remaining() > 0) r.u8() else KeyframeRequest.VIEW_UNSPECIFIED)
             }
-            MsgType.AUDIO_PREFS -> { val enabled = r.u8(); r.skip(3); AudioPrefs(enabled == 1) }
+            MsgType.AUDIO_PREFS -> {
+                val enabled = r.u8(); val codec = r.u8(); r.skip(2)
+                AudioPrefs(enabled == 1, if (codec == 1) AudioPrefs.CODEC_AAC else AudioPrefs.CODEC_PCM)
+            }
             MsgType.AUDIO_CONFIG -> {
                 val streamId = r.u16(); val state = r.u8(); val format = r.u8()
                 val rate = r.u32(); val channels = r.u8(); r.skip(1); val fpp = r.u16()

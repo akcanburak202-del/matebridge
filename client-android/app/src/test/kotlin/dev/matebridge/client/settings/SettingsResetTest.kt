@@ -52,6 +52,7 @@ class SettingsResetTest {
         s.hdrGame(), // T-238
         s.hdrDaily(), // T-280
         s.cursorLocal(), // T-276
+        s.remoteBitrateKbps(), s.remoteAudio(), // T-339
     )
 
     private fun setEverythingNonDefault(s: Settings) {
@@ -76,6 +77,8 @@ class SettingsResetTest {
         s.setHdrGame(true) // T-238
         s.setHdrDaily(true) // T-280
         s.setCursorLocal(false) // T-276: Görüntüde
+        s.setRemoteBitrateKbps(2000) // T-339
+        s.setRemoteAudio(true)
     }
 
     @Test fun everyGetterReturnsItsDefaultAfterTheReset() {
@@ -85,7 +88,7 @@ class SettingsResetTest {
         setEverythingNonDefault(s)
         snapshot(s).zip(fresh).forEachIndexed { i, (now, def) -> assertTrue("setting $i must start non-default", now != def) }
 
-        assertEquals(21, s.resetToDefaults())
+        assertEquals(23, s.resetToDefaults())
 
         assertEquals(fresh, snapshot(s))
         assertFalse(s.statsOverlay())

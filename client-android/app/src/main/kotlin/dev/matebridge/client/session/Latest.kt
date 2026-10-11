@@ -95,6 +95,7 @@ class EngineMailboxes {
     val mode = ModeSlot() // the newest display-mode request and cursor wish, in one ordered command
     val rate = Latest<SessionMachine.Event>() // the newest panel rate wins
     val audio = Latest<SessionMachine.Event>() // the newest audio setting wins
+    val remote = Latest<SessionMachine.Event>() // decision 0038: the newest remote profile wins
     val forget = Latest<SessionMachine.Event>() // T-269: the newest forgotten open request wins
     val files = Latest<SessionMachine.Event>() // T-135: the newest file server state wins
     val migrate = Latest<SessionMachine.Event>() // T-096: the newest migration request wins
@@ -103,6 +104,6 @@ class EngineMailboxes {
     /** The next pending command in priority order, or null. */
     fun take(): SessionMachine.Event? =
         trust.take() ?: intent.take() ?: expect.take() ?: promptVisible.take() ?: mode.take() ?:
-            rate.take() ?: audio.take() ?: forget.take() ?: files.take() ?: migrate.take() ?:
+            rate.take() ?: audio.take() ?: remote.take() ?: forget.take() ?: files.take() ?: migrate.take() ?:
             videoBackoff.take()
 }
