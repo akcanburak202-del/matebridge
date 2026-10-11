@@ -33,11 +33,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-333](tasks/T-333-game-encoder-peaks.md) | Oyun 60 — kodlayıcı kare boyutu tepeleri (LLRC/ConstantBitRate, kısa rate penceresi, MaxAllowedFrameQP) EncodeBench karşılaştırması | 7 | mac-host-dev | [T-330] |
 | [T-334](tasks/T-334-dav-copy-put-concurrency.md) | WebDAV — eşzamanlı COPY/MOVE geri alması başka bağlantının başarılı PUT'unu silmesin | 7 | android-client-dev | [T-288] |
 | [T-335](tasks/T-335-host-pipeline-stop-join.md) | Host — pipeline teardown sürerken ikinci stop çağıranı beklesin; hata zamanı teardown'dan önce alınsın | 7 | mac-host-dev | [T-325, T-293] |
-| [T-337](tasks/T-337-host-remote-profile.md) | Host — 0038 protokol kodu (STREAM_PREFS link/fps/taban, AUDIO_* ayrıştırma) ve uzak profil davranışı | 7 | mac-host-dev | [T-336] |
-| [T-338](tasks/T-338-host-remote-pairing-refusal.md) | Host — uzaktan eşleşme yasağı (yerel olmayan eşe PAIRING yerine REJECTED) | 7 | mac-host-dev | [T-336, T-337] |
-| [T-339](tasks/T-339-client-remote-connect.md) | İstemci — 0038 protokol kodu, "Uzaktan bağlan" düğmesi, uzak profil ve keyframe yineleme geri çekilmesi | 7 | android-client-dev | [T-336] |
-| [T-340](tasks/T-340-host-aac-audio.md) | Host — AAC-LC ses kodlama (AUDIO_PREFS.codec = 1 ve HELLO bit14) | 7 | mac-host-dev | [T-337] |
-| [T-341](tasks/T-341-client-aac-audio.md) | İstemci — AAC-LC ses çözme (MediaCodec) ve uzak oturumda AAC isteği | 7 | android-client-dev | [T-339] |
 
 ## done
 
@@ -353,3 +348,8 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-329](tasks/T-329-astra-xhigh-review.md) | Review — gpt-6-astra (xhigh), T-283'ten (0ff7b86b) bu yana + riskli bölgeler | 7 | orchestrator | [T-283] |
 | [T-330](tasks/T-330-optimization-research-3.md) | Optimizasyon araştırması 3 — boşta enerji, Wi-Fi bit hızı tepeleri, 60 fps çözme | 7 | orchestrator | [T-298] |
 | [T-336](tasks/T-336-remote-protocol.md) | Protokol — uzak profil (STREAM_PREFS link grubu, fps 15/30, bit hızı tabanı 500), AAC ses, uzaktan eşleşme yasağı | 7 | orchestrator | [] |
+| [T-337](tasks/T-337-host-remote-profile.md) | Host — 0038 protokol kodu (STREAM_PREFS link/fps/taban, AUDIO_* ayrıştırma) ve uzak profil davranışı | 7 | mac-host-dev | [T-336] |
+| [T-338](tasks/T-338-host-remote-pairing-refusal.md) | Host — uzaktan eşleşme yasağı (yerel olmayan eşe PAIRING yerine REJECTED) | 7 | mac-host-dev | [T-336, T-337] |
+| [T-339](tasks/T-339-client-remote-connect.md) | İstemci — 0038 protokol kodu, "Uzaktan bağlan" düğmesi, uzak profil ve keyframe yineleme geri çekilmesi | 7 | android-client-dev | [T-336] |
+| [T-340](tasks/T-340-host-aac-audio.md) | Host — AAC-LC ses kodlama (AUDIO_PREFS.codec = 1 ve HELLO bit14) | 7 | mac-host-dev | [T-337] |
+| [T-341](tasks/T-341-client-aac-audio.md) | İstemci — AAC-LC ses çözme (MediaCodec) ve uzak oturumda AAC isteği | 7 | android-client-dev | [T-339] |

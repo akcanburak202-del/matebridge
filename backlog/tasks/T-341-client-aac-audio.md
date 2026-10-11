@@ -1,7 +1,7 @@
 ---
 id: T-341
 title: İstemci — AAC-LC ses çözme (MediaCodec) ve uzak oturumda AAC isteği
-status: review
+status: done
 phase: 7
 owner: android-client-dev
 depends_on: [T-339]
