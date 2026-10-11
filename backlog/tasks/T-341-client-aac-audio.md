@@ -35,6 +35,14 @@ Karar 0038 §4; PROTOCOL.md AUDIO_*. Dal tabanı: `task/0038-remote-integration`
 
 ## Plan
 
+1. `audio/AacRules.kt` (saf Kotlin): AudioSpecificConfig türetme (LC, tablo), birim doğrulama (`frame_count = 1024`, `data_len` 1..1536), `capabilityBits(audioAllowed, decoderAvailable)`.
+2. `audio/AacUnitQueue.kt`: sınırlı (32 birim), en eskiyi atan kuyruk; okuyucu iş parçacığı yalnız `offer` yapar (bloklamaz).
+3. `audio/AacDecodeWorker.kt` + `AacCodecPort` (arayüz) + `MediaCodecAacPort`: ayrı iş parçacığı; birim başına `pts = seq`; çıkış PCM `sample_index`/`capture_time_us` ile (AU'nun meta verisi, aynı AU'dan fazla çıkışta kare ofsetiyle) titreşim tamponuna yazılır. Hata: bir kez log, akış yok sayılır; çıkışta codec serbest.
+4. `AudioStreamGate`: `format = 2` (48 kHz, 2 kanal) yalnız AAC çözücü varsa çalınabilir; `accepts` biçime göre (PCM: `frame_count*4`, AAC: `AacRules`).
+5. `AudioPlayout`: AAC akışında worker; `onFrame` kuyruğa; `beginSession(..., remote)`: uzak oturumda güvenlik tamponu (başlangıç) >= 100 ms, bu değer SafetyMemory'ye kaydedilmez.
+6. `RemoteProfile.audioPrefs(aac)`; `SessionMachine` `hello.capabilities` bit14'e bakar. `MainActivity.buildHello` bit14'ü yalnız cihaz çözücüsü varsa yazar.
+7. Birim testleri: ASC, bit14/codec seçimi, geçersiz birim, kuyruk, worker (sahte codec), gate, uzak tampon.
+
 ## Handoff
 
 ## Open questions
