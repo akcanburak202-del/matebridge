@@ -133,7 +133,7 @@ private func pt(_ x: Double, _ y: Double = 0) -> DisplayPoint { DisplayPoint(x: 
                 posted.append(target)
                 board.notePointerRel(target: noOp ? nil : target, nowUs: UInt64(step))
                 while let first = pending.first, first.applyAt <= step { live = first.point; pending.removeFirst() }
-                let (reading, position) = board.coherentPosition(nowUs: { UInt64(step) }, locate: { live })
+                let (reading, position) = try! #require(board.coherentPosition(nowUs: { UInt64(step) }, locate: { live }))
                 #expect(position == posted[Int(reading.count)], "lag \(lag) step \(step)")
             }
         }
@@ -146,33 +146,69 @@ private func pt(_ x: Double, _ y: Double = 0) -> DisplayPoint { DisplayPoint(x: 
         board.notePointerRel(target: pt(10), nowUs: 1)
         var live = pt(10)
         var calls = 0
-        let (reading, position) = board.coherentPosition(nowUs: { 2 }, locate: {
+        let (reading, position) = try! #require(board.coherentPosition(nowUs: { 2 }, locate: {
             calls += 1
             if calls == 1 {  // the input queue handles move 2 and WindowServer applies it, mid-sample
                 board.notePointerRel(target: pt(20), nowUs: 2)
                 live = pt(20)
             }
             return live
-        })
+        }))
         #expect(reading.count == 2)
         #expect(position == pt(20))
         #expect(calls == 2)  // one retry
     }
 
-    /// Moves keep arriving on every read: after the bounded retries the newest reading's target gives a consistent pair.
-    @Test func CURACK_endlessMovesStopAfterTheRetriesWithAConsistentPair() {
+    /// Moves keep arriving on every try: after the bounded retries there is no pair, the sample is deferred.
+    @Test func CURACK_endlessMovesDeferTheSample() {
         let board = RelAckBoard()
         var n = 0
         var calls = 0
-        let (reading, position) = board.coherentPosition(retries: 3, nowUs: { UInt64(n) }, locate: {
+        let result = board.coherentPosition(retries: 3, nowUs: { UInt64(n) }, locate: {
             calls += 1
-            let before = pt(Double(n) * 10)  // the live position lags: it still shows the previous move
+            let before = pt(Double(n) * 10)
             n += 1
             board.notePointerRel(target: pt(Double(n) * 10), nowUs: UInt64(n))
             return before
         })
+        #expect(result == nil)
         #expect(calls == 4)  // first try + 3 retries
-        #expect(position == pt(Double(reading.count) * 10))
+    }
+
+    /// Codex P2 (a6f35eda): last try reads 130, move #14 (to 140) is posted, then a zero-scale pinch clears the target
+    /// without moving the cursor. Count 14 with position 130 must never come out.
+    @Test func CURACK_moveThenTargetClearingInjectionOnTheLastTryDefers() {
+        let board = RelAckBoard()
+        var tries = 0
+        var count = 0
+        let result = board.coherentPosition(retries: 3, nowUs: { 1 }, locate: {
+            tries += 1
+            if tries < 4 {  // earlier tries are disturbed by other moves so the retries run out
+                count += 1
+                board.notePointerRel(target: pt(Double(count) * 10), nowUs: 1)
+                return pt(Double(count - 1) * 10)
+            }
+            count += 1
+            board.notePointerRel(target: pt(140), nowUs: 1)  // move #14 posted, WindowServer not there yet
+            board.noteOtherInjection()  // zero-scale PINCH: clears the target, moves nothing
+            return pt(130)
+        })
+        #expect(result == nil)
+    }
+
+    /// A target-clearing injection that lands between the reads of a try also forces a retry (no count paired with a
+    /// target that vanished mid-sample).
+    @Test func CURACK_otherInjectionBetweenTheReadsRetries() {
+        let board = RelAckBoard()
+        board.notePointerRel(target: pt(10), nowUs: 1)
+        var calls = 0
+        let result = board.coherentPosition(nowUs: { 1 }, locate: {
+            calls += 1
+            if calls == 1 { board.noteOtherInjection() }
+            return pt(10)
+        })
+        #expect(calls == 2)
+        #expect(result?.reading.count == 1)
     }
 }
 

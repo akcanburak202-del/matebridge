@@ -79,7 +79,12 @@ final class CursorSampler: @unchecked Sendable {
         let reading: RelAckBoard.Reading
         let located: DisplayPoint?
         if let board {
-            (reading, located) = board.coherentPosition(nowUs: { HostClock.nowUs() }, locate: { locator.location() })
+            // nil: the board kept changing during every try. No state is better than a count its position may lack;
+            // the next poll (about 8 ms) or injection follow-up samples again.
+            guard let pair = board.coherentPosition(nowUs: { HostClock.nowUs() }, locate: { locator.location() }) else {
+                return nil
+            }
+            (reading, located) = pair
         } else {
             (reading, located) = (RelAckBoard.Reading(count: 0, target: nil), locator.location())
         }

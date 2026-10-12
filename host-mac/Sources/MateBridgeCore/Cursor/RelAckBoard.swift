@@ -42,6 +42,9 @@ public final class RelAckBoard: @unchecked Sendable {
     private var count: UInt64 = 0
     private var target: DisplayPoint?
     private var targetAtUs: UInt64 = 0
+    /// Bumped by every change of the board (a handled message, another injection, a reset): a sample is coherent only
+    /// when it did not move between its reads.
+    private var generation: UInt64 = 0
 
     public init(lagWindowUs: UInt64 = InjectionPlanner.defaultLagWindowUs) { self.lagWindowUs = lagWindowUs }
 
@@ -50,6 +53,7 @@ public final class RelAckBoard: @unchecked Sendable {
         lock.lock()
         count = 0
         target = nil
+        generation &+= 1
         lock.unlock()
     }
 
@@ -58,6 +62,7 @@ public final class RelAckBoard: @unchecked Sendable {
     public func notePointerRel(target: DisplayPoint?, nowUs: UInt64) {
         lock.lock()
         count &+= 1
+        generation &+= 1
         // A message that posted nothing (no-op, dropped) leaves the pending target, and its age, alone: wiping it would
         // let a live reading that still lags an earlier move be reported with the newer count.
         if let target {
@@ -71,6 +76,7 @@ public final class RelAckBoard: @unchecked Sendable {
     public func noteOtherInjection() {
         lock.lock()
         target = nil
+        generation &+= 1
         lock.unlock()
     }
 
@@ -82,24 +88,30 @@ public final class RelAckBoard: @unchecked Sendable {
         return Reading(count: count, target: recent ? target : nil)
     }
 
-    /// One coherent (count, position) pair, seqlock style: read the board, read the live position, read the count again.
-    /// If a message was handled in between, the pair could show a newer position under an older count (the client would
-    /// count that move twice), so it is retried, at most `retries` times. When the retries run out, the newest reading
-    /// is used: its target (kept across no-op messages) replaces a live position that has not caught up, so the pair
-    /// is consistent by construction.
+    /// One coherent (count, position) pair, seqlock style: read the board, read the live position, read the board again.
+    /// If anything was handled in between (a `POINTER_REL`, another injection, a reset) the pair could show a newer
+    /// position under an older count (the client would count that move twice) or a target that was just cleared, so it
+    /// is retried, at most `retries` times. When the retries run out there is no usable pair and the result is nil: the
+    /// caller skips this sample and the next poll tries again. A count is never emitted with a position that might not
+    /// include it.
     public func coherentPosition(retries: Int = 3, nowUs: () -> UInt64,
-                                 locate: () -> DisplayPoint?) -> (reading: Reading, position: DisplayPoint?) {
-        var attempt = 0
-        while true {
-            let before = read(nowUs: nowUs())
+                                 locate: () -> DisplayPoint?) -> (reading: Reading, position: DisplayPoint?)? {
+        for _ in 0...retries {
+            let (before, generationBefore) = stamped(nowUs: nowUs())
             let live = locate()
-            let after = read(nowUs: nowUs())
-            if after.count == before.count || attempt >= retries {
-                let used = after.count == before.count ? before : after
-                return (used, live.map { Self.position(live: $0, reading: used) })
+            let (_, generationAfter) = stamped(nowUs: nowUs())
+            if generationAfter == generationBefore {
+                return (before, live.map { Self.position(live: $0, reading: before) })
             }
-            attempt += 1
         }
+        return nil
+    }
+
+    private func stamped(nowUs: UInt64) -> (Reading, UInt64) {
+        lock.lock()
+        defer { lock.unlock() }
+        let recent = target != nil && nowUs >= targetAtUs && nowUs - targetAtUs <= lagWindowUs
+        return (Reading(count: count, target: recent ? target : nil), generation)
     }
 
     /// The position to report together with `reading.count`: the live one when it already shows the last relative
