@@ -134,6 +134,7 @@ import dev.matebridge.client.session.TrustLine
 import dev.matebridge.client.session.TrustText
 import dev.matebridge.client.session.TrustUiText
 import dev.matebridge.client.session.TrustView
+import dev.matebridge.client.settings.ImeTarget
 import dev.matebridge.client.settings.SettingsCatalog
 import dev.matebridge.client.settings.SettingsHost
 import dev.matebridge.client.settings.TwoTapConfirm
@@ -878,6 +879,26 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         return super.dispatchKeyEvent(ev)
     }
 
+    private var imeTarget = true
+
+    /**
+     * T-342: with the stream on screen the window is not an IME target, so a third-party keyboard (SwiftKey) cannot consume
+     * physical keys before [dispatchKeyEvent]. Idempotent; on the way out of the connect panel any soft keyboard is hidden.
+     * Held keys are released by the existing capture path (setActive/RELEASE_ALL), unchanged.
+     */
+    private fun syncImeTarget() {
+        val want = ImeTarget.windowIsImeTarget(panel.visibility == View.GONE, settingsPanel.isOpen)
+        if (want == imeTarget) return
+        imeTarget = want
+        if (!want) {
+            (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
+                .hideSoftInputFromWindow(window.decorView.windowToken, 0)
+            window.addFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM)
+        }
+    }
+
     private fun runLocalAction(a: LocalAction) {
         when (a) {
             LocalAction.STATS -> toggleStats()
@@ -913,12 +934,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }
         sideSettings?.refresh()
         sidePanel.show()
+        syncImeTarget()
     }
 
     /** Closes the side panel; input capture and pointer capture come back on the next sync (now, unless [resync] is off). */
     private fun closeSettingsPanel(via: SettingsPanelState.Via, resync: Boolean = true) {
         if (!::sidePanel.isInitialized || !settingsPanel.close(via)) return
         sidePanel.hide()
+        syncImeTarget()
         if (!resync) return
         lastCaptureRequestMs = 0L // request pointer capture again at once, not after the retry interval
         try {
@@ -2663,6 +2686,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val streaming = state is SessionUi.Connected && state.framesReceived > 0 && renderer != null
         if (streaming && panel.visibility != View.GONE) hideManualEntry() // T-078: before the panel goes away
         panel.visibility = if (streaming) View.GONE else View.VISIBLE
+        syncImeTarget() // T-342
         syncVideoFaultOverlay() // T-159: only over the video, never over the connect panel
         if (!streaming) closeSettingsPanel(SettingsPanelState.Via.STREAM_END, resync = false) // T-105; synced below
         applyStatusText(state)

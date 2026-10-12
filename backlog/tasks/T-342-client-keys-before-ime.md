@@ -1,7 +1,7 @@
 ---
 id: T-342
 title: İstemci — yayın ekranında fiziksel klavye tuşları klavye uygulamasından (IME) önce MateBridge'e gelsin
-status: todo
+status: review
 phase: 7
 owner: android-client-dev
 depends_on: []
@@ -40,6 +40,16 @@ Neden: `ViewRootImpl` tuşları `ViewPostImeInputStage`'ten (Activity.dispatchKe
 
 ## Plan
 
+- Saf karar: `ImeTarget.windowIsImeTarget(streamVisible, settingsPanelOpen)` (settings/SettingsPanelState.kt) = `!streamVisible && !settingsPanelOpen`.
+- `MainActivity.syncImeTarget()`: karar degisince `FLAG_ALT_FOCUSABLE_IM` ekle (yayin/ayar paneli) ya da kaldir (baglanti paneli); eklerken yazilim klavyesi `hideSoftInputFromWindow`. Cagri yerleri: render() icinde panel.visibility sonrasi, openSettingsPanel, closeSettingsPanel.
+- Neden bayrak: `dispatchKeyEventPreIme` yalniz odaktaki View icin calisir (SurfaceView odakta, ama IME zaten ImeInputStage'de once tuketir); bayrak IME asamasini tamamen atlatir ve tum IME'lerde ayni davranir.
+- Tus basili kalma: basis/birakilis mevcut capture.setActive/RELEASE_ALL yolunu kullanir; deger degismedi.
+
 ## Handoff
+
+- Commit: bkz. `git log task/T-342-keys-before-ime` (T-342 commit). Dosyalar: MainActivity.kt, settings/SettingsPanelState.kt (ImeTarget), test settings/ImeTargetTest.kt, bu kart.
+- Varsayim: baglanti paneli gorunurken (adres alanlari) pencere IME hedefi; yayin ve ayar paneli acikken degil. Yayin ici ayar paneli metin alani icermiyor varsayildi.
+- check.sh ALL OK. Cihazda test EDILMEDI.
+- Tablette kontrol: SwiftKey varsayilan iken yayinda harf yazma, Ctrl+Shift+Esc, Ctrl+Shift+6; baglanti ekraninda adres alanina yazma (yazilim klavyesi acilir); yayin<->panel gecisinde Ctrl/Shift Mac'te basili kalmiyor; Huawei klavyesiyle ayni.
 
 ## Açık sorular
