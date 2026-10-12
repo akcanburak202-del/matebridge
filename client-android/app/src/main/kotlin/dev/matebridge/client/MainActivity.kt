@@ -213,7 +213,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     /** T-227: restarts discovery when the session's address keeps failing and checks the host at a new address. */
     private val rediscovery = EndpointRediscovery()
     private lateinit var root: PreImeFrameLayout
-    private val preImeKeys = PreImeKeys()
     private lateinit var video: SurfaceView // MediaCodec -> SurfaceView, the only presentation path (T-184)
     private lateinit var panel: View
     private lateinit var penOverlay: PenOverlayView // T-056
@@ -836,25 +835,38 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (vsyncIdle.onActivity(System.nanoTime())) wakeVsync()
     }
 
+    private fun isPhysicalKey(ev: KeyEvent): Boolean {
+        val dev = ev.device ?: return false
+        return KeyTracker.isPhysicalKeyboard(dev.isVirtual, ev.source, dev.keyboardType)
+    }
+
     /**
-     * T-342: while the stream is on screen keys are routed here, before the IME stage, synchronously (the window flag alone
-     * takes effect only at the next traversal). An event this path did not consume is marked, so [dispatchKeyEvent] does
-     * not route it a second time.
+     * T-342: while the stream is on screen every physical-keyboard key (and the pen double-tap key) is owned here, before
+     * the IME stage, synchronously (the window flag alone takes effect only at the next traversal). Routed, then always
+     * consumed, so it never enters the IME nor reaches [dispatchKeyEvent]. Keys the router passes on (side panel
+     * navigation) go to the view hierarchy directly, once.
      */
     private fun preImeKey(ev: KeyEvent): Boolean {
-        if (!::capture.isInitialized || !preImeKeys.owns(panel.visibility == View.GONE)) return false
+        if (!::capture.isInitialized) return false
+        val streaming = panel.visibility == View.GONE
+        if (!PreImeKeys.ownsPreIme(streaming, isPhysicalKey(ev), DoubleTapDetector.isGestureKey(ev.keyCode, ev.scanCode))) return false
         try {
-            if (routeKeyEvent(ev)) return true
-            preImeKeys.markRouted(ev.deviceId, ev.keyCode, ev.action, ev.repeatCount, ev.eventTime)
-            return false
+            if (!routeKeyEvent(ev)) super.dispatchKeyEvent(ev)
+            return true
         } finally {
             noteIdleInput()
         }
     }
 
     override fun dispatchKeyEvent(ev: KeyEvent): Boolean {
-        if (preImeKeys.consumeIfRouted(ev.deviceId, ev.keyCode, ev.action, ev.repeatCount, ev.eventTime)) {
-            return super.dispatchKeyEvent(ev) // already routed pre-IME
+        // While streaming, a physical key can only get here if it entered the IME before the transition: it is stale.
+        when (PreImeKeys.lateDisposition(panel.visibility == View.GONE, isPhysicalKey(ev), ev.action == KeyEvent.ACTION_DOWN)) {
+            PreImeKeys.Late.DROP -> return true
+            PreImeKeys.Late.RELEASE_ONLY -> {
+                routeKeyEvent(ev) // lets the key tracker release a held key; an UP it never saw is ignored
+                return true
+            }
+            PreImeKeys.Late.ROUTE -> Unit
         }
         try {
             return routeKeyEvent(ev) || super.dispatchKeyEvent(ev)

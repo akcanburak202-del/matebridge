@@ -10,6 +10,7 @@ files:
   - client-android/app/src/main/kotlin/dev/matebridge/client/
   - client-android/app/src/test/
   - backlog/tasks/T-342-client-keys-before-ime.md
+  - client-android/app/src/main/res/layout/activity_main.xml  # orchestrator-approved 2026-10-12
 ---
 
 ## Amaç
@@ -50,6 +51,7 @@ Neden: `ViewRootImpl` tuşları `ViewPostImeInputStage`'ten (Activity.dispatchKe
 - Commit: bkz. `git log task/T-342-keys-before-ime` (T-342 commit). Dosyalar: MainActivity.kt, settings/SettingsPanelState.kt (ImeTarget), test settings/ImeTargetTest.kt, bu kart.
 - Varsayim: baglanti paneli gorunurken (adres alanlari) pencere IME hedefi; yayin ve ayar paneli acikken degil. Yayin ici ayar paneli metin alani icermiyor varsayildi.
 - Codex P1 duzeltmesi: FLAG_ALT_FOCUSABLE_IM senkron etkili degil (ViewRootImpl traversal'da gunceller), bu yuzden yayin gorunurken tuslar ayrica `PreImeFrameLayout.dispatchKeyEventPreIme` (kok view, input/PreImeKeys.kt) ile IME asamasindan once, ayni UI thread'de `routeKeyEvent` ile yonlendirilir (panel GONE = sahip). Tuketilmeyen olay `PreImeKeys.markRouted` ile isaretlenir; `dispatchKeyEvent` isaretli olayi tekrar yonlendirmez (tam bir kez). `routeKeyEvent` artik tuketilmediyse false doner, `dispatchKeyEvent` super'i cagirir. Bayrak durur. Test: PreImeKeysTest.
+- Codex tur 2 (marker kaldirildi, sahiplik kurali): yayin gorunurken (panel GONE) pre-IME'de her fiziksel klavye tusu + kalem cift dokunma tusu `routeKeyEvent` ile yonlendirilir ve HER ZAMAN tuketilir (router gecirirse `super.dispatchKeyEvent` ile gorunume bir kez); IME'ye ve dispatchKeyEvent'e girmez. Fiziksel olmayan tuslar (ses vb.) eskisi gibi. `dispatchKeyEvent` yayin sirasinda fiziksel tus gelirse bayat: DOWN/tekrar dusurulur, UP `routeKeyEvent`'e verilip (KeyTracker basili tusu birakir, bilinmeyen UP'yi yok sayar) tuketilir. Karar saf fonksiyonlar `PreImeKeys.ownsPreIme` / `lateDisposition`; testler PreImeKeysTest (sahiplik, bayat DOWN/UP, baglanti paneli, KeyTracker yetim UP, bayat UP birakir). Baglanti paneli degismedi.
 - check.sh ALL OK. Cihazda test EDILMEDI.
 - Tablette kontrol: SwiftKey varsayilan iken yayinda harf yazma, Ctrl+Shift+Esc, Ctrl+Shift+6; baglanti ekraninda adres alanina yazma (yazilim klavyesi acilir); yayin<->panel gecisinde Ctrl/Shift Mac'te basili kalmiyor; Huawei klavyesiyle ayni.
 
