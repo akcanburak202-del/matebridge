@@ -1,7 +1,7 @@
 ---
 id: T-345
 title: İstemci — CURSOR_STATE `rel_ack_count` ile tahmin (geri sıçrama yok)
-status: review
+status: done
 phase: 7
 owner: android-client-dev
 depends_on: []

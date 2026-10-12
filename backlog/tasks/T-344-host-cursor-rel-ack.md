@@ -1,7 +1,7 @@
 ---
 id: T-344
 title: Host — CURSOR_STATE `rel_ack_count` (işlenen POINTER_REL sayısı)
-status: review
+status: done
 phase: 7
 owner: mac-host-dev
 depends_on: []
