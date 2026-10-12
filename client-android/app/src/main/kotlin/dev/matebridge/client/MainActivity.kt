@@ -36,6 +36,8 @@ import android.widget.Toast
 import dev.matebridge.client.input.DoubleTapDetector
 import dev.matebridge.client.input.InputCapture
 import dev.matebridge.client.input.InputSink
+import dev.matebridge.client.input.PreImeFrameLayout
+import dev.matebridge.client.input.PreImeKeys
 import dev.matebridge.client.input.KeyFrame
 import dev.matebridge.client.input.KeyTracker
 import dev.matebridge.client.input.LocalAction
@@ -210,7 +212,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private val wakeConnect = WakeConnect()
     /** T-227: restarts discovery when the session's address keeps failing and checks the host at a new address. */
     private val rediscovery = EndpointRediscovery()
-    private lateinit var root: FrameLayout
+    private lateinit var root: PreImeFrameLayout
+    private val preImeKeys = PreImeKeys()
     private lateinit var video: SurfaceView // MediaCodec -> SurfaceView, the only presentation path (T-184)
     private lateinit var panel: View
     private lateinit var penOverlay: PenOverlayView // T-056
@@ -452,6 +455,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         setContentView(R.layout.activity_main)
         status = findViewById(R.id.status)
         root = findViewById(R.id.root)
+        root.handler = { ev -> preImeKey(ev) } // T-342
         video = findViewById(R.id.video)
         panel = findViewById(R.id.panel)
         statsView = findViewById(R.id.stats)
@@ -832,9 +836,28 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (vsyncIdle.onActivity(System.nanoTime())) wakeVsync()
     }
 
-    override fun dispatchKeyEvent(ev: KeyEvent): Boolean {
+    /**
+     * T-342: while the stream is on screen keys are routed here, before the IME stage, synchronously (the window flag alone
+     * takes effect only at the next traversal). An event this path did not consume is marked, so [dispatchKeyEvent] does
+     * not route it a second time.
+     */
+    private fun preImeKey(ev: KeyEvent): Boolean {
+        if (!::capture.isInitialized || !preImeKeys.owns(panel.visibility == View.GONE)) return false
         try {
-            return routeKeyEvent(ev)
+            if (routeKeyEvent(ev)) return true
+            preImeKeys.markRouted(ev.deviceId, ev.keyCode, ev.action, ev.repeatCount, ev.eventTime)
+            return false
+        } finally {
+            noteIdleInput()
+        }
+    }
+
+    override fun dispatchKeyEvent(ev: KeyEvent): Boolean {
+        if (preImeKeys.consumeIfRouted(ev.deviceId, ev.keyCode, ev.action, ev.repeatCount, ev.eventTime)) {
+            return super.dispatchKeyEvent(ev) // already routed pre-IME
+        }
+        try {
+            return routeKeyEvent(ev) || super.dispatchKeyEvent(ev)
         } finally {
             noteIdleInput() // T-234
         }
@@ -867,7 +890,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                     )
                     is SettingsPanelState.KeyResult.Local -> runLocalAction(r.action)
                     SettingsPanelState.KeyResult.Consume -> Unit
-                    SettingsPanelState.KeyResult.Pass -> return super.dispatchKeyEvent(ev)
+                    SettingsPanelState.KeyResult.Pass -> return false
                 }
                 return true
             }
@@ -876,7 +899,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             runLocalAction(d.local)
             if (d.consumed) return true
         }
-        return super.dispatchKeyEvent(ev)
+        return false
     }
 
     private var imeTarget = true

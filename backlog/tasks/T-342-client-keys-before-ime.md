@@ -49,6 +49,7 @@ Neden: `ViewRootImpl` tuşları `ViewPostImeInputStage`'ten (Activity.dispatchKe
 
 - Commit: bkz. `git log task/T-342-keys-before-ime` (T-342 commit). Dosyalar: MainActivity.kt, settings/SettingsPanelState.kt (ImeTarget), test settings/ImeTargetTest.kt, bu kart.
 - Varsayim: baglanti paneli gorunurken (adres alanlari) pencere IME hedefi; yayin ve ayar paneli acikken degil. Yayin ici ayar paneli metin alani icermiyor varsayildi.
+- Codex P1 duzeltmesi: FLAG_ALT_FOCUSABLE_IM senkron etkili degil (ViewRootImpl traversal'da gunceller), bu yuzden yayin gorunurken tuslar ayrica `PreImeFrameLayout.dispatchKeyEventPreIme` (kok view, input/PreImeKeys.kt) ile IME asamasindan once, ayni UI thread'de `routeKeyEvent` ile yonlendirilir (panel GONE = sahip). Tuketilmeyen olay `PreImeKeys.markRouted` ile isaretlenir; `dispatchKeyEvent` isaretli olayi tekrar yonlendirmez (tam bir kez). `routeKeyEvent` artik tuketilmediyse false doner, `dispatchKeyEvent` super'i cagirir. Bayrak durur. Test: PreImeKeysTest.
 - check.sh ALL OK. Cihazda test EDILMEDI.
 - Tablette kontrol: SwiftKey varsayilan iken yayinda harf yazma, Ctrl+Shift+Esc, Ctrl+Shift+6; baglanti ekraninda adres alanina yazma (yazilim klavyesi acilir); yayin<->panel gecisinde Ctrl/Shift Mac'te basili kalmiyor; Huawei klavyesiyle ayni.
 
