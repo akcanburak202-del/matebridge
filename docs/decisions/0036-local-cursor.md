@@ -35,3 +35,11 @@ Kullanıcı onayladı (2026-10-06). Yalnız istemci çizimi değişir; `CURSOR_S
 - **Kapalı olduğu yerler:** imleç "Görüntüde", Oyun modu, `visible=0`, stream boyutu bilinmiyor; geliştirici anahtarı `--ez dev true --ez cursor_predict false` (v1 çizimi, A/B).
 - **Ölçüm:** `cursor_stats` satırına `pred_err_pt_p50/p95` (önceki durumun, yeni durumun örnekleme anına tahmini ile gerçek konum farkı, Mac noktası), `pred_n`, ve karşılaştırma için `hold_err_pt_p50/p95` (hiç tahmin etmeseydik, yani v1 gibi son durumda kalsaydık fark). `pred_err` `hold_err`'den belirgin küçükse tahmin işe yarıyor.
 - **Bilinen sınır:** saat farkı belirsizliği (RTT/2) olay kesimini kaydırır; Wi-Fi'da sistematik sapma `pred_err`'de görünür. Kalem hover'ı ve parmak v2'de yok (askıya alma); ileride istenirse host'un kaynak kararını protokolle bildirmesi gerekir (istemci aynalamaz).
+
+## Ek (2026-10-12, T-343): tahmin süreleri hattın gecikmesine uyar
+
+Uzak oturumda (0038, Tailscale aktarma sunucusu) RTT 230–320 ms ölçüldü. v2'nin sabitleri LAN içindi: yerleşme 100 ms, tek yön tavanı 100 ms, durum yaşı tavanı 250 ms, halka 500 ms. Sonuç: `pred_err_pt_p50` 86, `hold_err_pt_p50` 48; tahmin, hiç tahmin etmemekten kötü, imleç ileri-geri sıçrıyor (kullanıcı: "çok garip, hiç kullanışlı değil").
+
+- **Karar:** bu sürelerin hepsi ölçülen RTT'den türetilir (taban değerler bugünkü sabitler; LAN'da davranış aynı kalır), makul bir üst sınırla.
+- **Kapsam:** yalnız istemci çizimi; protokol, host ve girdi yolu değişmez.
+- **Başarı ölçütü:** RTT ~250 ms'de `pred_err` < `hold_err` (birim testinde benzetimle; cihazda `cursor_stats`).
