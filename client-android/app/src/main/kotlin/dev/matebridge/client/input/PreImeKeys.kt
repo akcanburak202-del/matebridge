@@ -12,18 +12,18 @@ object PreImeKeys {
 
     /**
      * Pre-IME, while the stream is on screen: every physical-keyboard key and the pen double-tap key belong to
-     * MateBridge (routed, then always consumed). On the connect panel nothing is owned (the IME path stays as is).
+     * MateBridge (routed, then always consumed). With the settings panel open nothing is owned (focus navigation keeps its normal path). On the connect panel nothing is owned (the IME path stays as is).
      */
-    fun ownsPreIme(streaming: Boolean, physicalKeyboard: Boolean, gestureKey: Boolean): Boolean =
-        streaming && (physicalKeyboard || gestureKey)
+    fun ownsPreIme(streaming: Boolean, settingsPanelOpen: Boolean, physicalKeyboard: Boolean, gestureKey: Boolean): Boolean =
+        streaming && !settingsPanelOpen && (physicalKeyboard || gestureKey)
 
     /**
      * Activity dispatchKeyEvent, while streaming: a physical-keyboard event can only arrive here if it entered the IME
      * before the transition, so it is stale. A stale DOWN (or repeat) is dropped, a stale UP is routed so the key
      * tracker can release a held key (it ignores an UP it has no DOWN for). Anything else is routed as before.
      */
-    fun lateDisposition(streaming: Boolean, physicalKeyboard: Boolean, down: Boolean): Late = when {
-        !streaming || !physicalKeyboard -> Late.ROUTE
+    fun lateDisposition(streaming: Boolean, settingsPanelOpen: Boolean, physicalKeyboard: Boolean, down: Boolean): Late = when {
+        !streaming || settingsPanelOpen || !physicalKeyboard -> Late.ROUTE
         down -> Late.DROP
         else -> Late.RELEASE_ONLY
     }

@@ -843,15 +843,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     /**
      * T-342: while the stream is on screen every physical-keyboard key (and the pen double-tap key) is owned here, before
      * the IME stage, synchronously (the window flag alone takes effect only at the next traversal). Routed, then always
-     * consumed, so it never enters the IME nor reaches [dispatchKeyEvent]. Keys the router passes on (side panel
-     * navigation) go to the view hierarchy directly, once.
+     * consumed, so it never enters the IME nor reaches [dispatchKeyEvent]. With the settings panel open nothing is owned here.
      */
     private fun preImeKey(ev: KeyEvent): Boolean {
         if (!::capture.isInitialized) return false
         val streaming = panel.visibility == View.GONE
-        if (!PreImeKeys.ownsPreIme(streaming, isPhysicalKey(ev), DoubleTapDetector.isGestureKey(ev.keyCode, ev.scanCode))) return false
+        if (!PreImeKeys.ownsPreIme(streaming, settingsPanel.isOpen, isPhysicalKey(ev), DoubleTapDetector.isGestureKey(ev.keyCode, ev.scanCode))) return false
         try {
-            if (!routeKeyEvent(ev)) super.dispatchKeyEvent(ev)
+            routeKeyEvent(ev)
             return true
         } finally {
             noteIdleInput()
@@ -860,7 +859,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     override fun dispatchKeyEvent(ev: KeyEvent): Boolean {
         // While streaming, a physical key can only get here if it entered the IME before the transition: it is stale.
-        when (PreImeKeys.lateDisposition(panel.visibility == View.GONE, isPhysicalKey(ev), ev.action == KeyEvent.ACTION_DOWN)) {
+        when (PreImeKeys.lateDisposition(panel.visibility == View.GONE, settingsPanel.isOpen, isPhysicalKey(ev), ev.action == KeyEvent.ACTION_DOWN)) {
             PreImeKeys.Late.DROP -> return true
             PreImeKeys.Late.RELEASE_ONLY -> {
                 routeKeyEvent(ev) // lets the key tracker release a held key; an UP it never saw is ignored

@@ -8,24 +8,30 @@ import org.junit.Test
 
 class PreImeKeysTest {
     @Test fun streamingPhysicalKeysAreOwnedPreIme() {
-        assertTrue(PreImeKeys.ownsPreIme(streaming = true, physicalKeyboard = true, gestureKey = false))
-        assertTrue(PreImeKeys.ownsPreIme(streaming = true, physicalKeyboard = false, gestureKey = true))
-        assertFalse(PreImeKeys.ownsPreIme(streaming = true, physicalKeyboard = false, gestureKey = false)) // volume etc.
+        assertTrue(PreImeKeys.ownsPreIme(streaming = true, settingsPanelOpen = false, physicalKeyboard = true, gestureKey = false))
+        assertTrue(PreImeKeys.ownsPreIme(streaming = true, settingsPanelOpen = false, physicalKeyboard = false, gestureKey = true))
+        assertFalse(PreImeKeys.ownsPreIme(streaming = true, settingsPanelOpen = false, physicalKeyboard = false, gestureKey = false)) // volume etc.
     }
 
     @Test fun connectPanelOwnsNothing() {
-        assertFalse(PreImeKeys.ownsPreIme(streaming = false, physicalKeyboard = true, gestureKey = false))
-        assertFalse(PreImeKeys.ownsPreIme(streaming = false, physicalKeyboard = true, gestureKey = true))
+        assertFalse(PreImeKeys.ownsPreIme(streaming = false, settingsPanelOpen = false, physicalKeyboard = true, gestureKey = false))
+        assertFalse(PreImeKeys.ownsPreIme(streaming = false, settingsPanelOpen = false, physicalKeyboard = true, gestureKey = true))
     }
 
     @Test fun staleDownIsDroppedAndStaleUpIsReleaseOnly() {
-        assertEquals(PreImeKeys.Late.DROP, PreImeKeys.lateDisposition(true, physicalKeyboard = true, down = true))
-        assertEquals(PreImeKeys.Late.RELEASE_ONLY, PreImeKeys.lateDisposition(true, physicalKeyboard = true, down = false))
+        assertEquals(PreImeKeys.Late.DROP, PreImeKeys.lateDisposition(true, false, physicalKeyboard = true, down = true))
+        assertEquals(PreImeKeys.Late.RELEASE_ONLY, PreImeKeys.lateDisposition(true, false, physicalKeyboard = true, down = false))
     }
 
     @Test fun otherLateEventsRouteNormally() {
-        assertEquals(PreImeKeys.Late.ROUTE, PreImeKeys.lateDisposition(false, physicalKeyboard = true, down = true))
-        assertEquals(PreImeKeys.Late.ROUTE, PreImeKeys.lateDisposition(true, physicalKeyboard = false, down = true))
+        assertEquals(PreImeKeys.Late.ROUTE, PreImeKeys.lateDisposition(false, false, physicalKeyboard = true, down = true))
+        assertEquals(PreImeKeys.Late.ROUTE, PreImeKeys.lateDisposition(true, false, physicalKeyboard = false, down = true))
+    }
+
+    @Test fun openSettingsPanelOwnsNothingAndRoutesLate() {
+        assertFalse(PreImeKeys.ownsPreIme(streaming = true, settingsPanelOpen = true, physicalKeyboard = true, gestureKey = true))
+        assertEquals(PreImeKeys.Late.ROUTE, PreImeKeys.lateDisposition(true, true, physicalKeyboard = true, down = true))
+        assertEquals(PreImeKeys.Late.ROUTE, PreImeKeys.lateDisposition(true, true, physicalKeyboard = true, down = false))
     }
 
     private val sink = FakeSink()
