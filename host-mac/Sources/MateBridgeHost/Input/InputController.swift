@@ -53,6 +53,10 @@ public final class InputController: @unchecked Sendable {
     private let capsLock: CapsLockControlling
     private let cursor: CursorLocating
     private let visibility: CursorVisibilityChecking
+    /// T-344: `POINTER_REL` messages handled, for `CURSOR_STATE.rel_ack_count` (read by the cursor flow).
+    private let relAck: RelAckBoard
+    /// Queue only: where the last pointer event the latest `flush` posted put the cursor (nil: none was posted).
+    private var lastPostedPointer: DisplayPoint?
     private let logger = SessionLogger(component: "input")
     /// T-299 (queue-confined): set by the host-sleep participant before its release-all. While set, `gate` drops every
     /// opening event of any session. Cleared by the wake notification, or by the awake-time expiry
@@ -116,6 +120,7 @@ public final class InputController: @unchecked Sendable {
                 capsLock: CapsLockControlling = SystemCapsLock(),
                 cursor: CursorLocating = SystemCursor(),
                 visibility: CursorVisibilityChecking = SystemCursorVisibility(),
+                relAck: RelAckBoard = .shared,
                 doubleClickInterval: TimeInterval = NSEvent.doubleClickInterval) {
         self.poster = poster
         self.permission = permission
@@ -123,6 +128,7 @@ public final class InputController: @unchecked Sendable {
         self.capsLock = capsLock
         self.cursor = cursor
         self.visibility = visibility
+        self.relAck = relAck
         var planner = InjectionPlanner.Configuration()
         planner.clicks.intervalUs = UInt64(max(0.05, min(doubleClickInterval, 5)) * 1_000_000)
         pipeline = InputPipeline(planner: planner)
@@ -197,6 +203,7 @@ public final class InputController: @unchecked Sendable {
             InjectToFrameProbe.shared.beginSession(sessionID: sessionID, configID: configID)
             messages = 0
             eventsPosted = 0
+            relAck.reset()  // the acknowledgement counts this connection's POINTER_REL only
             loggedDrops = pipeline.planner.counters
             cursorQueries = 0
             cursorQueryFailures = 0
@@ -238,6 +245,7 @@ public final class InputController: @unchecked Sendable {
             let pinchMessages = pipeline.machine?.pinchMessages ?? 0
             let events = pipeline.sessionEnded(now: now, environment: environment())
             flush(events, now: now)
+            relAck.reset()
             logInputAge(now: now, force: true)  // the window of the last burst
             let d = pipeline.planner.counters
             timingLock.lock()
@@ -299,7 +307,15 @@ public final class InputController: @unchecked Sendable {
                 env.cursorHidden = sampleCursorHidden()  // T-272: and do not move a hidden one
             }
             pushActivity()  // the activity from BEFORE this message (T-163)
+            lastPostedPointer = nil
             let postNs = flush(gate(pipeline.handle(message, now: now, environment: env), now: now), now: now)
+            // T-344: handled (injected, or dropped by the input rules or a gate) and posted by now, so the count may
+            // cover it. The target is where the cursor was put; the cursor flow reads the count before the position.
+            if case .pointerRel = message {
+                relAck.notePointerRel(target: lastPostedPointer, nowUs: HostClock.nowUs())
+            } else if message.movesCursor {
+                relAck.noteOtherInjection()
+            }
             ages.record(message, receivedUs: now)  // T-171: measured only, after the message was handled
             logInputAge(now: now)
             // Debug only, and only the numeric identity: never a character (docs/LOGGING.md).
@@ -571,6 +587,9 @@ public final class InputController: @unchecked Sendable {
         let postStart = DispatchTime.now().uptimeNanoseconds
         let result = post(events)
         let postNs = DispatchTime.now().uptimeNanoseconds &- postStart
+        for event in events where !result.failed.contains(event) {
+            if case .mouse(let mouse) = event { lastPostedPointer = mouse.position }
+        }
         // T-323: a posted press edge starts an inject-to-frame measurement (host clock, right after the post).
         if events.contains(where: { $0.isPressEdge && !result.failed.contains($0) }) {
             InjectToFrameProbe.shared.noteInjection()
@@ -717,5 +736,15 @@ public final class InputController: @unchecked Sendable {
 
     private func log(_ level: LogLevel, _ event: String, _ fields: String = "") {
         logger.log(level, event, sessionID: sessionID, generation: configID, fields: fields)
+    }
+}
+
+private extension Message {
+    /// An input message that can place the cursor other than by `POINTER_REL` (T-344).
+    var movesCursor: Bool {
+        switch self {
+        case .pen, .pointerAbs, .penGesture, .pinch: return true
+        default: return false
+        }
     }
 }

@@ -1,7 +1,7 @@
 ---
 id: T-344
 title: Host — CURSOR_STATE `rel_ack_count` (işlenen POINTER_REL sayısı)
-status: todo
+status: review
 phase: 7
 owner: mac-host-dev
 depends_on: []
@@ -41,6 +41,22 @@ Karar 0036 v3 eki; PROTOCOL.md §4 CURSOR_STATE "Onay grubu". Dal tabanı: `task
 
 ## Plan
 
+Bulgular (kodda dogrulandi, olcum gerekmedi):
+- `SessionServer` `.deliver` -> `handlers.deliver` (-> `InputController.deliver`, `queue.sync`, enjekte bitene kadar bloklar) -> `routeCursor`. Yani mesaj, imlec orneklenmeden once islenmis olur; bayat/kapi ile atilan mesaj da `deliver` icinden gecer.
+- Konum `CGEvent(source:nil).location`; `CGEventPost` **asenkron**: okuma birkac ms (planner'da 100 ms lag penceresi, T-103) eski konumu verebilir. Sadece "onayi konumdan once al" yetmez: onay mesaji sayar, konum henuz icermeyebilir.
+- Cozum: `RelAckBoard` (Core, kilitli). `InputController` her `POINTER_REL`'i isleyip post ettikten SONRA `notePointerRel(target:)` cagirir (target = o mesajin son post edilen fare olayinin konumu, post-clamp; atildiysa nil). Cursor kuyrugu once `read()` (sayi + yakin hedef), sonra canli konumu okur. Canli konum hedefe 1 pt yakin degilse (WindowServer yetismedi) raporlanan konum hedeftir (`position(live:reading:)`): sayi ve konum ayni ana ait olur. Baska enjeksiyon (pen/abs/pinch) hedefi siler; hedef 100 ms sonra duser (sayi dusmez).
+- Sayi once okunur: sonradan islenen mesaj konumu yalniz daha yeni yapar (istemci fazlasini tolere eder); ters sira olmayan bir mesaji onaylardi.
+- Akis: `CursorSnapshot.relAck` eklendi; planner `snapshot != lastSent` ile degisimi zaten gonderir (8 ms alt sinir, keep-alive ayni). Yeni mesaj/zamanlayici/kuyruk yok. Yerel imlec kapaliyken `tracking` false: ornekleme yok; yalniz kilitli sayac artar.
+- Sayac `InputController.sessionStarted/sessionEnded`'de sifirlanir (kontrol baglantisi basina).
+- Surec ici paylasim: `RelAckBoard.shared` (VideoCursorSwitch.shared kalibi); `main.swift` / `SessionServer` imzasi degismedi.
+
 ## Handoff
+
+- Dal: `task/T-344-host-cursor-rel-ack` (taban 86dd5835). Commit SHA: dalin tepesi (`git log -1`).
+- Dosyalar: `host-mac/Sources/MateBridgeCore/Protocol/CursorMessages.swift` (CursorState.relAckCount, 22/30 bayt, 23-29 hata), `.../Cursor/RelAckBoard.swift` (yeni), `.../Cursor/CursorStreamPlanner.swift` (CursorSnapshot.relAck), `host-mac/Sources/MateBridgeHost/Cursor/CursorSampler.swift`, `.../Cursor/CursorService.swift`, `.../Input/InputController.swift`, `host-mac/Tests/MateBridgeCoreTests/FixtureTests.swift` (+2 fixture), `.../Cursor/RelAckTests.swift` (yeni), bu kart.
+- check.sh: Swift testleri gecti (1182 test; ilk kosuda gradle ile paralel yukte `BoundedWaitTests` zamanlama flake'i, tek basina `swift test` iki kez temiz). Gradle FAIL: yalniz `FixtureTest.everyFixtureFileHasATestCase` (Kotlin tarafi `cursor_state_ack` / `invalid_cursor_state_ack_partial` icin test vakasi yok) -> T-345 birlesince duzelir; baska Kotlin hatasi yok.
+- Varsayimlar: "islendi" = `InputController.deliver` icinde post'tan sonra (post basarisiz olsa da, bayat/kapi ile atilsa da sayilir; `stopped` iken sayilmaz). Hedef = o mesajin basariyla post edilen son `.mouse` olayi. Lag penceresi 100 ms (`InjectionPlanner.defaultLagWindowUs`), yakinlik 1 pt (planner ile ayni).
+- Dogrulanmadi / cihazda bakilacak: gercek WindowServer gecikmesinde (ozellikle oyun/gizli imlec modunda) raporlanan konumun hedefe oturmasi ve istemcide snapback'in kaybolmasi; fiziksel fare ayni anda oynarsa <=100 ms hedef konumu raporlanir (kabul). `cursor_stats` yeni alan eklemedi.
+- Not: sayi `0` iken grup yazilmaz; ilk `POINTER_REL`'den sonra her `CURSOR_STATE` (keep-alive dahil) 30 bayt.
 
 ## Açık sorular

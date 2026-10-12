@@ -10,12 +10,16 @@ public struct CursorSnapshot: Equatable, Sendable {
     public var visible: Bool
     /// `CURSOR_SHAPE.shape_id`; `0` = no shape known (the client draws its built-in arrow).
     public var shapeID: UInt32
+    /// `POINTER_REL` messages handled before the position was read (`CURSOR_STATE.rel_ack_count`, T-344). A change of
+    /// it alone makes the sample "changed", so it goes out through the normal change path.
+    public var relAck: UInt64
 
-    public init(x: UInt16, y: UInt16, visible: Bool, shapeID: UInt32) {
+    public init(x: UInt16, y: UInt16, visible: Bool, shapeID: UInt32, relAck: UInt64 = 0) {
         self.x = x
         self.y = y
         self.visible = visible
         self.shapeID = shapeID
+        self.relAck = relAck
     }
 }
 

@@ -66,22 +66,24 @@ final class CursorSampler: @unchecked Sendable {
         shapeGate.reset()
     }
 
-    /// The cursor now, or nil when it cannot be placed (no virtual display, no position).
-    func sample() -> CursorSnapshot? {
+    /// The cursor now, or nil when it cannot be placed (no virtual display, no position). `ack` is the relative-move
+    /// board reading taken BEFORE this call (T-344): its count goes into the snapshot, and while WindowServer has not
+    /// shown the last relative move yet its target replaces the live position, so count and position agree.
+    func sample(ack: RelAckBoard.Reading = RelAckBoard.Reading(count: 0, target: nil)) -> CursorSnapshot? {
         let nowNs = DispatchTime.now().uptimeNanoseconds
         if geometry == nil || nowNs &- geometryAtNs >= Self.geometryTtlNs {
             geometry = displays.geometry()
             geometryAtNs = nowNs
         }
         guard let geometry, let location = locator.location() else { return nil }
-        let position = geometry.normalizedPosition(of: location)
+        let position = geometry.normalizedPosition(of: RelAckBoard.position(live: location, reading: ack))
         let hidden = visibility.isHidden()
         // Shape work (WindowServer image copy, render, hash) only when the gate allows it; between checks the last
         // shape stays. A hidden cursor needs no new image until it shows again (the gate knows).
         if shapeGate.shouldCheck(nowNs: nowNs, hidden: hidden, hasShape: lastShapeID != 0) {
             lastShapeID = currentShapeID(nowNs: nowNs)
         }
-        return CursorSnapshot(x: position.x, y: position.y, visible: !hidden, shapeID: lastShapeID)
+        return CursorSnapshot(x: position.x, y: position.y, visible: !hidden, shapeID: lastShapeID, relAck: ack.count)
     }
 
     // MARK: Shape
