@@ -72,7 +72,9 @@ public final class RelAckBoard: @unchecked Sendable {
         lock.unlock()
     }
 
-    /// Any other injection that can move the cursor was handled: an earlier relative target is not the truth any more.
+    /// An injection that SET the cursor position (a pen point, an absolute pointer move) was posted: an earlier relative
+    /// target is not the truth any more. Injections that place nothing (pinch, scroll, keys) must not call this: they
+    /// leave the target, its age and the generation alone.
     public func noteOtherInjection() {
         lock.lock()
         target = nil

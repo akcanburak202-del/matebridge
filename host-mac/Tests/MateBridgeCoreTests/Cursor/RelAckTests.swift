@@ -226,3 +226,42 @@ private func pt(_ x: Double, _ y: Double = 0) -> DisplayPoint { DisplayPoint(x: 
         #expect(planner.observe(acked, nowUs: 20_000).send == acked)
     }
 }
+
+@Suite struct RelAckNonMovingInjectionTests {
+    /// Codex P2 (dfccfbe3): rel move #1 to 140 (live still 130), a non-moving injection (pinch: the input side does not
+    /// call the board at all) lands during the first locate. The pair keeps the target: ack 1 with 140, never 130.
+    @Test func CURACK_nonMovingInjectionDuringTheSampleKeepsTheTarget() {
+        let board = RelAckBoard()
+        board.notePointerRel(target: pt(140), nowUs: 1)
+        var calls = 0
+        let result = board.coherentPosition(nowUs: { 2 }, locate: {
+            calls += 1
+            // a zero-scale PINCH is handled here: InputController posts no positioning event, so nothing is noted
+            return pt(130)
+        })
+        #expect(calls == 1)
+        #expect(result?.reading.count == 1)
+        #expect(result?.position == pt(140))
+    }
+
+    /// The same, with the non-moving injection handled before the sample started.
+    @Test func CURACK_nonMovingInjectionBeforeTheSampleKeepsTheTarget() {
+        let board = RelAckBoard()
+        board.notePointerRel(target: pt(140), nowUs: 1)
+        let generation = board.read(nowUs: 2)
+        // pinch / scroll / key / button-only: no board call
+        let result = board.coherentPosition(nowUs: { 3 }, locate: { pt(130) })
+        #expect(result?.position == pt(140))
+        #expect(board.read(nowUs: 3) == generation)
+    }
+
+    /// A positioning injection (pen point, absolute pointer) still supersedes the target: the live position is the truth.
+    @Test func CURACK_positioningInjectionStillClearsTheTarget() {
+        let board = RelAckBoard()
+        board.notePointerRel(target: pt(140), nowUs: 1)
+        board.noteOtherInjection()
+        let result = board.coherentPosition(nowUs: { 2 }, locate: { pt(300) })
+        #expect(result?.position == pt(300))
+        #expect(result?.reading.target == nil)
+    }
+}

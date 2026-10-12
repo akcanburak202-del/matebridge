@@ -57,6 +57,8 @@ public final class InputController: @unchecked Sendable {
     private let relAck: RelAckBoard
     /// Queue only: where the last pointer event the latest `flush` posted put the cursor (nil: none was posted).
     private var lastPostedPointer: DisplayPoint?
+    /// Queue only: the latest `flush` posted an event that sets the cursor position (mouse or pen point), T-344.
+    private var postedPositioning = false
     private let logger = SessionLogger(component: "input")
     /// T-299 (queue-confined): set by the host-sleep participant before its release-all. While set, `gate` drops every
     /// opening event of any session. Cleared by the wake notification, or by the awake-time expiry
@@ -308,12 +310,13 @@ public final class InputController: @unchecked Sendable {
             }
             pushActivity()  // the activity from BEFORE this message (T-163)
             lastPostedPointer = nil
+            postedPositioning = false
             let postNs = flush(gate(pipeline.handle(message, now: now, environment: env), now: now), now: now)
             // T-344: handled (injected, or dropped by the input rules or a gate) and posted by now, so the count may
             // cover it. The target is where the cursor was put; the cursor flow reads the count before the position.
             if case .pointerRel = message {
                 relAck.notePointerRel(target: lastPostedPointer, nowUs: HostClock.nowUs())
-            } else if message.movesCursor {
+            } else if postedPositioning {  // only an injection that really placed the cursor supersedes the target
                 relAck.noteOtherInjection()
             }
             ages.record(message, receivedUs: now)  // T-171: measured only, after the message was handled
@@ -588,7 +591,14 @@ public final class InputController: @unchecked Sendable {
         let result = post(events)
         let postNs = DispatchTime.now().uptimeNanoseconds &- postStart
         for event in events where !result.failed.contains(event) {
-            if case .mouse(let mouse) = event { lastPostedPointer = mouse.position }
+            switch event {
+            case .mouse(let mouse):
+                lastPostedPointer = mouse.position
+                postedPositioning = true
+            case .tabletPoint:
+                postedPositioning = true
+            default: break
+            }
         }
         // T-323: a posted press edge starts an inject-to-frame measurement (host clock, right after the post).
         if events.contains(where: { $0.isPressEdge && !result.failed.contains($0) }) {
@@ -736,15 +746,5 @@ public final class InputController: @unchecked Sendable {
 
     private func log(_ level: LogLevel, _ event: String, _ fields: String = "") {
         logger.log(level, event, sessionID: sessionID, generation: configID, fields: fields)
-    }
-}
-
-private extension Message {
-    /// An input message that can place the cursor other than by `POINTER_REL` (T-344).
-    var movesCursor: Bool {
-        switch self {
-        case .pen, .pointerAbs, .penGesture, .pinch: return true
-        default: return false
-        }
     }
 }
