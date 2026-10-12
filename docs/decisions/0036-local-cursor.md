@@ -51,8 +51,8 @@ Uzak oturumda (0038, Tailscale aktarma sunucusu) RTT 230–320 ms ölçüldü. v
 **Kök neden:** tahmin, bir deltanın host durumunda olup olmadığına zamanla karar veriyor (`gönderim + tek yön ≤ örnekleme anı`, tek yön = en iyi RTT/2). Hat o an yavaşsa delta host'a daha varmadan "durumun içinde" sayılır ve tahminden düşer. İmleç o delta kadar geri sıçrar, sonraki durumla ileri atlar. Hiçbir sabit ya da RTT türevi bunu tam çözmez: hata titreşimin kendisidir.
 
 **Karar (kullanıcı "başla", 2026-10-12):**
-- `CURSOR_STATE` isteğe bağlı sondaki `rel_ack_time_us` grubunu alır: host'un bu durumu örneklemeden önce işlediği son `POINTER_REL`'in `time_us` değeri (PROTOCOL §4).
-- İstemci bir deltanın durumda olup olmadığına bununla karar verir: `time_us ≤ rel_ack_time_us`. Saat farkı ve RTT tahmini bu karardan çıkar.
+- `CURSOR_STATE` isteğe bağlı sondaki `rel_ack_count` grubunu alır: bu kontrol bağlantısında host'un bu durumu örneklemeden önce işlediği `POINTER_REL` mesajlarının sayısı (PROTOCOL §4). Zaman damgası değil sayı, çünkü düğme ve hareket mesajları aynı `time_us`'u taşıyabilir (Codex `--high`); TCP sırası sayıyı tam önek yapar.
+- İstemci gönderdiği `POINTER_REL`'leri bağlantı başına 1'den numaralar; numara ≤ `rel_ack_count` olan delta durumun içindedir. Saat farkı ve RTT tahmini bu karardan çıkar.
 - Grup yoksa (eski host) bugünkü zaman tahmini sürer. HELLO biti gerekmez: eski istemci fazla baytı yok sayar.
 - **Host'un doğruluk koşulu:** onayladığı her olayın konumu, aynı durumdaki `x`/`y`'de olmalıdır. Konumu okuma ile enjeksiyon arasındaki sıra host kartında doğrulanır.
 

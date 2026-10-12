@@ -1,6 +1,6 @@
 ---
 id: T-345
-title: İstemci — CURSOR_STATE `rel_ack_time_us` ile tahmin (geri sıçrama yok)
+title: İstemci — CURSOR_STATE `rel_ack_count` ile tahmin (geri sıçrama yok)
 status: todo
 phase: 7
 owner: android-client-dev
@@ -18,9 +18,10 @@ Karar 0036 v3 eki; PROTOCOL.md §4 CURSOR_STATE "Onay grubu". Dal tabanı: `task
 
 ## Kapsam
 
-1. **Çözme:** `CURSOR_STATE` 22 bayt (grup yok) ya da ≥30 bayt (`rel_ack_time_us`). 23–29 bayt protokol hatası. Fixture testleri: `cursor_state_ack`, `invalid_cursor_state_ack_partial`.
-2. **Tahmin:** `CursorPredictor` halkası her deltanın gönderildiği `POINTER_REL.time_us` değerini de tutar (birleştirilen mesajlarda gönderilen değer).
-   - Onaylı durum gelince delta `time_us ≤ rel_ack_time_us` ise durumun içinde sayılır, değilse üstüne eklenir. Saat farkı ve tek yön tahmini bu karar için kullanılmaz.
+1. **Çözme:** `CURSOR_STATE` 22 bayt (grup yok) ya da ≥30 bayt (`rel_ack_count`). 23–29 bayt protokol hatası. Fixture testleri: `cursor_state_ack`, `invalid_cursor_state_ack_partial`.
+2. **Numaralama ve tahmin:** istemci bu kontrol bağlantısında gönderdiği her `POINTER_REL`'i 1'den numaralar; düğme değişimli `dx = dy = 0` mesajlar dahil. Numara, mesajın gerçekten gönderim kuyruğuna/sokete yazılma sırasıdır. Atılan ya da gönderilemeyen mesaj numara almaz; numara ile host'un saydığı mesaj birebir eşleşmeli. `CursorPredictor` halkası her deltanın numarasını tutar.
+   - Onaylı durum gelince numarası ≤ `rel_ack_count` olan delta durumun içinde sayılır, değilse üstüne eklenir. Saat farkı ve tek yön tahmini bu karar için kullanılmaz.
+   - Yeniden bağlanmada (yeni kontrol bağlantısı) numara 1'den başlar, halka boşaltılır.
    - T-343 yerleşme süresi yalnız onaylanmayan ama host'un yok saydığı deltalar için yedek kalır.
    - Grup yoksa (eski host) bugünkü davranış bit bit aynı.
 3. **Ölçüm:** `cursor_stats` `pred_err`/`hold_err` tanımı aynı kalır; ek bir sayaç `ack_n` (onaylı durum sayısı) eklenebilir (LOGGING.md'ye uygun).
