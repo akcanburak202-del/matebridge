@@ -85,3 +85,12 @@ class SettingsPanelState(
         private const val SCAN_ESC = 1
     }
 }
+
+/** T-342: whether the window may be an input-method target (physical keys otherwise reach the IME before the activity). */
+object ImeTarget {
+    /**
+     * Only the connect panel (address fields) needs the IME. While the stream is on screen, with the side panel open or
+     * not, the window opts out (FLAG_ALT_FOCUSABLE_IM) so every physical key goes straight to MateBridge's key path.
+     */
+    fun windowIsImeTarget(streamVisible: Boolean, settingsPanelOpen: Boolean): Boolean = !streamVisible && !settingsPanelOpen
+}

@@ -36,6 +36,8 @@ import android.widget.Toast
 import dev.matebridge.client.input.DoubleTapDetector
 import dev.matebridge.client.input.InputCapture
 import dev.matebridge.client.input.InputSink
+import dev.matebridge.client.input.PreImeFrameLayout
+import dev.matebridge.client.input.PreImeKeys
 import dev.matebridge.client.input.KeyFrame
 import dev.matebridge.client.input.KeyTracker
 import dev.matebridge.client.input.LocalAction
@@ -134,6 +136,7 @@ import dev.matebridge.client.session.TrustLine
 import dev.matebridge.client.session.TrustText
 import dev.matebridge.client.session.TrustUiText
 import dev.matebridge.client.session.TrustView
+import dev.matebridge.client.settings.ImeTarget
 import dev.matebridge.client.settings.SettingsCatalog
 import dev.matebridge.client.settings.SettingsHost
 import dev.matebridge.client.settings.TwoTapConfirm
@@ -209,7 +212,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private val wakeConnect = WakeConnect()
     /** T-227: restarts discovery when the session's address keeps failing and checks the host at a new address. */
     private val rediscovery = EndpointRediscovery()
-    private lateinit var root: FrameLayout
+    private lateinit var root: PreImeFrameLayout
     private lateinit var video: SurfaceView // MediaCodec -> SurfaceView, the only presentation path (T-184)
     private lateinit var panel: View
     private lateinit var penOverlay: PenOverlayView // T-056
@@ -451,6 +454,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         setContentView(R.layout.activity_main)
         status = findViewById(R.id.status)
         root = findViewById(R.id.root)
+        root.handler = { ev -> preImeKey(ev) } // T-342
         video = findViewById(R.id.video)
         panel = findViewById(R.id.panel)
         statsView = findViewById(R.id.stats)
@@ -831,9 +835,40 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (vsyncIdle.onActivity(System.nanoTime())) wakeVsync()
     }
 
-    override fun dispatchKeyEvent(ev: KeyEvent): Boolean {
+    private fun isPhysicalKey(ev: KeyEvent): Boolean {
+        val dev = ev.device ?: return false
+        return KeyTracker.isPhysicalKeyboard(dev.isVirtual, ev.source, dev.keyboardType)
+    }
+
+    /**
+     * T-342: while the stream is on screen every physical-keyboard key (and the pen double-tap key) is owned here, before
+     * the IME stage, synchronously (the window flag alone takes effect only at the next traversal). Routed, then always
+     * consumed, so it never enters the IME nor reaches [dispatchKeyEvent]. With the settings panel open nothing is owned here.
+     */
+    private fun preImeKey(ev: KeyEvent): Boolean {
+        if (!::capture.isInitialized) return false
+        val streaming = panel.visibility == View.GONE
+        if (!PreImeKeys.ownsPreIme(streaming, settingsPanel.isOpen, isPhysicalKey(ev), DoubleTapDetector.isGestureKey(ev.keyCode, ev.scanCode))) return false
         try {
-            return routeKeyEvent(ev)
+            routeKeyEvent(ev)
+            return true
+        } finally {
+            noteIdleInput()
+        }
+    }
+
+    override fun dispatchKeyEvent(ev: KeyEvent): Boolean {
+        // While streaming, a physical key can only get here if it entered the IME before the transition: it is stale.
+        when (PreImeKeys.lateDisposition(panel.visibility == View.GONE, settingsPanel.isOpen, isPhysicalKey(ev), ev.action == KeyEvent.ACTION_DOWN)) {
+            PreImeKeys.Late.DROP -> return true
+            PreImeKeys.Late.RELEASE_ONLY -> {
+                routeKeyEvent(ev) // lets the key tracker release a held key; an UP it never saw is ignored
+                return true
+            }
+            PreImeKeys.Late.ROUTE -> Unit
+        }
+        try {
+            return routeKeyEvent(ev) || super.dispatchKeyEvent(ev)
         } finally {
             noteIdleInput() // T-234
         }
@@ -866,7 +901,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                     )
                     is SettingsPanelState.KeyResult.Local -> runLocalAction(r.action)
                     SettingsPanelState.KeyResult.Consume -> Unit
-                    SettingsPanelState.KeyResult.Pass -> return super.dispatchKeyEvent(ev)
+                    SettingsPanelState.KeyResult.Pass -> return false
                 }
                 return true
             }
@@ -875,7 +910,27 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             runLocalAction(d.local)
             if (d.consumed) return true
         }
-        return super.dispatchKeyEvent(ev)
+        return false
+    }
+
+    private var imeTarget = true
+
+    /**
+     * T-342: with the stream on screen the window is not an IME target, so a third-party keyboard (SwiftKey) cannot consume
+     * physical keys before [dispatchKeyEvent]. Idempotent; on the way out of the connect panel any soft keyboard is hidden.
+     * Held keys are released by the existing capture path (setActive/RELEASE_ALL), unchanged.
+     */
+    private fun syncImeTarget() {
+        val want = ImeTarget.windowIsImeTarget(panel.visibility == View.GONE, settingsPanel.isOpen)
+        if (want == imeTarget) return
+        imeTarget = want
+        if (!want) {
+            (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
+                .hideSoftInputFromWindow(window.decorView.windowToken, 0)
+            window.addFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM)
+        }
     }
 
     private fun runLocalAction(a: LocalAction) {
@@ -913,12 +968,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }
         sideSettings?.refresh()
         sidePanel.show()
+        syncImeTarget()
     }
 
     /** Closes the side panel; input capture and pointer capture come back on the next sync (now, unless [resync] is off). */
     private fun closeSettingsPanel(via: SettingsPanelState.Via, resync: Boolean = true) {
         if (!::sidePanel.isInitialized || !settingsPanel.close(via)) return
         sidePanel.hide()
+        syncImeTarget()
         if (!resync) return
         lastCaptureRequestMs = 0L // request pointer capture again at once, not after the retry interval
         try {
@@ -2663,6 +2720,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val streaming = state is SessionUi.Connected && state.framesReceived > 0 && renderer != null
         if (streaming && panel.visibility != View.GONE) hideManualEntry() // T-078: before the panel goes away
         panel.visibility = if (streaming) View.GONE else View.VISIBLE
+        syncImeTarget() // T-342
         syncVideoFaultOverlay() // T-159: only over the video, never over the connect panel
         if (!streaming) closeSettingsPanel(SettingsPanelState.Via.STREAM_END, resync = false) // T-105; synced below
         applyStatusText(state)
