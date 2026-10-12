@@ -1922,3 +1922,11 @@ Host release, `main`. Tablette ölçüm için debug APK kullanıldı; sonunda da
 - **Uzak oturum:** yazı okunuyor, biraz gecikme var. Trackpad imleci geri sıçrıyordu: `cursor_stats` pred_err p50 86 pt, hold_err 48 pt. Sebep 0036 v2 tahmin sabitlerinin LAN'a göre olması → T-343.
 - **adb:** Tailscale üzerinden de çalışıyor (`adb connect 100.97.230.79:5555`). Mobil veride logcat'i cihazda filtreleyin (`adb shell 'logcat -d | grep …'`); tam `logcat -d` çekmek yavaş ve veri harcar.
 - **Açık:** uzak oturumda host `input_watchdog events=1` ~83 ms arayla ~3,5 sn sürdü (5433–5437 s, tuş tekrarı?). İncelenmedi.
+
+## 2026-10-13 01:20 — 0036 v3 (CURSOR_STATE `rel_ack_count`) cihazda
+
+- Kurulum: host 69287b4f + APK f7ec0de1 (T-344/T-345; T-343 de içinde). Ev Wi-Fi'ı, RTT ~12 ms.
+- `cursor_stats`, trackpad hareketi: `ack_n` = `states` (her durum onaylı). `pred_err_pt` p50 0,01, p95 0,01–1,2. Karşılaştırma: `hold_err_pt` p95 25–224. Önceki sürümde Wi-Fi gecikme sıçramasında `pred_err` p95 40 idi.
+- Kullanıcı: "sanırım sıçrama olmadı".
+- Uzak (hotspot) denemesi henüz yapılmadı.
+- Ertelenen: evdeki imleç sıçraması için debug APK A/B gerekmedi; 0036 v3 aynı kök nedeni çözdü.
