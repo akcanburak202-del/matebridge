@@ -394,3 +394,28 @@ private func pt(_ x: Double, _ y: Double = 0) -> DisplayPoint { DisplayPoint(x: 
         #expect(PostSummary(events: [.capsLock(on: true)], failed: []).lastLocation == nil)
     }
 }
+
+@Suite struct RelAckRoundSixTests {
+    /// Codex P2 (8f71c8a9): the sampler's clock reading is older than a write that completes before it takes the lock;
+    /// that write's target must not be rejected as "from the future".
+    @Test func CURACK_targetNewerThanTheCapturedClockIsFresh() {
+        let board = RelAckBoard()
+        board.rel(pt(140), at: 2_000)  // completes after the caller read 1_000 but before it got the lock
+        #expect(board.read(nowUs: 1_000).target == pt(140))
+        let result = board.coherentPosition(nowUs: { 1_000 }, locate: { pt(130) })
+        #expect(result?.reading.count == 1)
+        #expect(result?.position == pt(140))
+    }
+
+    /// Equal events cannot be told apart by value. [A, A] where the first posted and the second failed.
+    @Test func CURACK_postedPrefixOfEqualEventsCountsOnce() {
+        let down = MacEvent.mouse(MacMouse(kind: .down, button: .left, position: pt(5), deltaX: 0, deltaY: 0,
+                                           clickState: 1))
+        let summary = PostSummary(events: [down, down], failed: [down])
+        #expect(summary.pressEdge)
+        #expect(summary.lastLocation == pt(5))
+        let none = PostSummary(events: [down, down], failed: [down, down])
+        #expect(!none.pressEdge)
+        #expect(none.lastLocation == nil)
+    }
+}

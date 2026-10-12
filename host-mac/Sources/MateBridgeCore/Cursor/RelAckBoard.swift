@@ -99,7 +99,7 @@ public final class RelAckBoard: @unchecked Sendable {
     public func read(nowUs: UInt64) -> Reading {
         lock.lock()
         defer { lock.unlock() }
-        let recent = target != nil && nowUs >= targetAtUs && nowUs - targetAtUs <= lagWindowUs
+        let recent = target != nil && isFresh(nowUs)
         return Reading(count: count, target: recent ? target : nil)
     }
 
@@ -112,9 +112,9 @@ public final class RelAckBoard: @unchecked Sendable {
     public func coherentPosition(retries: Int = 3, nowUs: () -> UInt64,
                                  locate: () -> DisplayPoint?) -> (reading: Reading, position: DisplayPoint?)? {
         for _ in 0...retries {
-            let (before, busyBefore, generationBefore) = stamped(nowUs: nowUs())
+            let (before, busyBefore, generationBefore) = stamped(nowUs: nowUs)
             let live = locate()
-            let (_, busyAfter, generationAfter) = stamped(nowUs: nowUs())
+            let (_, busyAfter, generationAfter) = stamped(nowUs: nowUs)
             if !busyBefore, !busyAfter, generationAfter == generationBefore {
                 return (before, live.map { Self.position(live: $0, reading: before) })
             }
@@ -122,10 +122,17 @@ public final class RelAckBoard: @unchecked Sendable {
         return nil
     }
 
-    private func stamped(nowUs: UInt64) -> (Reading, Bool, UInt64) {
+    /// A target noted at `targetAtUs` is fresh at `nowUs` while it is within the lag window. A target noted AFTER the
+    /// caller read its clock (`nowUs < targetAtUs`) is the freshest there is. Lock held.
+    private func isFresh(_ nowUs: UInt64) -> Bool { nowUs < targetAtUs || nowUs - targetAtUs <= lagWindowUs }
+
+    /// The clock is read INSIDE the lock, so a write that completes between a caller's clock read and the lock cannot
+    /// make its own target look like it is from the future.
+    private func stamped(nowUs: () -> UInt64) -> (Reading, Bool, UInt64) {
         lock.lock()
         defer { lock.unlock() }
-        let recent = target != nil && nowUs >= targetAtUs && nowUs - targetAtUs <= lagWindowUs
+        let now = nowUs()
+        let recent = target != nil && isFresh(now)
         return (Reading(count: count, target: recent ? target : nil), writers > 0, generation)
     }
 
@@ -147,7 +154,9 @@ public struct PostSummary: Equatable, Sendable {
     public init(events: [MacEvent], failed: [MacEvent]) {
         var press = false
         var location: DisplayPoint?
-        for event in events where !failed.contains(event) {
+        // The poster's contract: it posts a prefix in order and returns the failed SUFFIX, so the posted events are the
+        // first `events.count - failed.count` (equal events cannot be told apart by value).
+        for event in events.prefix(max(0, events.count - failed.count)) {
             if event.isPressEdge { press = true }
             switch event {
             case .mouse(let mouse): location = mouse.position
