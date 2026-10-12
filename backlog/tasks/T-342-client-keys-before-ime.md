@@ -1,7 +1,7 @@
 ---
 id: T-342
 title: İstemci — yayın ekranında fiziksel klavye tuşları klavye uygulamasından (IME) önce MateBridge'e gelsin
-status: review
+status: done
 phase: 7
 owner: android-client-dev
 depends_on: []
@@ -57,3 +57,4 @@ Neden: `ViewRootImpl` tuşları `ViewPostImeInputStage`'ten (Activity.dispatchKe
 - Tablette kontrol: SwiftKey varsayilan iken yayinda harf yazma, Ctrl+Shift+Esc, Ctrl+Shift+6; baglanti ekraninda adres alanina yazma (yazilim klavyesi acilir); yayin<->panel gecisinde Ctrl/Shift Mac'te basili kalmiyor; Huawei klavyesiyle ayni.
 
 ## Açık sorular
+- Orkestratör (2026-10-12): Codex tur 4 (f82a26f1) yalnız P2 buldu, kabul edilen sınır: bağlantı paneli kalktıktan sonraki ilk traversal'dan (~16 ms) önce ayar paneli açılırsa, panel açıkken tuşlar IME'den geçebilir; SwiftKey ile o anda bir kısayol yutulabilir. Mac'te tuş takılmaz (panel açılışı RELEASE_ALL yapar, panel açıkken Mac'e tuş gitmez). Merge: main.
