@@ -1,7 +1,7 @@
 ---
 id: T-343
 title: İstemci — yerel imleç tahmini uzun hatlarda (RTT 250+ ms) geri sıçramasın
-status: todo
+status: review
 phase: 7
 owner: android-client-dev
 depends_on: []
@@ -38,6 +38,19 @@ Karar 0036 ek (2026-10-12). Uzak oturumda (Tailscale aktarma, RTT 230–320 ms) 
 
 ## Plan
 
+Sabitler zaten `oneWayUs` (en iyi RTT / 2) ile besleniyor; sorun tavanlar ve yerleşme süresiydi. Çözüm yalnız `CursorPredictor` içinde, tek yön gecikmeden (ow) türetme:
+- `SETTLE_US` -> `max(100 ms, 2*ow + 50 ms)` (bir tur + bir durum aralığı). Çizim anında delta yaşı ~2*ow olduğundan, 100 ms'de delta düşüp imleç geri sıçrıyordu (ölçüm anındaki `pred_err` bunu göstermiyor: orada yaş <= ow).
+- `KEEP_US` -> `max(500 ms, settle + 400 ms)`; `MAX_STATE_AGE_US` -> `max(250 ms, 3*ow)`.
+- `MAX_ONE_WAY_US` 100 ms -> 500 ms (RTT 1 s). Daha uzun hatta tahmin askıda, v1 (host konumu).
+- LAN (ow <= 25 ms) için hepsi eski değerlerle aynı (regresyon testi).
+- Madde 2 (erime): eklenmedi; benzetimde en büyük geri adım LAN'daki gibi ~7 pt, ölçüm gerektirmiyor.
+
 ## Handoff
+
+- Branch `task/T-343-cursor-predict-rtt`, commit SHA: `git log -1` (orkestratöre raporlandı).
+- Dosyalar: `client-android/.../cursor/CursorPredictor.kt`, yeni test `CursorPredictorRttTest.kt` (ağ benzetimi: RTT 250 ±30 ms, 120 Hz göreli hareket, 15 fps durum; LAN regresyon; RTT 1.4 s tavan).
+- Benzetim (çizim anı; niyet = host + yoldaki delta): eski kod p50 25 pt / p95 173 pt (hold 40 / 258); yeni p50 2.3 / p95 30. Ölçüm anı `pred_err`: p50 2.7 / p95 15 (hold 31 / 70).
+- Varsayım: `oneWayUs` = en iyi RTT / 2 (MainActivity, değişmedi). Protokol/host/girdi yolu değişmedi.
+- Cihazda bakılacak (uzak oturum, RTT 230-320): `MB/render cursor_stats` içinde `pred_err_pt_p50/p95` hold'dan belirgin küçük; trackpad imleci hareket sırasında geri sıçramıyor, durunca ~RTT sonra host konumuna oturuyor. LAN'da davranış değişmemeli. Gerçek cihazda test edilmedi.
 
 ## Açık sorular

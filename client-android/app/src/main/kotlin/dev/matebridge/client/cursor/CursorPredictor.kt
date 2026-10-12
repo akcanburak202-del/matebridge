@@ -152,7 +152,7 @@ class CursorPredictor(
         if (gen != armedGen) return false
         when (msg) {
             is PointerRel ->
-                (msg.dx != 0f || msg.dy != 0f) && active && nowUs >= suspendUntilUs && add(msg.dx, msg.dy, nowUs)
+                (msg.dx != 0f || msg.dy != 0f) && active && nowUs >= suspendUntilUs && !tooSlow() && add(msg.dx, msg.dy, nowUs)
             is PointerAbs -> suspendPrediction(nowUs)
             is Pen -> suspendPrediction(nowUs)
             else -> false
@@ -174,7 +174,7 @@ class CursorPredictor(
         if (anchor == null) return false // no state yet: nothing is drawn, nothing to predict from
         val t = maxOf(nowUs, lastSendUs)
         lastSendUs = t
-        pruneBefore(t - KEEP_US)
+        pruneBefore(t - keepUs(oneWay()))
         if (count == CAP) { head = (head + 1) % CAP; count-- }
         val i = (head + count) % CAP
         sendUs[i] = t
@@ -209,7 +209,7 @@ class CursorPredictor(
             if (err > 0f || hold > 0f) stats.onPred(err, hold)
         }
         anchor = Anchor(s.seq, s.x, s.y, s.visible, sample)
-        pruneBefore(rxUs - KEEP_US)
+        pruneBefore(rxUs - keepUs(ow))
     }
 
     /**
@@ -219,7 +219,9 @@ class CursorPredictor(
      */
     fun advance(seq: Long, nowUs: Long, out: Result): Boolean = synchronized(lock) {
         val a = anchor
-        if (!active || a == null || a.seq != seq || !a.visible || widthPt <= 0 || heightPt <= 0 || nowUs < suspendUntilUs) {
+        if (!active || a == null || a.seq != seq || !a.visible || widthPt <= 0 || heightPt <= 0 || nowUs < suspendUntilUs ||
+            tooSlow()
+        ) {
             shown = null
             corrX = 0f
             corrY = 0f
@@ -261,6 +263,7 @@ class CursorPredictor(
      * Caller holds the lock.
      */
     private fun positionAt(a: Anchor, evalUs: Long, ow: Long, out: FloatArray): Int {
+        val settle = settleUs(ow)
         val w = widthPt.toFloat()
         val h = heightPt.toFloat()
         var x = a.xNorm / NORM * w
@@ -270,7 +273,7 @@ class CursorPredictor(
             val i = (head + n) % CAP
             val s = sendUs[i]
             if (s > evalUs) break
-            if (evalUs - s > SETTLE_US) continue
+            if (evalUs - s > settle) continue
             if (s + ow <= a.sampleUs) continue // the state already contains it
             x = (x + dxPt[i]).coerceIn(0f, w)
             y = (y + dyPt[i]).coerceIn(0f, h)
@@ -283,6 +286,21 @@ class CursorPredictor(
 
     private fun oneWay(): Long = (oneWayUs() ?: DEFAULT_ONE_WAY_US).coerceIn(0L, MAX_ONE_WAY_US)
 
+    /** The line is slower than the prediction can follow ([MAX_ONE_WAY_US]): the layer draws the host's position (v1). */
+    private fun tooSlow(): Boolean = (oneWayUs() ?: 0L) > MAX_ONE_WAY_US
+
+    /**
+     * T-343: a delta is in the host's position about one round trip after it was sent, plus up to one state interval
+     * (15 fps on a relay = 67 ms). The LAN value [SETTLE_US] stays the floor, so a link up to RTT 50 ms behaves as before.
+     */
+    private fun settleUs(ow: Long): Long = maxOf(SETTLE_US, 2 * ow + SETTLE_PAD_US)
+
+    /** Deltas are kept at least this long: the settle time plus the old margin. */
+    private fun keepUs(ow: Long): Long = maxOf(KEEP_US, settleUs(ow) + (KEEP_US - SETTLE_US))
+
+    /** Host stamps older than this are not believed; scales with the delay so a long line's honest stamps pass. */
+    private fun maxStateAgeUs(ow: Long): Long = maxOf(MAX_STATE_AGE_US, 3 * ow)
+
     /**
      * The client-clock time a state was sampled at. The host stamp mapped through the clock offset when that is plausible,
      * but never later than the arrival minus the one-way delay (a state cannot travel faster than the best round trip);
@@ -291,7 +309,7 @@ class CursorPredictor(
     private fun sampleOf(hostUs: Long, rxUs: Long, ow: Long): Long {
         val bound = rxUs - ow
         val mapped = hostToClientUs(hostUs) ?: return bound
-        return if (mapped >= rxUs - MAX_STATE_AGE_US) min(mapped, bound) else bound
+        return if (mapped >= rxUs - maxStateAgeUs(ow)) min(mapped, bound) else bound
     }
 
     companion object {
@@ -314,7 +332,12 @@ class CursorPredictor(
         private const val TAU_US = 10_000.0
         private const val EPS_PT = 0.05f
         private const val DEFAULT_ONE_WAY_US = 5_000L
-        private const val MAX_ONE_WAY_US = 100_000L
+
+        /** Longest one-way delay the prediction follows (RTT 1 s); beyond it the layer draws the host's position. */
+        private const val MAX_ONE_WAY_US = 500_000L
+
+        /** Settle margin beyond one round trip (state interval and jitter), see [settleUs]. */
+        private const val SETTLE_PAD_US = 50_000L
 
         /** A host stamp mapped to more than this before the arrival is not believed (offset still rough): use the arrival. */
         private const val MAX_STATE_AGE_US = 250_000L
