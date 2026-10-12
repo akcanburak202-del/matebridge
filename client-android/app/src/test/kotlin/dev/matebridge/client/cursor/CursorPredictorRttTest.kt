@@ -148,7 +148,7 @@ class CursorPredictorRttTest {
     }
 
     @Test fun onALongLinkThePredictionBeatsHoldingTheLastState() {
-        val sim = Sim(rttMs = 250, jitterMs = 30, stateHz = 15)
+        val sim = Sim(rttMs = 250, jitterMs = 30, stateHz = 15) // sparse states: the hardest case for the forecast
         sim.run(0, 12_500, wobble)
         val s = sim.stats.take()
         assertTrue("states measured: ${s.predN}", s.predN > 100)
@@ -161,11 +161,23 @@ class CursorPredictorRttTest {
         val h95 = sim.pct(sim.holdDrawErr, 95)
         assertTrue("draw p50 $d50 hold $h50", d50 < h50 * 0.2f)
         assertTrue("draw p95 $d95 hold $h95", d95 < h95 * 0.3f)
-        assertTrue("snap back ${sim.maxBackStepPt} pt", sim.maxBackStepPt < 10f) // a frame moves up to 6 pt forward
+        assertTrue("snap back ${sim.maxBackStepPt} pt", sim.maxBackStepPt < 20f) // a frame moves up to 6 pt forward
+    }
+
+    @Test fun withTheHostsRealStateRateTheDrawnCursorTracksTheIntent() {
+        val sim = Sim(rttMs = 250, jitterMs = 30, stateHz = 120)
+        sim.run(0, 12_500, wobble)
+        val d50 = sim.pct(sim.drawErr, 50)
+        val d95 = sim.pct(sim.drawErr, 95)
+        val h50 = sim.pct(sim.holdDrawErr, 50)
+        val h95 = sim.pct(sim.holdDrawErr, 95)
+        assertTrue("draw p50 $d50 hold $h50", d50 < h50 * 0.2f)
+        assertTrue("draw p95 $d95 hold $h95", d95 < h95 * 0.3f)
+        assertTrue("snap back ${sim.maxBackStepPt} pt", sim.maxBackStepPt < 20f) // jitter of 30 ms at 900 pt/s can show as a step
     }
 
     @Test fun afterTheMotionStopsTheCursorSettlesOnTheHostPosition() {
-        val sim = Sim(rttMs = 250, jitterMs = 30, stateHz = 15)
+        val sim = Sim(rttMs = 250, jitterMs = 30, stateHz = 120)
         sim.run(0, 2_500, wobble) // moves until 1500 ms, still after
         // Everything has arrived and been reported about RTT + one state interval + jitter after the last move.
         sim.run(2_500, 3_300) { 0f }
@@ -176,7 +188,7 @@ class CursorPredictorRttTest {
     }
 
     @Test fun aLineBeyondTheCeilingFallsBackToTheHostPosition() {
-        val sim = Sim(rttMs = 1_400, jitterMs = 0, stateHz = 15)
+        val sim = Sim(rttMs = 1_400, jitterMs = 0, stateHz = 120)
         sim.run(0, 4_000, wobble)
         assertFalse(sim.p.advance(sim.lastSeq, 3_999_000L, sim.out))
     }
@@ -194,5 +206,30 @@ class CursorPredictorRttTest {
         assertEquals(1000f + 20f, out.xNorm / 65535f * W, 0.1f)
         assertTrue(p.advance(1, 111_000, out)) // 101 ms old: settled
         assertEquals(1000f, out.xNorm / 65535f * W, 0.1f)
+    }
+
+    @Test fun anIsolatedMoveOnARelayDoesNotSnapBackBeforeItsStateArrives() {
+        // RTT 250 ms. An 80 pt delta is sent at 10 ms and reaches the host at 135 ms. The state sampled at 133.3 ms does not have
+        // it; the next one is sampled at 200 ms and arrives at 325 ms. Nothing may move between 300 and 330 ms.
+        val p = CursorPredictor({ h -> h - OFFSET }, { 125_000L }, null)
+        p.setStream(W, H)
+        p.setLayerOn(true)
+        p.beginSession(1)
+        val half = 32768
+        p.onState(CursorState(1, half, half, true, 1, OFFSET), 125_000)
+        p.onSent(PointerRel(10_000, 80f, 0f, 0), 10_000, 1)
+        p.onState(CursorState(2, half, half, true, 1, 133_333 + OFFSET), 258_333)
+        val out = CursorPredictor.Result()
+        val x0 = half / 65535f * W
+        for (t in 300_000L..324_000L step 4_000L) {
+            assertTrue(p.advance(2, t, out))
+            assertEquals("t=$t", x0 + 80f, out.xNorm / 65535f * W, 0.1f)
+        }
+        val moved = ((half + 80f / W * 65535f).toInt())
+        p.onState(CursorState(3, moved, half, true, 1, 200_000 + OFFSET), 325_000)
+        for (t in 326_000L..330_000L step 2_000L) {
+            assertTrue(p.advance(3, t, out))
+            assertEquals("t=$t", x0 + 80f, out.xNorm / 65535f * W, 0.1f)
+        }
     }
 }

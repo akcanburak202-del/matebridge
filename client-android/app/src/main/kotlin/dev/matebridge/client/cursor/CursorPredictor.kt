@@ -290,10 +290,12 @@ class CursorPredictor(
     private fun tooSlow(): Boolean = (oneWayUs() ?: 0L) > MAX_ONE_WAY_US
 
     /**
-     * T-343: a delta is in the host's position about one round trip after it was sent, plus up to one state interval
-     * (15 fps on a relay = 67 ms). The LAN value [SETTLE_US] stays the floor, so a link up to RTT 50 ms behaves as before.
+     * T-343: backstop for a delta the host never reports (ignored, clamped). Normally a covering state removes it first, so a
+     * generous value costs little. On a long line it must outlast one round trip plus the longest normal gap between host
+     * states while the cursor moves (the host samples about every 8 ms, but only one state is in flight and a congested relay
+     * can hold it for a while) plus the RTT jitter: [SETTLE_PAD_US]. Up to [LAN_ONE_WAY_US] the old [SETTLE_US] stays.
      */
-    private fun settleUs(ow: Long): Long = maxOf(SETTLE_US, 2 * ow + SETTLE_PAD_US)
+    private fun settleUs(ow: Long): Long = if (ow <= LAN_ONE_WAY_US) SETTLE_US else maxOf(SETTLE_US, 2 * ow + SETTLE_PAD_US)
 
     /** Deltas are kept at least this long: the settle time plus the old margin. */
     private fun keepUs(ow: Long): Long = maxOf(KEEP_US, settleUs(ow) + (KEEP_US - SETTLE_US))
@@ -336,8 +338,11 @@ class CursorPredictor(
         /** Longest one-way delay the prediction follows (RTT 1 s); beyond it the layer draws the host's position. */
         private const val MAX_ONE_WAY_US = 500_000L
 
-        /** Settle margin beyond one round trip (state interval and jitter), see [settleUs]. */
-        private const val SETTLE_PAD_US = 50_000L
+        /** Settle margin beyond one round trip (state gap and jitter), see [settleUs]. */
+        private const val SETTLE_PAD_US = 150_000L
+
+        /** One-way delays up to this keep the pre-T-343 constants bit for bit (RTT about 50 ms). */
+        private const val LAN_ONE_WAY_US = 25_000L
 
         /** A host stamp mapped to more than this before the arrival is not believed (offset still rough): use the arrival. */
         private const val MAX_STATE_AGE_US = 250_000L
