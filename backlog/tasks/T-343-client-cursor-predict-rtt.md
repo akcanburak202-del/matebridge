@@ -1,7 +1,7 @@
 ---
 id: T-343
 title: İstemci — yerel imleç tahmini uzun hatlarda (RTT 250+ ms) geri sıçramasın
-status: review
+status: done
 phase: 7
 owner: android-client-dev
 depends_on: []

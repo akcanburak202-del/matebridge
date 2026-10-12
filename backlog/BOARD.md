@@ -33,7 +33,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-333](tasks/T-333-game-encoder-peaks.md) | Oyun 60 — kodlayıcı kare boyutu tepeleri (LLRC/ConstantBitRate, kısa rate penceresi, MaxAllowedFrameQP) EncodeBench karşılaştırması | 7 | mac-host-dev | [T-330] |
 | [T-334](tasks/T-334-dav-copy-put-concurrency.md) | WebDAV — eşzamanlı COPY/MOVE geri alması başka bağlantının başarılı PUT'unu silmesin | 7 | android-client-dev | [T-288] |
 | [T-335](tasks/T-335-host-pipeline-stop-join.md) | Host — pipeline teardown sürerken ikinci stop çağıranı beklesin; hata zamanı teardown'dan önce alınsın | 7 | mac-host-dev | [T-325, T-293] |
-| [T-343](tasks/T-343-client-cursor-predict-rtt.md) | İstemci — yerel imleç tahmini uzun hatlarda (RTT 250+ ms) geri sıçramasın | 7 | android-client-dev | [] |
 
 ## done
 
@@ -355,3 +354,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-340](tasks/T-340-host-aac-audio.md) | Host — AAC-LC ses kodlama (AUDIO_PREFS.codec = 1 ve HELLO bit14) | 7 | mac-host-dev | [T-337] |
 | [T-341](tasks/T-341-client-aac-audio.md) | İstemci — AAC-LC ses çözme (MediaCodec) ve uzak oturumda AAC isteği | 7 | android-client-dev | [T-339] |
 | [T-342](tasks/T-342-client-keys-before-ime.md) | İstemci — yayın ekranında fiziksel klavye tuşları klavye uygulamasından (IME) önce MateBridge'e gelsin | 7 | android-client-dev | [] |
+| [T-343](tasks/T-343-client-cursor-predict-rtt.md) | İstemci — yerel imleç tahmini uzun hatlarda (RTT 250+ ms) geri sıçramasın | 7 | android-client-dev | [] |
