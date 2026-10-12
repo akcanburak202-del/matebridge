@@ -44,6 +44,7 @@ final class CursorService: @unchecked Sendable {
     private let sampler: CursorSampler
     private let shapes: SharedShapeStore
     private let video: VideoCursorSwitch
+    private let ack: RelAckBoard
     private let link: Link
     private let logger = SessionLogger(component: "cursor")
 
@@ -82,7 +83,8 @@ final class CursorService: @unchecked Sendable {
     private let injectionSamplePending = Atomic<Bool>(false)
 
     init(link: Link, sampler: CursorSampler? = nil, shapes: SharedShapeStore = SharedShapeStore(),
-         video: VideoCursorSwitch = .shared) {
+         video: VideoCursorSwitch = .shared, ack: RelAckBoard = .shared) {
+        self.ack = ack
         self.shapes = shapes
         self.sampler = sampler ?? CursorSampler(store: shapes)
         self.video = video
@@ -263,7 +265,7 @@ final class CursorService: @unchecked Sendable {
     private func takeSample() {
         guard planner.isTracking else { return }
         let start = DispatchTime.now().uptimeNanoseconds
-        let snapshot = sampler.sample()
+        let snapshot = sampler.sample(board: ack)  // count and position as one coherent pair (RelAckBoard)
         let costUs = (DispatchTime.now().uptimeNanoseconds &- start) / 1_000
         stats.recordSample(costUs: costUs, ok: snapshot != nil)
         if let snapshot {
@@ -335,7 +337,8 @@ final class CursorService: @unchecked Sendable {
                 }
             }
             let state = CursorState(seq: nextSeq, x: unit.snapshot.x, y: unit.snapshot.y,
-                                    visible: unit.snapshot.visible, shapeID: sent, hostTimeUs: unit.hostTimeUs)
+                                    visible: unit.snapshot.visible, shapeID: sent, hostTimeUs: unit.hostTimeUs,
+                                    relAckCount: unit.snapshot.relAck)
             nextSeq &+= 1
             messages.append(.cursorState(state))
             items = (unit, writingSessionID, outbox.generation, messages, shapeBytes)
