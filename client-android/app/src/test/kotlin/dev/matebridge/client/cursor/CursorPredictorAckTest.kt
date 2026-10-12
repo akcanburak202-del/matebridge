@@ -187,4 +187,28 @@ class CursorPredictorAckTest {
         val base = 20000 / 65535f * W
         assertEquals(base + 10f, seqOf(p, 1L).first, 0.2f) // ack 1: only number 2 is pending
     }
+
+    @Test fun aStallHoldsTheDisplacedPositionAndStopsAskingForFrames() {
+        val p = predictor()
+        p.beginSession(1)
+        p.onState(CursorState(0, 20000, 20000, true, 1, OFFSET, 0L), 900_000L)
+        p.onSent(PointerRel(0, 10f, 0f, 0), 950_000L, 1) // 1
+        p.onState(CursorState(1, 20000, 20000, true, 1, OFFSET + 40_000, 1L), 960_000L)
+        p.onSent(PointerRel(0, 20f, 0f, 0), 970_000L, 1) // 2, then motion stops and delivery stalls
+        val base = 20000 / 65535f * W
+        val out = CursorPredictor.Result()
+        assertTrue(p.advance(1, 971_000L, out))
+        assertTrue(out.animating) // the first frame with the new delta
+        var animating = true
+        for (t in 980_000L..3_000_000L step 100_000L) { // far beyond the keep time, no state arrives
+            assertTrue(p.advance(1, t, out))
+            assertEquals(base + 20f, out.xNorm / 65535f * W, 0.2f)
+            animating = out.animating
+        }
+        assertTrue("still animating during the stall", !animating)
+        // Delivery resumes with ack 2: the state contains the delta, nothing jumps.
+        p.onState(CursorState(2, (20000 + 20 / W.toFloat() * 65535).toInt(), 20000, true, 1, OFFSET + 3_000_000L, 2L), 3_010_000L)
+        assertTrue(p.advance(2, 3_011_000L, out))
+        assertEquals(base + 20f, out.xNorm / 65535f * W, 0.3f)
+    }
 }

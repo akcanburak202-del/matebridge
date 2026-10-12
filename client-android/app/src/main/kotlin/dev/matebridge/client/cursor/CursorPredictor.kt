@@ -96,6 +96,8 @@ class CursorPredictor(
     private var corrX = 0f
     private var corrY = 0f
     private var lastAdvanceUs = 0L
+    private var lastPending = 0
+    private var lastPendingAnchor: Anchor? = null
 
     private val tmp = FloatArray(2)
     private val tmp2 = FloatArray(2)
@@ -136,6 +138,8 @@ class CursorPredictor(
         corrX = 0f
         corrY = 0f
         lastAdvanceUs = 0L
+        lastPending = 0
+        lastPendingAnchor = null
         suspendUntilUs = Long.MIN_VALUE
     }
 
@@ -200,8 +204,13 @@ class CursorPredictor(
         return true
     }
 
+    /**
+     * Drops deltas sent before [us]. With an ack anchor only deltas the ack covers go: an unacknowledged one is still in flight
+     * (a dropped or ignored message is acked too), so dropping it would bring the snap-back; the ring's cap is the hard bound.
+     */
     private fun pruneBefore(us: Long) {
-        while (count > 0 && sendUs[head] < us) { head = (head + 1) % CAP; count-- }
+        val ack = anchor?.ackCount
+        while (count > 0 && sendUs[head] < us && (ack == null || relNo[head] <= ack)) { head = (head + 1) % CAP; count-- }
     }
 
     /**
@@ -247,6 +256,7 @@ class CursorPredictor(
             return false
         }
         val ow = oneWay()
+        pruneBefore(nowUs - keepUs(ow))
         val pending = positionAt(a, nowUs, ow, tmp)
         if (lastAdvanceUs != 0L && (corrX != 0f || corrY != 0f)) {
             val dt = (nowUs - lastAdvanceUs).coerceIn(0L, 100_000L)
@@ -272,7 +282,12 @@ class CursorPredictor(
         val py = (tmp[1] + corrY).coerceIn(0f, heightPt.toFloat())
         out.xNorm = (px / widthPt * NORM).roundToInt().coerceIn(0, 65535)
         out.yNorm = (py / heightPt * NORM).roundToInt().coerceIn(0, 65535)
-        out.animating = corrX != 0f || corrY != 0f || pending > 0
+        // Without an ack, pending deltas settle by time, so frames are needed until then. With one, a pending delta is simply
+        // waiting for the host: frames are needed only while the drawn position still changes (a new delta), not during a stall.
+        val moving = if (a.ackCount != null) pending != lastPending || a !== lastPendingAnchor else pending > 0
+        lastPending = pending
+        lastPendingAnchor = a
+        out.animating = corrX != 0f || corrY != 0f || moving
         true
     }
 

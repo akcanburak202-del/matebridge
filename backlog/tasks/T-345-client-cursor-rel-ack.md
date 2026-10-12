@@ -54,3 +54,9 @@ Karar 0036 v3 eki; PROTOCOL.md §4 CURSOR_STATE "Onay grubu". Dal tabanı: `task
 - Test edilmedi: gerçek cihaz/host; gerçek `sink.send` sırası ile numaralama (yalnız birim benzetimi).
 
 ## Açık sorular
+
+### Codex P2 düzeltmesi (durma sırasında kayık imleç)
+
+- Ackli çapada `advance()` artık yalnız çizilen konum değişiyorsa (yeni delta ya da yeni çapa) `animating=true` der; durma (state akışı kesik) sırasında konum tutulur, kare istenmez. Ack'siz yol aynı.
+- `pruneBefore` (add/onState/advance'te aynı kural) ackli çapada yalnız ack'in kapsadığı deltaları siler; onaylanmamış delta yaştan düşmez (halka sınırı 512 sert üst sınır). Zaman aşımı yolu değişmedi.
+- Yeni test `aStallHoldsTheDisplacedPositionAndStopsAskingForFrames` (durma + akış ack>=2 ile dönünce sıçrama yok). check.sh: yalnız tabandaki `DecoderWaitTest`/`OutputParkTest` düşer; Swift fixture kapsamı T-344'e kadar düşebilir.
