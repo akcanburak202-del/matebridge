@@ -1914,3 +1914,11 @@ Host release, `main`. Tablette ölçüm için debug APK kullanıldı; sonunda da
   5. Uzak seste aç → `codec=aac`, `format=2`, 1 dk YouTube: kesinti/kayma yok, `audio_aac_error` yok; hızlı kapa-aç.
   6. Veri ölçümü: durgun ekranda 10 dk, terminal akışında 10 dk (Tailscale/Android veri sayacı).
   7. Ağ değişimi (Wi-Fi↔mobil, USB takma) uzak oturumu başka yola geçirmez.
+
+## 2026-10-12 akşam — İlk uzak oturum (0038) ve Tailscale
+
+- **Kurulum:** host 68dda003 + APK e9e594d0 (0038 + T-342) kuruldu. Tailscale: Mac 100.77.121.48, tablet 100.97.230.79; key expiry kapalı, Tailnet Lock henüz yok.
+- **UDP engeli:** tablet Tailscale'i "UDP is blocked" (netcheck) diyordu, evde de hotspot'ta da yalnız DERP aktarması vardı (RTT 230–320 ms). Uygulamada VPN'i kapatıp açmak çözmedi; **tableti yeniden başlatmak çözdü**. Doğrudan yol kuruldu, hotspot'ta RTT ~90–130 ms.
+- **Uzak oturum:** yazı okunuyor, biraz gecikme var. Trackpad imleci geri sıçrıyordu: `cursor_stats` pred_err p50 86 pt, hold_err 48 pt. Sebep 0036 v2 tahmin sabitlerinin LAN'a göre olması → T-343.
+- **adb:** Tailscale üzerinden de çalışıyor (`adb connect 100.97.230.79:5555`). Mobil veride logcat'i cihazda filtreleyin (`adb shell 'logcat -d | grep …'`); tam `logcat -d` çekmek yavaş ve veri harcar.
+- **Açık:** uzak oturumda host `input_watchdog events=1` ~83 ms arayla ~3,5 sn sürdü (5433–5437 s, tuş tekrarı?). İncelenmedi.
