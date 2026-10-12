@@ -93,7 +93,7 @@ Onaylanmamış cihaz ne görüntü alır ne girdi gönderebilir (PLAN §5.4). İ
 | 0x0A | FILES_NET | H→C | kontrol | `files_net_open`, `files_net_close` |
 | 0x0B | CURSOR_PREFS | C→H | kontrol | `cursor_prefs_on`, `cursor_prefs_off` |
 | 0x0C | CURSOR_SHAPE | H→C | kontrol | `cursor_shape`, `invalid_cursor_shape_short` |
-| 0x0D | CURSOR_STATE | H→C | kontrol | `cursor_state`, `cursor_state_hidden` |
+| 0x0D | CURSOR_STATE | H→C | kontrol | `cursor_state`, `cursor_state_hidden`, `cursor_state_ack`, `invalid_cursor_state_ack_partial` |
 | 0x10 | PEN | C→H | kontrol | `pen_hover_to_contact`, `pen_leave`, `pen_eraser`, `pen_extremes`, `invalid_pen_count_zero` |
 | 0x11 | KEY | C→H | kontrol | `key_down`, `key_up_caps`, `key_no_scan`, `invalid_key_short` |
 | 0x12 | POINTER_REL | C→H | kontrol | `pointer_rel` |
@@ -344,8 +344,10 @@ Bir imleç şekli (karar 0036). Host yalnız `CURSOR_PREFS(1)` uygulanmışken v
 | reserved | u8 | |
 | shape_id | u32 | Çizilecek şekil (`CURSOR_SHAPE` ile gelmiş olmalı). `0` = host şekli okuyamadı: istemci yerleşik oku çizer. İstemcide olmayan bir kimlik de yerleşik okla çizilir. |
 | host_time_us | u64 | Host monoton saatinde örnekleme anı (yalnız ölçüm; istemci saat farkıyla gecikme hesaplayabilir) |
+| rel_ack_time_us | u64 | *İsteğe bağlı sondaki grup (0036 v3, T-344).* Host'un bu durumu örneklemeden önce **işlediği** (enjekte ettiği ya da bayat diye attığı) son `POINTER_REL`'in `time_us` değeri, istemcinin kendi saatinde, olduğu gibi. Bu oturumda henüz `POINTER_REL` işlenmediyse `0`. |
 
 - İstemci en yeni `seq`'i çizer; daha eski `seq` gelirse yok sayar.
+- **Onay grubu (`rel_ack_time_us`, 0036 v3):** payload 22 bayt (grup yok) ya da en az 30 bayttır; 23–29 bayt kısa payload'dur (fixture `invalid_cursor_state_ack_partial`). Host grubu, bu oturumda en az bir `POINTER_REL` işlediyse her `CURSOR_STATE`'te yazar; `0` ise yazmaz (§2 isteğe bağlı grup). Değer **aynı oturumda geri gitmez**: host yalnız işlediği `POINTER_REL`'lerin en büyük `time_us`'unu taşır. Bir `POINTER_REL` "işlendi" sayılır: konumu ve düğmeleri bu durumun örneklendiği andan önce enjekte edildiyse ya da girdi kuralları (karar 0025) onu attıysa. Bekleyen (kuyruktaki) olaylar sayılmaz. İstemci yerel imleç tahmininde (0036 v2) bir göreli deltanın durumda olup olmadığına bu değerle karar verir (`time_us ≤ rel_ack_time_us` → durumun içinde); grup yoksa (eski host) zaman tahminine döner. Grubu tanımayan eski istemci 30 baytlık payload'un fazlasını yok sayar (§2, uzun payload kuralı).
 - **Zaman aşımı:** (uzak oturumda 1,5 s yerine **5 s**, karar 0038) istemci `CURSOR_PREFS(1)` gönderdikten sonra 1,5 s boyunca hiç `CURSOR_STATE` almazsa (ya da sonradan 1,5 s kesilirse) katmanını gizler ve `CURSOR_PREFS(0)` gönderir: imleç videoya döner, kullanıcı imleçsiz kalmaz. İstemci yeniden denemeyi en erken 10 s sonra yapar.
 - Mod değişiminde (Oyun) istemci önce `CURSOR_PREFS(0)` gönderir; host'un video imlecini geri açması bir sonraki karelerde görünür.
 
@@ -799,7 +801,7 @@ Swift ve Kotlin testleri:
 - Bakım: `release_all`, `ping`, `pong`, `stats`, `keyframe_request`, `keyframe_request_view`
 - Ses: `audio_prefs`, `audio_prefs_aac`, `audio_config`, `audio_config_aac`, `audio_config_stopped`, `audio_frame`, `audio_frame_aac`, `invalid_audio_frame_short`, `invalid_audio_frame_count`
 - Video: `video_hello`, `video_frame`, `video_frame_config`, `video_frame_aux`, `video_frame_aux_config`
-- İmleç: `cursor_prefs_on`, `cursor_prefs_off`, `cursor_shape`, `invalid_cursor_shape_short`, `cursor_state`, `cursor_state_hidden`
+- İmleç: `cursor_prefs_on`, `cursor_prefs_off`, `cursor_shape`, `invalid_cursor_shape_short`, `cursor_state`, `cursor_state_hidden`, `cursor_state_ack`, `invalid_cursor_state_ack_partial`
 - Dosya: `files_info_ready`, `files_info_off`, `files_info_standby`, `files_net_open`, `files_net_close`, `files_hello`, `files_hello_ack`, `files_hello_ack_rejected`, `files_data`, `invalid_files_hello_short`, `invalid_files_data_empty`
 - Diğer: `unknown_type`
 - Şifreleme: `crypto_vectors.json` (§9)
