@@ -93,6 +93,7 @@ class FixtureTest {
             ),
             "cursor_state" to CursorState(42, 32768, 32768, true, 0x67BAAA67L, 123456789012L),
             "cursor_state_hidden" to CursorState(43, 32768, 65535, false, 0x67BAAA67L, 123456799012L),
+            "cursor_state_ack" to CursorState(44, 40000, 20000, true, 0x67BAAA67L, 123456809012L, 1234L),
             "files_hello" to FilesHello(1, 2712847316L, Bytes(hex("707172737475767778797a7b7c7d7e7f"))),
             "files_hello_ack" to FilesHelloAck(FilesHelloAck.OK, Bytes(hex("808182838485868788898a8b8c8d8e8f"))),
             "files_hello_ack_rejected" to FilesHelloAck(FilesHelloAck.REJECTED, zeros16),
@@ -161,7 +162,7 @@ class FixtureTest {
 
         val invalid = setOf(
             "invalid_key_short", "invalid_pen_count_zero", "invalid_audio_frame_short", "invalid_stream_prefs_partial",
-            "invalid_stream_prefs_hdr_partial", "invalid_files_hello_short", "invalid_files_data_empty", "invalid_cursor_shape_short",
+            "invalid_stream_prefs_hdr_partial", "invalid_files_hello_short", "invalid_files_data_empty", "invalid_cursor_shape_short", "invalid_cursor_state_ack_partial",
             "invalid_str8_utf8", "invalid_stream_prefs_link_partial", "invalid_audio_frame_count",
         )
         val skipped = setOf("unknown_type")

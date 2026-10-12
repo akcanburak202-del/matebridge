@@ -16,6 +16,8 @@ class CursorStats {
         val predN: Int = 0, val predErrP50Pt: Float = -1f, val predErrP95Pt: Float = -1f,
         /** T-278: the same states measured against "stay where the last state said" (the v1 drawing), for comparison. */
         val holdErrP50Pt: Float = -1f, val holdErrP95Pt: Float = -1f,
+        /** T-345: states in this window that carried `rel_ack_count`. */
+        val ackN: Int = 0,
     ) {
         val idle: Boolean get() = states == 0 && shapes == 0 && stale == 0 && draws == 0 && predN == 0
 
@@ -25,7 +27,7 @@ class CursorStats {
                 "draw_ms_avg=${ms(drawAvgUs)} draw_ms_max=${ms(drawMaxUs)} " +
                 "age_ms_p50=${ms(ageP50Us)} age_ms_p95=${ms(ageP95Us)} age_n=$ageSamples " +
                 "pred_err_pt_p50=${pt(predErrP50Pt)} pred_err_pt_p95=${pt(predErrP95Pt)} pred_n=$predN " +
-                "hold_err_pt_p50=${pt(holdErrP50Pt)} hold_err_pt_p95=${pt(holdErrP95Pt)}"
+                "hold_err_pt_p50=${pt(holdErrP50Pt)} hold_err_pt_p95=${pt(holdErrP95Pt)}" + (if (ackN > 0) " ack_n=$ackN" else "")
 
         private fun pt(v: Float) = if (v < 0f) "-" else String.format(Locale.ROOT, "%.2f", v)
 
@@ -43,6 +45,7 @@ class CursorStats {
     private val predErr = FloatArray(MAX_PRED_SAMPLES)
     private val holdErr = FloatArray(MAX_PRED_SAMPLES)
     private var predCount = 0
+    private var ackN = 0
 
     @Synchronized fun onState() { states++ }
 
@@ -74,6 +77,9 @@ class CursorStats {
         }
     }
 
+    /** T-345: one accepted state carried `rel_ack_count`. */
+    @Synchronized fun onAck() { ackN++ }
+
     /** The window since the last call, then a fresh one. */
     @Synchronized fun take(): Snapshot {
         val sorted = ages.copyOf(ageCount).also { it.sort() }
@@ -83,9 +89,9 @@ class CursorStats {
             states, shapes, stale, draws,
             if (draws > 0) drawSumUs / draws else -1, if (draws > 0) drawMaxUs else -1,
             ageCount, percentile(sorted, 50), percentile(sorted, 95),
-            predCount, percentile(pe, 50), percentile(pe, 95), percentile(he, 50), percentile(he, 95),
+            predCount, percentile(pe, 50), percentile(pe, 95), percentile(he, 50), percentile(he, 95), ackN,
         )
-        states = 0; shapes = 0; stale = 0; draws = 0; drawSumUs = 0; drawMaxUs = 0; ageCount = 0; predCount = 0
+        states = 0; shapes = 0; stale = 0; draws = 0; drawSumUs = 0; drawMaxUs = 0; ageCount = 0; predCount = 0; ackN = 0
         return snap
     }
 

@@ -325,6 +325,8 @@ data class CursorState(
     val visible: Boolean,
     val shapeId: Long, // u32
     val hostTimeUs: Long,
+    /** 0036 v3: how many `POINTER_REL` of this control connection the host had processed when it sampled; null = old host. */
+    val relAckCount: Long? = null,
 ) : Message {
     override val type get() = MsgType.CURSOR_STATE
 
