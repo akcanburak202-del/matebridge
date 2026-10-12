@@ -207,6 +207,7 @@ object Codec {
             is CursorState -> {
                 w.u32(msg.seq); w.u16(msg.x); w.u16(msg.y); w.u8(if (msg.visible) 1 else 0); w.u8(0)
                 w.u32(msg.shapeId); w.u64(msg.hostTimeUs)
+                msg.relAckCount?.let { w.u64(it) } // optional trailing group (0036 v3)
             }
             is FilesHello -> {
                 require(msg.clientFilesNonce.size == Limits.NONCE_BYTES) { "client_files_nonce must be 16 bytes" }
@@ -377,7 +378,10 @@ object Codec {
             }
             MsgType.CURSOR_STATE -> {
                 val seq = r.u32(); val x = r.u16(); val y = r.u16(); val visible = r.u8(); r.skip(1)
-                CursorState(seq, x, y, visible == 1, r.u32(), r.u64()) // unknown visible value = hidden
+                val shape = r.u32(); val host = r.u64()
+                // Optional rel_ack_count group: absent (22 bytes) or whole (>= 30); 1..7 bytes left = SHORT_PAYLOAD from u64().
+                val ack = if (r.remaining() == 0) null else r.u64()
+                CursorState(seq, x, y, visible == 1, shape, host, ack) // unknown visible value = hidden
             }
             MsgType.FILES_HELLO -> FilesHello(r.u16(), r.u32(), Bytes(r.bytes(Limits.NONCE_BYTES)))
             MsgType.FILES_HELLO_ACK -> FilesHelloAck(r.u8(), Bytes(r.bytes(Limits.NONCE_BYTES))) // unknown status: rejected

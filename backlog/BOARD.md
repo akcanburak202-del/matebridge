@@ -355,3 +355,5 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-341](tasks/T-341-client-aac-audio.md) | İstemci — AAC-LC ses çözme (MediaCodec) ve uzak oturumda AAC isteği | 7 | android-client-dev | [T-339] |
 | [T-342](tasks/T-342-client-keys-before-ime.md) | İstemci — yayın ekranında fiziksel klavye tuşları klavye uygulamasından (IME) önce MateBridge'e gelsin | 7 | android-client-dev | [] |
 | [T-343](tasks/T-343-client-cursor-predict-rtt.md) | İstemci — yerel imleç tahmini uzun hatlarda (RTT 250+ ms) geri sıçramasın | 7 | android-client-dev | [] |
+| [T-344](tasks/T-344-host-cursor-rel-ack.md) | Host — CURSOR_STATE `rel_ack_count` (işlenen POINTER_REL sayısı) | 7 | mac-host-dev | [] |
+| [T-345](tasks/T-345-client-cursor-rel-ack.md) | İstemci — CURSOR_STATE `rel_ack_count` ile tahmin (geri sıçrama yok) | 7 | android-client-dev | [] |

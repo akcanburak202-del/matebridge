@@ -98,15 +98,24 @@ public struct CursorState: Equatable, Sendable {
     public var shapeID: UInt32
     /// Host monotonic microseconds at the time of the sample (measurement only).
     public var hostTimeUs: UInt64
+    /// Decision 0036 v3: how many `POINTER_REL` messages of this control connection the host had processed (injected or
+    /// dropped by the input rules) before it sampled `x`/`y`. `0` is not written (22-byte payload).
+    public var relAckCount: UInt64
 
-    public init(seq: UInt32, x: UInt16, y: UInt16, visible: Bool, shapeID: UInt32, hostTimeUs: UInt64) {
+    public init(seq: UInt32, x: UInt16, y: UInt16, visible: Bool, shapeID: UInt32, hostTimeUs: UInt64,
+                relAckCount: UInt64 = 0) {
         self.seq = seq
         self.x = x
         self.y = y
         self.visible = visible
         self.shapeID = shapeID
         self.hostTimeUs = hostTimeUs
+        self.relAckCount = relAckCount
     }
+
+    /// Payload without / with the `rel_ack_count` group.
+    public static let baseSize = 22
+    public static let ackedSize = 30
 
     func write(_ w: inout ByteWriter) {
         w.u32(seq)
@@ -116,14 +125,20 @@ public struct CursorState: Equatable, Sendable {
         w.u8(0)
         w.u32(shapeID)
         w.u64(hostTimeUs)
+        if relAckCount > 0 { w.u64(relAckCount) }
     }
 
-    /// An unknown `visible` value counts as hidden (PROTOCOL.md 0x0D).
+    /// An unknown `visible` value counts as hidden (PROTOCOL.md 0x0D). The `rel_ack_count` group is optional: 22 bytes
+    /// have none, 23 to 29 bytes are a protocol error (`payloadTooShort`), 30 or more read it (longer: ignored).
     static func read(_ r: inout ByteReader) throws -> CursorState {
         let seq = try r.u32()
         let x = try r.u16(), y = try r.u16()
         let visible = try r.u8()
         try r.skip(1)
-        return CursorState(seq: seq, x: x, y: y, visible: visible == 1, shapeID: try r.u32(), hostTimeUs: try r.u64())
+        let shapeID = try r.u32()
+        let hostTimeUs = try r.u64()
+        let ack = r.remaining == 0 ? 0 : try r.u64()  // 1...7 bytes left: payloadTooShort from the reader
+        return CursorState(seq: seq, x: x, y: y, visible: visible == 1, shapeID: shapeID, hostTimeUs: hostTimeUs,
+                           relAckCount: ack)
     }
 }

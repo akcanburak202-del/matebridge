@@ -79,10 +79,21 @@ class CursorCodecTest {
         assertEquals(s, decode(enc))
     }
 
-    @Test fun stateShortIsRejectedLongerIsTolerated() {
+    @Test fun stateShortIsRejectedAndTheAckGroupIsAllOrNothing() {
         val p = le(4 to 5, 2 to 10, 2 to 20, 1 to 1, 1 to 0, 4 to 99, 8 to 1234)
         expectError(ProtocolException.Kind.SHORT_PAYLOAD, frame(MsgType.CURSOR_STATE, p.copyOf(p.size - 1)))
-        assertTrue(decode(frame(MsgType.CURSOR_STATE, p + byteArrayOf(1, 2, 3))) is CursorState)
+        assertEquals(null, (decode(frame(MsgType.CURSOR_STATE, p)) as CursorState).relAckCount)
+        // 23..29 bytes: a partial rel_ack_count group (fixture invalid_cursor_state_ack_partial)
+        for (extra in 1..7) expectError(ProtocolException.Kind.SHORT_PAYLOAD, frame(MsgType.CURSOR_STATE, p + ByteArray(extra)))
+        val withAck = p + le(8 to 77)
+        assertEquals(77L, (decode(frame(MsgType.CURSOR_STATE, withAck)) as CursorState).relAckCount)
+        // longer payloads: the rest is ignored (PROTOCOL.md 2)
+        assertEquals(77L, (decode(frame(MsgType.CURSOR_STATE, withAck + byteArrayOf(1, 2, 3))) as CursorState).relAckCount)
+    }
+
+    @Test fun stateWithAckRoundTrips() {
+        val s = CursorState(9, 1, 2, true, 3, 4, 123456789012345L)
+        assertEquals(s, decode(Codec.encode(s)))
     }
 
     @Test fun shapeUnknownFormatIsKeptNotAnError() {

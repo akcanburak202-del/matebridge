@@ -53,6 +53,8 @@ public final class InputController: @unchecked Sendable {
     private let capsLock: CapsLockControlling
     private let cursor: CursorLocating
     private let visibility: CursorVisibilityChecking
+    /// T-344: `POINTER_REL` messages handled, for `CURSOR_STATE.rel_ack_count` (read by the cursor flow).
+    private let relAck: RelAckBoard
     private let logger = SessionLogger(component: "input")
     /// T-299 (queue-confined): set by the host-sleep participant before its release-all. While set, `gate` drops every
     /// opening event of any session. Cleared by the wake notification, or by the awake-time expiry
@@ -116,6 +118,7 @@ public final class InputController: @unchecked Sendable {
                 capsLock: CapsLockControlling = SystemCapsLock(),
                 cursor: CursorLocating = SystemCursor(),
                 visibility: CursorVisibilityChecking = SystemCursorVisibility(),
+                relAck: RelAckBoard = .shared,
                 doubleClickInterval: TimeInterval = NSEvent.doubleClickInterval) {
         self.poster = poster
         self.permission = permission
@@ -123,6 +126,7 @@ public final class InputController: @unchecked Sendable {
         self.capsLock = capsLock
         self.cursor = cursor
         self.visibility = visibility
+        self.relAck = relAck
         var planner = InjectionPlanner.Configuration()
         planner.clicks.intervalUs = UInt64(max(0.05, min(doubleClickInterval, 5)) * 1_000_000)
         pipeline = InputPipeline(planner: planner)
@@ -197,6 +201,7 @@ public final class InputController: @unchecked Sendable {
             InjectToFrameProbe.shared.beginSession(sessionID: sessionID, configID: configID)
             messages = 0
             eventsPosted = 0
+            relAck.reset()  // the acknowledgement counts this connection's POINTER_REL only
             loggedDrops = pipeline.planner.counters
             cursorQueries = 0
             cursorQueryFailures = 0
@@ -238,6 +243,7 @@ public final class InputController: @unchecked Sendable {
             let pinchMessages = pipeline.machine?.pinchMessages ?? 0
             let events = pipeline.sessionEnded(now: now, environment: environment())
             flush(events, now: now)
+            relAck.reset()
             logInputAge(now: now, force: true)  // the window of the last burst
             let d = pipeline.planner.counters
             timingLock.lock()
@@ -299,7 +305,12 @@ public final class InputController: @unchecked Sendable {
                 env.cursorHidden = sampleCursorHidden()  // T-272: and do not move a hidden one
             }
             pushActivity()  // the activity from BEFORE this message (T-163)
+            // T-344: one write around the whole handling: the posts (which note their location) and, for a POINTER_REL
+            // (injected, or dropped by the input rules or a gate), the count. A sample never sees half of it.
+            relAck.beginWrite()
             let postNs = flush(gate(pipeline.handle(message, now: now, environment: env), now: now), now: now)
+            if case .pointerRel = message { relAck.notePointerRel() }
+            relAck.endWrite()
             ages.record(message, receivedUs: now)  // T-171: measured only, after the message was handled
             logInputAge(now: now)
             // Debug only, and only the numeric identity: never a character (docs/LOGGING.md).
@@ -528,6 +539,9 @@ public final class InputController: @unchecked Sendable {
     /// posted without it. Returns what could not be posted and whether the reason was anything but the permission.
     private func post(_ events: [MacEvent]) -> (failed: [MacEvent], permitted: Bool) {
         guard !events.isEmpty else { return ([], true) }
+        // T-344: the board is mid-update from before the first CGEvent goes out until the location is noted.
+        relAck.beginWrite()
+        defer { relAck.endWrite() }
         if events.contains(where: \.isClosing), !permission.isTrusted() {
             trustedCache = (false, HostClock.nowUs())
             return (events, false)
@@ -544,6 +558,11 @@ public final class InputController: @unchecked Sendable {
         heldLock.withLock {
             held = before
             held.postedBatch(events, failedCount: failed.count)
+        }
+        // T-344: where WindowServer is about to put the cursor, whatever the source (move, pen point, synthesized
+        // button edge, release batch).
+        if let location = PostSummary(events: events, failed: failed).lastLocation {
+            relAck.notePosted(location, nowUs: HostClock.nowUs())
         }
         return (failed, true)
     }
@@ -572,7 +591,7 @@ public final class InputController: @unchecked Sendable {
         let result = post(events)
         let postNs = DispatchTime.now().uptimeNanoseconds &- postStart
         // T-323: a posted press edge starts an inject-to-frame measurement (host clock, right after the post).
-        if events.contains(where: { $0.isPressEdge && !result.failed.contains($0) }) {
+        if PostSummary(events: events, failed: result.failed).pressEdge {
             InjectToFrameProbe.shared.noteInjection()
         }
         eventsPosted += events.count - result.failed.count

@@ -43,3 +43,17 @@ Uzak oturumda (0038, Tailscale aktarma sunucusu) RTT 230–320 ms ölçüldü. v
 - **Karar:** bu sürelerin hepsi ölçülen RTT'den türetilir (taban değerler bugünkü sabitler; LAN'da davranış aynı kalır), makul bir üst sınırla.
 - **Kapsam:** yalnız istemci çizimi; protokol, host ve girdi yolu değişmez.
 - **Başarı ölçütü:** RTT ~250 ms'de `pred_err` < `hold_err` (birim testinde benzetimle; cihazda `cursor_stats`).
+
+## Ek (2026-10-12, v3, T-344/T-345): host hangi göreli hareketi işlediğini bildirir
+
+**Ölçüm:** T-343'ten sonra da sıçramalar sürdü, hem ev Wi-Fi'ında (gecikme sıçraması anında `pred_err_pt_p95` 40) hem hotspot'ta (RTT 41/96 ms, `pred_err_pt_p95` 35, `hold_err_pt_p95` 26).
+
+**Kök neden:** tahmin, bir deltanın host durumunda olup olmadığına zamanla karar veriyor (`gönderim + tek yön ≤ örnekleme anı`, tek yön = en iyi RTT/2). Hat o an yavaşsa delta host'a daha varmadan "durumun içinde" sayılır ve tahminden düşer. İmleç o delta kadar geri sıçrar, sonraki durumla ileri atlar. Hiçbir sabit ya da RTT türevi bunu tam çözmez: hata titreşimin kendisidir.
+
+**Karar (kullanıcı "başla", 2026-10-12):**
+- `CURSOR_STATE` isteğe bağlı sondaki `rel_ack_count` grubunu alır: bu kontrol bağlantısında host'un bu durumu örneklemeden önce işlediği `POINTER_REL` mesajlarının sayısı (PROTOCOL §4). Zaman damgası değil sayı, çünkü düğme ve hareket mesajları aynı `time_us`'u taşıyabilir (Codex `--high`); TCP sırası sayıyı tam önek yapar.
+- İstemci gönderdiği `POINTER_REL`'leri bağlantı başına 1'den numaralar; numara ≤ `rel_ack_count` olan delta durumun içindedir. Saat farkı ve RTT tahmini bu karardan çıkar.
+- Grup yoksa (eski host) bugünkü zaman tahmini sürer. HELLO biti gerekmez: eski istemci fazla baytı yok sayar.
+- **Host'un doğruluk koşulu:** onayladığı her olayın konumu, aynı durumdaki `x`/`y`'de olmalıdır. Konumu okuma ile enjeksiyon arasındaki sıra host kartında doğrulanır.
+
+**Değişmeyenler:** girdi yolu ve enjeksiyon aynı; kalem ve `POINTER_ABS` askıya alma kuralları aynı; T-343'ün yerleşme ve tavan süreleri yalnız onay gelmeyen deltalar için yedek olarak kalır.

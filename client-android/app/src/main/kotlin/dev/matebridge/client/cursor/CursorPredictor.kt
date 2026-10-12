@@ -51,7 +51,11 @@ class CursorPredictor(
     private val stats: CursorStats? = null,
 ) {
     /** The newest accepted state: normalized position, visibility and the host sample time as client-clock microseconds. */
-    class Anchor(val seq: Long, val xNorm: Int, val yNorm: Int, val visible: Boolean, val sampleUs: Long)
+    class Anchor(
+        val seq: Long, val xNorm: Int, val yNorm: Int, val visible: Boolean, val sampleUs: Long,
+        /** 0036 v3: the host had processed this many `POINTER_REL` of the connection; null = old host (time estimate). */
+        val ackCount: Long? = null,
+    )
 
     /** A predicted position (normalized like `CURSOR_STATE`) and whether more frames are needed to finish moving. */
     class Result {
@@ -66,11 +70,18 @@ class CursorPredictor(
 
     // Delta ring (oldest at [head]); parallel arrays, no allocation per event.
     private val sendUs = LongArray(CAP)
+    private val relNo = LongArray(CAP) // 0036 v3: the connection's POINTER_REL number of each delta
     private val dxPt = FloatArray(CAP)
     private val dyPt = FloatArray(CAP)
     private var head = 0
     private var count = 0
     private var lastSendUs = 0L
+
+    /**
+     * 0036 v3: `POINTER_REL` messages handed to the connection of [armedGen] so far, button-only ones included (the host
+     * counts those too). Survives [reset] (layer toggles, suspensions), restarts at [beginSession] and [endSession].
+     */
+    private var relSent = 0L
 
     private var anchor: Anchor? = null
 
@@ -85,6 +96,8 @@ class CursorPredictor(
     private var corrX = 0f
     private var corrY = 0f
     private var lastAdvanceUs = 0L
+    private var lastPending = 0
+    private var lastPendingAnchor: Anchor? = null
 
     private val tmp = FloatArray(2)
     private val tmp2 = FloatArray(2)
@@ -125,18 +138,22 @@ class CursorPredictor(
         corrX = 0f
         corrY = 0f
         lastAdvanceUs = 0L
+        lastPending = 0
+        lastPendingAnchor = null
         suspendUntilUs = Long.MIN_VALUE
     }
 
     /** A control connection of generation [gen] starts (or takes over): only its input is observed from now on. */
     fun beginSession(gen: Int): Unit = synchronized(lock) {
         armedGen = gen
+        relSent = 0L
         reset()
     }
 
     /** The control connection ended: nothing is observed until the next [beginSession]. */
     fun endSession(): Unit = synchronized(lock) {
         armedGen = -1
+        relSent = 0L
         reset()
     }
 
@@ -151,8 +168,10 @@ class CursorPredictor(
     fun onSent(msg: Message, nowUs: Long, gen: Int): Boolean = synchronized(lock) {
         if (gen != armedGen) return false
         when (msg) {
-            is PointerRel ->
-                (msg.dx != 0f || msg.dy != 0f) && active && nowUs >= suspendUntilUs && !tooSlow() && add(msg.dx, msg.dy, nowUs)
+            is PointerRel -> {
+                val no = ++relSent // numbered in hand-over order, whatever the prediction does with it
+                (msg.dx != 0f || msg.dy != 0f) && active && nowUs >= suspendUntilUs && !tooSlow() && add(msg.dx, msg.dy, nowUs, no)
+            }
             is PointerAbs -> suspendPrediction(nowUs)
             is Pen -> suspendPrediction(nowUs)
             else -> false
@@ -170,7 +189,7 @@ class CursorPredictor(
         return was
     }
 
-    private fun add(dx: Float, dy: Float, nowUs: Long): Boolean {
+    private fun add(dx: Float, dy: Float, nowUs: Long, no: Long): Boolean {
         if (anchor == null) return false // no state yet: nothing is drawn, nothing to predict from
         val t = maxOf(nowUs, lastSendUs)
         lastSendUs = t
@@ -178,14 +197,20 @@ class CursorPredictor(
         if (count == CAP) { head = (head + 1) % CAP; count-- }
         val i = (head + count) % CAP
         sendUs[i] = t
+        relNo[i] = no
         dxPt[i] = dx
         dyPt[i] = dy
         count++
         return true
     }
 
+    /**
+     * Drops deltas sent before [us]. With an ack anchor only deltas the ack covers go: an unacknowledged one is still in flight
+     * (a dropped or ignored message is acked too), so dropping it would bring the snap-back; the ring's cap is the hard bound.
+     */
     private fun pruneBefore(us: Long) {
-        while (count > 0 && sendUs[head] < us) { head = (head + 1) % CAP; count-- }
+        val ack = anchor?.ackCount
+        while (count > 0 && sendUs[head] < us && (ack == null || relNo[head] <= ack)) { head = (head + 1) % CAP; count-- }
     }
 
     /**
@@ -199,16 +224,19 @@ class CursorPredictor(
         }
         val ow = oneWay()
         val sample = sampleOf(s.hostTimeUs, rxUs, ow)
+        val ack = s.relAckCount?.let { if (it < 0) Long.MAX_VALUE else it } // u64 beyond 2^63: everything is in
         val prev = anchor
         if (stats != null && prev != null && prev.visible && s.visible && widthPt > 0 && heightPt > 0 && rxUs >= suspendUntilUs) {
-            positionAt(prev, sample - ow, ow, tmp)
+            // With the ack the forecast is exact: the previous state plus the deltas the new state newly contains.
+            if (ack != null && prev.ackCount != null) positionAcked(prev, ack, tmp) else positionAt(prev, sample - ow, ow, tmp)
             val nx = s.x / NORM * widthPt
             val ny = s.y / NORM * heightPt
             val err = hypot(tmp[0] - nx, tmp[1] - ny)
             val hold = hypot(prev.xNorm / NORM * widthPt - nx, prev.yNorm / NORM * heightPt - ny)
             if (err > 0f || hold > 0f) stats.onPred(err, hold)
         }
-        anchor = Anchor(s.seq, s.x, s.y, s.visible, sample)
+        if (ack != null) stats?.onAck()
+        anchor = Anchor(s.seq, s.x, s.y, s.visible, sample, ack)
         pruneBefore(rxUs - keepUs(ow))
     }
 
@@ -228,6 +256,7 @@ class CursorPredictor(
             return false
         }
         val ow = oneWay()
+        pruneBefore(nowUs - keepUs(ow))
         val pending = positionAt(a, nowUs, ow, tmp)
         if (lastAdvanceUs != 0L && (corrX != 0f || corrY != 0f)) {
             val dt = (nowUs - lastAdvanceUs).coerceIn(0L, 100_000L)
@@ -253,7 +282,12 @@ class CursorPredictor(
         val py = (tmp[1] + corrY).coerceIn(0f, heightPt.toFloat())
         out.xNorm = (px / widthPt * NORM).roundToInt().coerceIn(0, 65535)
         out.yNorm = (py / heightPt * NORM).roundToInt().coerceIn(0, 65535)
-        out.animating = corrX != 0f || corrY != 0f || pending > 0
+        // Without an ack, pending deltas settle by time, so frames are needed until then. With one, a pending delta is simply
+        // waiting for the host: frames are needed only while the drawn position still changes (a new delta), not during a stall.
+        val moving = if (a.ackCount != null) pending != lastPending || a !== lastPendingAnchor else pending > 0
+        lastPending = pending
+        lastPendingAnchor = a
+        out.animating = corrX != 0f || corrY != 0f || moving
         true
     }
 
@@ -273,8 +307,11 @@ class CursorPredictor(
             val i = (head + n) % CAP
             val s = sendUs[i]
             if (s > evalUs) break
-            if (evalUs - s > settle) continue
-            if (s + ow <= a.sampleUs) continue // the state already contains it
+            val ack = a.ackCount
+            // With an ack the host's prefix is exact, so a delta waiting for it is simply in flight (a spike must not make the
+            // cursor jump back): only the ring's own age limit applies. Without one, the time estimate settles it.
+            if (ack == null && evalUs - s > settle) continue
+            if (if (ack != null) relNo[i] <= ack else s + ow <= a.sampleUs) continue // the state already contains it
             x = (x + dxPt[i]).coerceIn(0f, w)
             y = (y + dyPt[i]).coerceIn(0f, h)
             applied++
@@ -282,6 +319,23 @@ class CursorPredictor(
         out[0] = x
         out[1] = y
         return applied
+    }
+
+    /** Measuring only: [a] plus the deltas numbered after its own ack up to [upTo] (what the next state newly contains). */
+    private fun positionAcked(a: Anchor, upTo: Long, out: FloatArray) {
+        val w = widthPt.toFloat()
+        val h = heightPt.toFloat()
+        var x = a.xNorm / NORM * w
+        var y = a.yNorm / NORM * h
+        val from = a.ackCount ?: 0L
+        for (n in 0 until count) {
+            val i = (head + n) % CAP
+            if (relNo[i] <= from || relNo[i] > upTo) continue
+            x = (x + dxPt[i]).coerceIn(0f, w)
+            y = (y + dyPt[i]).coerceIn(0f, h)
+        }
+        out[0] = x
+        out[1] = y
     }
 
     private fun oneWay(): Long = (oneWayUs() ?: DEFAULT_ONE_WAY_US).coerceIn(0L, MAX_ONE_WAY_US)
