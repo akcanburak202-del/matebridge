@@ -16,6 +16,14 @@ private func decodeOne(_ bytes: [UInt8]) throws -> Message? {
     return try d.nextMessage()
 }
 
+extension RelAckBoard {
+    /// What the input side does for one POINTER_REL: note what was posted (if anything), then the message.
+    fileprivate func rel(_ posted: DisplayPoint?, at nowUs: UInt64) {
+        if let posted { notePosted(posted, nowUs: nowUs) }
+        notePointerRel()
+    }
+}
+
 private func pt(_ x: Double, _ y: Double = 0) -> DisplayPoint { DisplayPoint(x: x, y: y) }
 
 @Suite struct RelAckCodecTests {
@@ -61,7 +69,7 @@ private func pt(_ x: Double, _ y: Double = 0) -> DisplayPoint { DisplayPoint(x: 
         let board = RelAckBoard()
         var last: UInt64 = 0
         for i in 0..<50 {
-            board.notePointerRel(target: pt(Double(i)), nowUs: UInt64(i))
+            board.rel(pt(Double(i)), at: UInt64(i))
             let c = board.read(nowUs: UInt64(i)).count
             #expect(c == last + 1)
             last = c
@@ -72,31 +80,31 @@ private func pt(_ x: Double, _ y: Double = 0) -> DisplayPoint { DisplayPoint(x: 
 
     @Test func CURACK_droppedMessageIsAcknowledgedWithoutATarget() {
         let board = RelAckBoard()
-        board.notePointerRel(target: nil, nowUs: 10)  // dropped as stale (0025) or by a gate: nothing was posted
+        board.rel(nil, at: 10)  // dropped as stale (0025) or by a gate: nothing was posted
         #expect(board.read(nowUs: 11) == RelAckBoard.Reading(count: 1, target: nil))
     }
 
     @Test func CURACK_aMessageStillQueuedIsNotCounted() {
         let board = RelAckBoard()
-        board.notePointerRel(target: pt(1), nowUs: 1)
-        board.notePointerRel(target: pt(2), nowUs: 2)
+        board.rel(pt(1), at: 1)
+        board.rel(pt(2), at: 2)
         // message 3 sits in the queue: no call yet
         #expect(board.read(nowUs: 3).count == 2)
     }
 
     @Test func CURACK_targetExpiresWithTheLagWindow() {
         let board = RelAckBoard(lagWindowUs: 100_000)
-        board.notePointerRel(target: pt(5), nowUs: 1_000)
+        board.rel(pt(5), at: 1_000)
         #expect(board.read(nowUs: 101_000).target == pt(5))
         #expect(board.read(nowUs: 101_001).target == nil)
         #expect(board.read(nowUs: 101_001).count == 1)  // the count never expires
     }
 
-    @Test func CURACK_anotherInjectionClearsTheTarget() {
+    @Test func CURACK_aLaterPostOverwritesTheLocationNothingClearsIt() {
         let board = RelAckBoard()
-        board.notePointerRel(target: pt(5), nowUs: 1)
-        board.noteOtherInjection()
-        #expect(board.read(nowUs: 2) == RelAckBoard.Reading(count: 1, target: nil))
+        board.rel(pt(5), at: 1)
+        board.notePosted(pt(9), nowUs: 2)  // e.g. a pen point or an absolute move
+        #expect(board.read(nowUs: 3) == RelAckBoard.Reading(count: 1, target: pt(9)))
     }
 
     @Test func CURACK_positionPrefersTheTargetOnlyWhileLiveLags() {
@@ -109,8 +117,8 @@ private func pt(_ x: Double, _ y: Double = 0) -> DisplayPoint { DisplayPoint(x: 
     /// Codex P1: a no-op message after a move that WindowServer has not shown yet must not wipe the pending target.
     @Test func CURACK_noOpAfterAMoveKeepsThePendingTarget() {
         let board = RelAckBoard()
-        board.notePointerRel(target: pt(110), nowUs: 1_000)  // move #1 posted at 110, live still shows 100
-        board.notePointerRel(target: nil, nowUs: 2_000)  // #2 posts nothing
+        board.rel(pt(110), at: 1_000)  // move #1 posted at 110, live still shows 100
+        board.rel(nil, at: 2_000)  // #2 posts nothing
         let r = board.read(nowUs: 3_000)
         #expect(r.count == 2)
         #expect(RelAckBoard.position(live: pt(100), reading: r) == pt(110))
@@ -131,7 +139,7 @@ private func pt(_ x: Double, _ y: Double = 0) -> DisplayPoint { DisplayPoint(x: 
                 let target = noOp ? posted[step - 1] : pt(Double(step) * 3)
                 if !noOp { pending.append((step + lag, target)) }
                 posted.append(target)
-                board.notePointerRel(target: noOp ? nil : target, nowUs: UInt64(step))
+                board.rel(noOp ? nil : target, at: UInt64(step))
                 while let first = pending.first, first.applyAt <= step { live = first.point; pending.removeFirst() }
                 let (reading, position) = try! #require(board.coherentPosition(nowUs: { UInt64(step) }, locate: { live }))
                 #expect(position == posted[Int(reading.count)], "lag \(lag) step \(step)")
@@ -143,13 +151,13 @@ private func pt(_ x: Double, _ y: Double = 0) -> DisplayPoint { DisplayPoint(x: 
     /// (count N, position of N+1).
     @Test func CURACK_moveBetweenTheReadsRetriesToACoherentPair() {
         let board = RelAckBoard()
-        board.notePointerRel(target: pt(10), nowUs: 1)
+        board.rel(pt(10), at: 1)
         var live = pt(10)
         var calls = 0
         let (reading, position) = try! #require(board.coherentPosition(nowUs: { 2 }, locate: {
             calls += 1
             if calls == 1 {  // the input queue handles move 2 and WindowServer applies it, mid-sample
-                board.notePointerRel(target: pt(20), nowUs: 2)
+                board.rel(pt(20), at: 2)
                 live = pt(20)
             }
             return live
@@ -168,16 +176,16 @@ private func pt(_ x: Double, _ y: Double = 0) -> DisplayPoint { DisplayPoint(x: 
             calls += 1
             let before = pt(Double(n) * 10)
             n += 1
-            board.notePointerRel(target: pt(Double(n) * 10), nowUs: UInt64(n))
+            board.rel(pt(Double(n) * 10), at: UInt64(n))
             return before
         })
         #expect(result == nil)
         #expect(calls == 4)  // first try + 3 retries
     }
 
-    /// Codex P2 (a6f35eda): last try reads 130, move #14 (to 140) is posted, then a zero-scale pinch clears the target
-    /// without moving the cursor. Count 14 with position 130 must never come out.
-    @Test func CURACK_moveThenTargetClearingInjectionOnTheLastTryDefers() {
+    /// Codex P2 (a6f35eda): last try reads 130, move #14 (to 140) is posted, the board changes during the try.
+    /// Count 14 with position 130 must never come out.
+    @Test func CURACK_moveOnTheLastTryDefers() {
         let board = RelAckBoard()
         var tries = 0
         var count = 0
@@ -185,26 +193,24 @@ private func pt(_ x: Double, _ y: Double = 0) -> DisplayPoint { DisplayPoint(x: 
             tries += 1
             if tries < 4 {  // earlier tries are disturbed by other moves so the retries run out
                 count += 1
-                board.notePointerRel(target: pt(Double(count) * 10), nowUs: 1)
+                board.rel(pt(Double(count) * 10), at: 1)
                 return pt(Double(count - 1) * 10)
             }
             count += 1
-            board.notePointerRel(target: pt(140), nowUs: 1)  // move #14 posted, WindowServer not there yet
-            board.noteOtherInjection()  // zero-scale PINCH: clears the target, moves nothing
+            board.rel(pt(140), at: 1)  // move #14 posted, WindowServer not there yet
             return pt(130)
         })
         #expect(result == nil)
     }
 
-    /// A target-clearing injection that lands between the reads of a try also forces a retry (no count paired with a
-    /// target that vanished mid-sample).
-    @Test func CURACK_otherInjectionBetweenTheReadsRetries() {
+    /// A post that lands between the reads of a try (any source) forces a retry.
+    @Test func CURACK_postBetweenTheReadsRetries() {
         let board = RelAckBoard()
-        board.notePointerRel(target: pt(10), nowUs: 1)
+        board.rel(pt(10), at: 1)
         var calls = 0
         let result = board.coherentPosition(nowUs: { 1 }, locate: {
             calls += 1
-            if calls == 1 { board.noteOtherInjection() }
+            if calls == 1 { board.notePosted(pt(10), nowUs: 1) }
             return pt(10)
         })
         #expect(calls == 2)
@@ -227,41 +233,52 @@ private func pt(_ x: Double, _ y: Double = 0) -> DisplayPoint { DisplayPoint(x: 
     }
 }
 
-@Suite struct RelAckNonMovingInjectionTests {
-    /// Codex P2 (dfccfbe3): rel move #1 to 140 (live still 130), a non-moving injection (pinch: the input side does not
-    /// call the board at all) lands during the first locate. The pair keeps the target: ack 1 with 140, never 130.
-    @Test func CURACK_nonMovingInjectionDuringTheSampleKeepsTheTarget() {
+@Suite struct RelAckLastPostedLocationTests {
+    /// Codex P2 (c3e9d19f): a held-button rel drag posts 140 (live still 130, ack 1); a later gated KEY DOWN yields a
+    /// release batch with a mouse-up at 140. The up is just another post at 140: the location stays 140.
+    @Test func CURACK_releaseBatchMouseUpKeepsTheLocation() {
         let board = RelAckBoard()
-        board.notePointerRel(target: pt(140), nowUs: 1)
+        board.rel(pt(140), at: 1_000)
+        board.notePosted(pt(140), nowUs: 2_000)  // the synthesized mouse-up
+        let result = board.coherentPosition(nowUs: { 3_000 }, locate: { pt(130) })
+        #expect(result?.reading.count == 1)
+        #expect(result?.position == pt(140))
+    }
+
+    /// PINCH, scroll, keys: they post no location, so nothing on the board changes (unchanged results).
+    @Test func CURACK_nonMovingInjectionsLeaveTheBoardAlone() {
+        let board = RelAckBoard()
+        board.rel(pt(140), at: 1)
+        let before = board.read(nowUs: 2)
         var calls = 0
         let result = board.coherentPosition(nowUs: { 2 }, locate: {
-            calls += 1
-            // a zero-scale PINCH is handled here: InputController posts no positioning event, so nothing is noted
+            calls += 1  // a zero-scale PINCH is handled here: InputController notes nothing
             return pt(130)
         })
         #expect(calls == 1)
         #expect(result?.reading.count == 1)
         #expect(result?.position == pt(140))
+        #expect(board.read(nowUs: 2) == before)
     }
 
-    /// The same, with the non-moving injection handled before the sample started.
-    @Test func CURACK_nonMovingInjectionBeforeTheSampleKeepsTheTarget() {
+    /// An absolute or pen post reports its own location (live still shows the old place).
+    @Test func CURACK_absoluteOrPenPostReportsItsOwnLocation() {
         let board = RelAckBoard()
-        board.notePointerRel(target: pt(140), nowUs: 1)
-        let generation = board.read(nowUs: 2)
-        // pinch / scroll / key / button-only: no board call
+        board.rel(pt(140), at: 1)
+        board.notePosted(pt(300), nowUs: 2)  // pen / POINTER_ABS
         let result = board.coherentPosition(nowUs: { 3 }, locate: { pt(130) })
-        #expect(result?.position == pt(140))
-        #expect(board.read(nowUs: 3) == generation)
+        #expect(result?.position == pt(300))
+        #expect(result?.reading.count == 1)
     }
 
-    /// A positioning injection (pen point, absolute pointer) still supersedes the target: the live position is the truth.
-    @Test func CURACK_positioningInjectionStillClearsTheTarget() {
-        let board = RelAckBoard()
-        board.notePointerRel(target: pt(140), nowUs: 1)
-        board.noteOtherInjection()
-        let result = board.coherentPosition(nowUs: { 2 }, locate: { pt(300) })
-        #expect(result?.position == pt(300))
-        #expect(result?.reading.target == nil)
+    /// A physical mouse moves the cursor with no post: within the lag window the last posted location still wins,
+    /// after 100 ms the live position is reported.
+    @Test func CURACK_liveMoveWithoutAPostWinsAfterTheLagWindow() {
+        let board = RelAckBoard(lagWindowUs: 100_000)
+        board.rel(pt(140), at: 1_000)
+        #expect(board.coherentPosition(nowUs: { 50_000 }, locate: { pt(500) })?.position == pt(140))
+        let late = board.coherentPosition(nowUs: { 101_001 }, locate: { pt(500) })
+        #expect(late?.position == pt(500))
+        #expect(late?.reading.count == 1)
     }
 }

@@ -55,10 +55,6 @@ public final class InputController: @unchecked Sendable {
     private let visibility: CursorVisibilityChecking
     /// T-344: `POINTER_REL` messages handled, for `CURSOR_STATE.rel_ack_count` (read by the cursor flow).
     private let relAck: RelAckBoard
-    /// Queue only: where the last pointer event the latest `flush` posted put the cursor (nil: none was posted).
-    private var lastPostedPointer: DisplayPoint?
-    /// Queue only: the latest `flush` posted an event that sets the cursor position (mouse or pen point), T-344.
-    private var postedPositioning = false
     private let logger = SessionLogger(component: "input")
     /// T-299 (queue-confined): set by the host-sleep participant before its release-all. While set, `gate` drops every
     /// opening event of any session. Cleared by the wake notification, or by the awake-time expiry
@@ -309,16 +305,10 @@ public final class InputController: @unchecked Sendable {
                 env.cursorHidden = sampleCursorHidden()  // T-272: and do not move a hidden one
             }
             pushActivity()  // the activity from BEFORE this message (T-163)
-            lastPostedPointer = nil
-            postedPositioning = false
             let postNs = flush(gate(pipeline.handle(message, now: now, environment: env), now: now), now: now)
             // T-344: handled (injected, or dropped by the input rules or a gate) and posted by now, so the count may
-            // cover it. The target is where the cursor was put; the cursor flow reads the count before the position.
-            if case .pointerRel = message {
-                relAck.notePointerRel(target: lastPostedPointer, nowUs: HostClock.nowUs())
-            } else if postedPositioning {  // only an injection that really placed the cursor supersedes the target
-                relAck.noteOtherInjection()
-            }
+            // cover it. Every posted location was noted by `flush`; the cursor flow reads the count before the position.
+            if case .pointerRel = message { relAck.notePointerRel() }
             ages.record(message, receivedUs: now)  // T-171: measured only, after the message was handled
             logInputAge(now: now)
             // Debug only, and only the numeric identity: never a character (docs/LOGGING.md).
@@ -590,20 +580,17 @@ public final class InputController: @unchecked Sendable {
         let postStart = DispatchTime.now().uptimeNanoseconds
         let result = post(events)
         let postNs = DispatchTime.now().uptimeNanoseconds &- postStart
+        // T-344: the last location of what was posted, whatever its source (move, pen point, synthesized button edge,
+        // release batch): that is where WindowServer is about to put the cursor.
+        var lastLocation: DisplayPoint?
         for event in events where !result.failed.contains(event) {
             switch event {
-            case .mouse(let mouse):
-                lastPostedPointer = mouse.position
-                postedPositioning = true
-            case .tabletPoint:
-                postedPositioning = true
+            case .mouse(let mouse): lastLocation = mouse.position
+            case .tabletPoint(let point): lastLocation = point.position
             default: break
             }
         }
-        // T-323: a posted press edge starts an inject-to-frame measurement (host clock, right after the post).
-        if events.contains(where: { $0.isPressEdge && !result.failed.contains($0) }) {
-            InjectToFrameProbe.shared.noteInjection()
-        }
+        if let lastLocation { relAck.notePosted(lastLocation, nowUs: HostClock.nowUs()) }
         eventsPosted += events.count - result.failed.count
         if !result.failed.isEmpty {
             pipeline.postFailed(result.failed, now: now, permitted: result.permitted)

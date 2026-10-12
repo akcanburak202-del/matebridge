@@ -13,10 +13,12 @@ import Foundation
 /// - the order matters: the count is read FIRST (a message handled after that read can only make the position newer,
 ///   which the client tolerates; the other order could claim a message the position does not contain yet).
 ///
-/// So the board also keeps the position the last relative move was posted at (the planner's post-clamp target). While
-/// that target is recent and the live reading is not at it yet, the target is the reported position
-/// (`position(live:reading:)`): count and position then describe the same moment by construction. Any other
-/// injection (pen, absolute pointer, ...) clears the target, so a stale one never overrides a later move.
+/// So the board also keeps the LAST POSTED LOCATION: every CGEvent the host posts that carries a cursor location (a
+/// relative or absolute move, a pen point, a synthesized button up or down, a release batch) is noted with its time and
+/// simply overwrites the previous one; nothing ever clears it. What the host posts is what WindowServer will apply, so
+/// the last posted location always includes everything that was acknowledged. While it is recent and the live reading
+/// is not at it yet, it is the reported position (`position(live:reading:)`): count and position then describe the same
+/// moment by construction. Once it is older than the lag window the live reading is the truth again (a physical mouse).
 public final class RelAckBoard: @unchecked Sendable {
     /// The shared board of the host process (`InputController` writes it, `CursorService` reads it).
     public static let shared = RelAckBoard()
@@ -24,8 +26,8 @@ public final class RelAckBoard: @unchecked Sendable {
     public struct Reading: Equatable, Sendable {
         /// `POINTER_REL` messages handled since the connection began (never goes back).
         public var count: UInt64
-        /// Where the last handled relative move left the cursor, while that is recent; nil when it moved nothing, was
-        /// superseded by another injection, or is older than the lag window.
+        /// The location of the last posted pointer-carrying event, while it is younger than the lag window; nil when
+        /// nothing was posted yet or it is older.
         public var target: DisplayPoint?
         public init(count: UInt64, target: DisplayPoint?) {
             self.count = count
@@ -57,27 +59,21 @@ public final class RelAckBoard: @unchecked Sendable {
         lock.unlock()
     }
 
-    /// One `POINTER_REL` has been handled: call it AFTER the events it produced were posted (or after it was dropped).
-    /// `target` is where the last posted pointer event of this message put the cursor, nil if it posted none.
-    public func notePointerRel(target: DisplayPoint?, nowUs: UInt64) {
+    /// One `POINTER_REL` has been handled: call it AFTER the events it produced were posted (and noted with
+    /// `notePosted`), or after it was dropped.
+    public func notePointerRel() {
         lock.lock()
         count &+= 1
         generation &+= 1
-        // A message that posted nothing (no-op, dropped) leaves the pending target, and its age, alone: wiping it would
-        // let a live reading that still lags an earlier move be reported with the newer count.
-        if let target {
-            self.target = target
-            targetAtUs = nowUs
-        }
         lock.unlock()
     }
 
-    /// An injection that SET the cursor position (a pen point, an absolute pointer move) was posted: an earlier relative
-    /// target is not the truth any more. Injections that place nothing (pinch, scroll, keys) must not call this: they
-    /// leave the target, its age and the generation alone.
-    public func noteOtherInjection() {
+    /// A CGEvent that carries a cursor location was posted at `location`. Whatever its source; it overwrites the
+    /// previous one.
+    public func notePosted(_ location: DisplayPoint, nowUs: UInt64) {
         lock.lock()
-        target = nil
+        target = location
+        targetAtUs = nowUs
         generation &+= 1
         lock.unlock()
     }
