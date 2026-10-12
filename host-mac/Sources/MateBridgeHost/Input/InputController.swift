@@ -305,10 +305,12 @@ public final class InputController: @unchecked Sendable {
                 env.cursorHidden = sampleCursorHidden()  // T-272: and do not move a hidden one
             }
             pushActivity()  // the activity from BEFORE this message (T-163)
+            // T-344: one write around the whole handling: the posts (which note their location) and, for a POINTER_REL
+            // (injected, or dropped by the input rules or a gate), the count. A sample never sees half of it.
+            relAck.beginWrite()
             let postNs = flush(gate(pipeline.handle(message, now: now, environment: env), now: now), now: now)
-            // T-344: handled (injected, or dropped by the input rules or a gate) and posted by now, so the count may
-            // cover it. Every posted location was noted by `flush`; the cursor flow reads the count before the position.
             if case .pointerRel = message { relAck.notePointerRel() }
+            relAck.endWrite()
             ages.record(message, receivedUs: now)  // T-171: measured only, after the message was handled
             logInputAge(now: now)
             // Debug only, and only the numeric identity: never a character (docs/LOGGING.md).
@@ -537,6 +539,9 @@ public final class InputController: @unchecked Sendable {
     /// posted without it. Returns what could not be posted and whether the reason was anything but the permission.
     private func post(_ events: [MacEvent]) -> (failed: [MacEvent], permitted: Bool) {
         guard !events.isEmpty else { return ([], true) }
+        // T-344: the board is mid-update from before the first CGEvent goes out until the location is noted.
+        relAck.beginWrite()
+        defer { relAck.endWrite() }
         if events.contains(where: \.isClosing), !permission.isTrusted() {
             trustedCache = (false, HostClock.nowUs())
             return (events, false)
@@ -553,6 +558,11 @@ public final class InputController: @unchecked Sendable {
         heldLock.withLock {
             held = before
             held.postedBatch(events, failedCount: failed.count)
+        }
+        // T-344: where WindowServer is about to put the cursor, whatever the source (move, pen point, synthesized
+        // button edge, release batch).
+        if let location = PostSummary(events: events, failed: failed).lastLocation {
+            relAck.notePosted(location, nowUs: HostClock.nowUs())
         }
         return (failed, true)
     }
@@ -580,17 +590,10 @@ public final class InputController: @unchecked Sendable {
         let postStart = DispatchTime.now().uptimeNanoseconds
         let result = post(events)
         let postNs = DispatchTime.now().uptimeNanoseconds &- postStart
-        // T-344: the last location of what was posted, whatever its source (move, pen point, synthesized button edge,
-        // release batch): that is where WindowServer is about to put the cursor.
-        var lastLocation: DisplayPoint?
-        for event in events where !result.failed.contains(event) {
-            switch event {
-            case .mouse(let mouse): lastLocation = mouse.position
-            case .tabletPoint(let point): lastLocation = point.position
-            default: break
-            }
+        // T-323: a posted press edge starts an inject-to-frame measurement (host clock, right after the post).
+        if PostSummary(events: events, failed: result.failed).pressEdge {
+            InjectToFrameProbe.shared.noteInjection()
         }
-        if let lastLocation { relAck.notePosted(lastLocation, nowUs: HostClock.nowUs()) }
         eventsPosted += events.count - result.failed.count
         if !result.failed.isEmpty {
             pipeline.postFailed(result.failed, now: now, permitted: result.permitted)

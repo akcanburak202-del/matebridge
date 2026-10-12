@@ -44,8 +44,11 @@ public final class RelAckBoard: @unchecked Sendable {
     private var count: UInt64 = 0
     private var target: DisplayPoint?
     private var targetAtUs: UInt64 = 0
-    /// Bumped by every change of the board (a handled message, another injection, a reset): a sample is coherent only
-    /// when it did not move between its reads.
+    /// Seqlock state. `writers` is above 0 while the input queue is inside `beginWrite`/`endWrite` (a message being
+    /// handled, or any post): the board is mid-update then, and a sample must not use it. `generation` is bumped when a
+    /// write ends and on `reset`: a sample is coherent only when it saw no write in progress and no generation change
+    /// across its reads.
+    private var writers = 0
     private var generation: UInt64 = 0
 
     public init(lagWindowUs: UInt64 = InjectionPlanner.defaultLagWindowUs) { self.lagWindowUs = lagWindowUs }
@@ -59,22 +62,36 @@ public final class RelAckBoard: @unchecked Sendable {
         lock.unlock()
     }
 
-    /// One `POINTER_REL` has been handled: call it AFTER the events it produced were posted (and noted with
-    /// `notePosted`), or after it was dropped.
+    /// The input queue starts handling something that may post events: call it BEFORE any CGEvent is posted. Nests
+    /// (the message handler wraps the posts inside it). Every `beginWrite` needs its `endWrite`.
+    public func beginWrite() {
+        lock.lock()
+        writers += 1
+        lock.unlock()
+    }
+
+    /// The handling ended: count, location and generation are final together.
+    public func endWrite() {
+        lock.lock()
+        if writers > 0 { writers -= 1 }
+        if writers == 0 { generation &+= 1 }
+        lock.unlock()
+    }
+
+    /// One `POINTER_REL` has been handled (injected, or dropped by the input rules or a gate): inside a write, after
+    /// its events were posted and their location noted.
     public func notePointerRel() {
         lock.lock()
         count &+= 1
-        generation &+= 1
         lock.unlock()
     }
 
     /// A CGEvent that carries a cursor location was posted at `location`. Whatever its source; it overwrites the
-    /// previous one.
+    /// previous one. Inside a write.
     public func notePosted(_ location: DisplayPoint, nowUs: UInt64) {
         lock.lock()
         target = location
         targetAtUs = nowUs
-        generation &+= 1
         lock.unlock()
     }
 
@@ -87,29 +104,29 @@ public final class RelAckBoard: @unchecked Sendable {
     }
 
     /// One coherent (count, position) pair, seqlock style: read the board, read the live position, read the board again.
-    /// If anything was handled in between (a `POINTER_REL`, another injection, a reset) the pair could show a newer
-    /// position under an older count (the client would count that move twice) or a target that was just cleared, so it
+    /// A write in progress at either read (the input queue is posting or counting), or a generation change between them,
+    /// means the pair could show a newer position under an older count (the client would count that move twice), so it
     /// is retried, at most `retries` times. When the retries run out there is no usable pair and the result is nil: the
     /// caller skips this sample and the next poll tries again. A count is never emitted with a position that might not
     /// include it.
     public func coherentPosition(retries: Int = 3, nowUs: () -> UInt64,
                                  locate: () -> DisplayPoint?) -> (reading: Reading, position: DisplayPoint?)? {
         for _ in 0...retries {
-            let (before, generationBefore) = stamped(nowUs: nowUs())
+            let (before, busyBefore, generationBefore) = stamped(nowUs: nowUs())
             let live = locate()
-            let (_, generationAfter) = stamped(nowUs: nowUs())
-            if generationAfter == generationBefore {
+            let (_, busyAfter, generationAfter) = stamped(nowUs: nowUs())
+            if !busyBefore, !busyAfter, generationAfter == generationBefore {
                 return (before, live.map { Self.position(live: $0, reading: before) })
             }
         }
         return nil
     }
 
-    private func stamped(nowUs: UInt64) -> (Reading, UInt64) {
+    private func stamped(nowUs: UInt64) -> (Reading, Bool, UInt64) {
         lock.lock()
         defer { lock.unlock() }
         let recent = target != nil && nowUs >= targetAtUs && nowUs - targetAtUs <= lagWindowUs
-        return (Reading(count: count, target: recent ? target : nil), generation)
+        return (Reading(count: count, target: recent ? target : nil), writers > 0, generation)
     }
 
     /// The position to report together with `reading.count`: the live one when it already shows the last relative
@@ -117,5 +134,28 @@ public final class RelAckBoard: @unchecked Sendable {
     public static func position(live: DisplayPoint, reading: Reading) -> DisplayPoint {
         guard let target = reading.target, !near(target, live) else { return live }
         return target
+    }
+}
+
+/// What a posted batch means for the host's bookkeeping (T-323 inject-to-frame, T-344 rel-ack): pure, so it is tested.
+public struct PostSummary: Equatable, Sendable {
+    /// A press edge (key down, mouse down, pen contact) was among the events that actually went out.
+    public var pressEdge: Bool
+    /// Where the last posted event that carries a cursor location put the cursor.
+    public var lastLocation: DisplayPoint?
+
+    public init(events: [MacEvent], failed: [MacEvent]) {
+        var press = false
+        var location: DisplayPoint?
+        for event in events where !failed.contains(event) {
+            if event.isPressEdge { press = true }
+            switch event {
+            case .mouse(let mouse): location = mouse.position
+            case .tabletPoint(let point): location = point.position
+            default: break
+            }
+        }
+        pressEdge = press
+        lastLocation = location
     }
 }

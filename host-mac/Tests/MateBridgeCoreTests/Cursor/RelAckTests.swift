@@ -19,8 +19,17 @@ private func decodeOne(_ bytes: [UInt8]) throws -> Message? {
 extension RelAckBoard {
     /// What the input side does for one POINTER_REL: note what was posted (if anything), then the message.
     fileprivate func rel(_ posted: DisplayPoint?, at nowUs: UInt64) {
+        beginWrite()
         if let posted { notePosted(posted, nowUs: nowUs) }
         notePointerRel()
+        endWrite()
+    }
+
+    /// A post that is not a POINTER_REL (pen, absolute pointer, release batch).
+    fileprivate func post(_ location: DisplayPoint, at nowUs: UInt64) {
+        beginWrite()
+        notePosted(location, nowUs: nowUs)
+        endWrite()
     }
 }
 
@@ -103,7 +112,7 @@ private func pt(_ x: Double, _ y: Double = 0) -> DisplayPoint { DisplayPoint(x: 
     @Test func CURACK_aLaterPostOverwritesTheLocationNothingClearsIt() {
         let board = RelAckBoard()
         board.rel(pt(5), at: 1)
-        board.notePosted(pt(9), nowUs: 2)  // e.g. a pen point or an absolute move
+        board.post(pt(9), at: 2)  // e.g. a pen point or an absolute move
         #expect(board.read(nowUs: 3) == RelAckBoard.Reading(count: 1, target: pt(9)))
     }
 
@@ -210,7 +219,7 @@ private func pt(_ x: Double, _ y: Double = 0) -> DisplayPoint { DisplayPoint(x: 
         var calls = 0
         let result = board.coherentPosition(nowUs: { 1 }, locate: {
             calls += 1
-            if calls == 1 { board.notePosted(pt(10), nowUs: 1) }
+            if calls == 1 { board.post(pt(10), at: 1) }
             return pt(10)
         })
         #expect(calls == 2)
@@ -239,7 +248,7 @@ private func pt(_ x: Double, _ y: Double = 0) -> DisplayPoint { DisplayPoint(x: 
     @Test func CURACK_releaseBatchMouseUpKeepsTheLocation() {
         let board = RelAckBoard()
         board.rel(pt(140), at: 1_000)
-        board.notePosted(pt(140), nowUs: 2_000)  // the synthesized mouse-up
+        board.post(pt(140), at: 2_000)  // the synthesized mouse-up
         let result = board.coherentPosition(nowUs: { 3_000 }, locate: { pt(130) })
         #expect(result?.reading.count == 1)
         #expect(result?.position == pt(140))
@@ -265,7 +274,7 @@ private func pt(_ x: Double, _ y: Double = 0) -> DisplayPoint { DisplayPoint(x: 
     @Test func CURACK_absoluteOrPenPostReportsItsOwnLocation() {
         let board = RelAckBoard()
         board.rel(pt(140), at: 1)
-        board.notePosted(pt(300), nowUs: 2)  // pen / POINTER_ABS
+        board.post(pt(300), at: 2)  // pen / POINTER_ABS
         let result = board.coherentPosition(nowUs: { 3 }, locate: { pt(130) })
         #expect(result?.position == pt(300))
         #expect(result?.reading.count == 1)
@@ -280,5 +289,108 @@ private func pt(_ x: Double, _ y: Double = 0) -> DisplayPoint { DisplayPoint(x: 
         let late = board.coherentPosition(nowUs: { 101_001 }, locate: { pt(500) })
         #expect(late?.position == pt(500))
         #expect(late?.reading.count == 1)
+    }
+}
+
+@Suite struct RelAckSeqlockTests {
+    /// Codex P2a: a sample whose live read happens inside a write (the input queue is posting move #2) never produces a
+    /// pair, however many tries it gets while the write stays open.
+    @Test func CURACK_sampleInsideAWriteDefers() {
+        let board = RelAckBoard()
+        board.rel(pt(110), at: 1)
+        board.beginWrite()  // message #2 starts: nothing is posted or counted yet
+        let result = board.coherentPosition(nowUs: { 2 }, locate: { pt(120) })
+        #expect(result == nil)
+        board.notePosted(pt(120), nowUs: 2)
+        board.notePointerRel()
+        #expect(board.coherentPosition(nowUs: { 2 }, locate: { pt(120) }) == nil)  // still open until endWrite
+        board.endWrite()
+        let done = board.coherentPosition(nowUs: { 2 }, locate: { pt(120) })
+        #expect(done?.reading.count == 2)
+        #expect(done?.position == pt(120))
+    }
+
+    /// The exact interleaving: from (ack 1, x 110) move #2 posts 120. (ack 1, x 120) must be impossible whatever the
+    /// moment of the sample, including WindowServer applying the post before the board is updated.
+    @Test func CURACK_ackOneWithMoveTwoPositionCannotBeProduced() {
+        // Sample start points relative to the write's steps; the live position is 120 from step 2 on.
+        for startStep in 0...4 {
+            let board = RelAckBoard()
+            board.rel(pt(110), at: 1)
+            var step = 0
+            func advance() {
+                step += 1
+                switch step {
+                case 1: board.beginWrite()
+                case 2: break  // CGEvents posted; WindowServer applies at once (live = 120)
+                case 3: board.notePosted(pt(120), nowUs: 2)
+                case 4: board.notePointerRel()
+                case 5: board.endWrite()
+                default: break
+                }
+            }
+            for _ in 0..<startStep { advance() }
+            let result = board.coherentPosition(nowUs: { 2 }, locate: {
+                advance()  // the write proceeds one step during the live read
+                return step >= 2 ? pt(120) : pt(110)
+            })
+            if let result {
+                let ok = (result.reading.count == 1 && result.position == pt(110))
+                    || (result.reading.count == 2 && result.position == pt(120))
+                #expect(ok, "start \(startStep): ack \(result.reading.count) x \(result.position?.x ?? -1)")
+            }
+        }
+    }
+
+    /// A live location that moves during a write is never paired with the old count.
+    @Test func CURACK_liveMovingDuringAWriteIsNotPairedWithTheOldCount() {
+        let board = RelAckBoard()
+        board.rel(pt(110), at: 1)
+        var calls = 0
+        let result = board.coherentPosition(nowUs: { 2 }, locate: {
+            calls += 1
+            if calls == 1 {
+                board.beginWrite()
+                board.notePosted(pt(120), nowUs: 2)
+                board.notePointerRel()
+                board.endWrite()
+            }
+            return pt(120)  // WindowServer already shows move #2
+        })
+        #expect(result?.reading.count == 2)  // the first try was thrown away; the retry sees count 2 with 120
+        #expect(result?.position == pt(120))
+    }
+
+    @Test func CURACK_writesNest() {
+        let board = RelAckBoard()
+        board.beginWrite()
+        board.beginWrite()
+        board.endWrite()
+        #expect(board.coherentPosition(nowUs: { 1 }, locate: { pt(1) }) == nil)  // the outer write is still open
+        board.endWrite()
+        #expect(board.coherentPosition(nowUs: { 1 }, locate: { pt(1) }) != nil)
+    }
+}
+
+@Suite struct PostSummaryTests {
+    private func mouse(_ kind: MacMouse.Kind, _ x: Double) -> MacEvent {
+        .mouse(MacMouse(kind: kind, button: .left, position: pt(x), deltaX: 0, deltaY: 0, clickState: 0))
+    }
+
+    /// Codex P2b: the T-323 inject-to-frame hook still arms from a posted press edge (key, mouse down, pen contact),
+    /// and never from a failed one or from moves.
+    @Test func CURACK_pressEdgeStillArmsInjectToFrame() {
+        let down = mouse(.down, 5)
+        #expect(PostSummary(events: [mouse(.moved, 1), down], failed: []).pressEdge)
+        #expect(!PostSummary(events: [mouse(.moved, 1), mouse(.up, 2)], failed: []).pressEdge)
+        #expect(!PostSummary(events: [down], failed: [down]).pressEdge)
+        #expect(PostSummary(events: [.key(MacKey(kind: .keyDown, keyCode: 4, flags: []))], failed: []).pressEdge)
+    }
+
+    @Test func CURACK_lastLocationIsTheLastPostedOne() {
+        let a = mouse(.moved, 1), b = mouse(.up, 7), c = mouse(.moved, 9)
+        #expect(PostSummary(events: [a, b], failed: []).lastLocation == pt(7))
+        #expect(PostSummary(events: [a, b, c], failed: [c]).lastLocation == pt(7))
+        #expect(PostSummary(events: [.capsLock(on: true)], failed: []).lastLocation == nil)
     }
 }
