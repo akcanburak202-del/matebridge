@@ -265,8 +265,7 @@ final class CursorService: @unchecked Sendable {
     private func takeSample() {
         guard planner.isTracking else { return }
         let start = DispatchTime.now().uptimeNanoseconds
-        let reading = ack.read(nowUs: HostClock.nowUs())  // the count first, then the position (RelAckBoard)
-        let snapshot = sampler.sample(ack: reading)
+        let snapshot = sampler.sample(board: ack)  // count and position as one coherent pair (RelAckBoard)
         let costUs = (DispatchTime.now().uptimeNanoseconds &- start) / 1_000
         stats.recordSample(costUs: costUs, ok: snapshot != nil)
         if let snapshot {

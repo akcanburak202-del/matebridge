@@ -58,8 +58,12 @@ public final class RelAckBoard: @unchecked Sendable {
     public func notePointerRel(target: DisplayPoint?, nowUs: UInt64) {
         lock.lock()
         count &+= 1
-        self.target = target
-        targetAtUs = nowUs
+        // A message that posted nothing (no-op, dropped) leaves the pending target, and its age, alone: wiping it would
+        // let a live reading that still lags an earlier move be reported with the newer count.
+        if let target {
+            self.target = target
+            targetAtUs = nowUs
+        }
         lock.unlock()
     }
 
@@ -76,6 +80,26 @@ public final class RelAckBoard: @unchecked Sendable {
         defer { lock.unlock() }
         let recent = target != nil && nowUs >= targetAtUs && nowUs - targetAtUs <= lagWindowUs
         return Reading(count: count, target: recent ? target : nil)
+    }
+
+    /// One coherent (count, position) pair, seqlock style: read the board, read the live position, read the count again.
+    /// If a message was handled in between, the pair could show a newer position under an older count (the client would
+    /// count that move twice), so it is retried, at most `retries` times. When the retries run out, the newest reading
+    /// is used: its target (kept across no-op messages) replaces a live position that has not caught up, so the pair
+    /// is consistent by construction.
+    public func coherentPosition(retries: Int = 3, nowUs: () -> UInt64,
+                                 locate: () -> DisplayPoint?) -> (reading: Reading, position: DisplayPoint?) {
+        var attempt = 0
+        while true {
+            let before = read(nowUs: nowUs())
+            let live = locate()
+            let after = read(nowUs: nowUs())
+            if after.count == before.count || attempt >= retries {
+                let used = after.count == before.count ? before : after
+                return (used, live.map { Self.position(live: $0, reading: used) })
+            }
+            attempt += 1
+        }
     }
 
     /// The position to report together with `reading.count`: the live one when it already shows the last relative
