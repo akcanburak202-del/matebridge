@@ -1930,3 +1930,4 @@ Host release, `main`. Tablette ölçüm için debug APK kullanıldı; sonunda da
 - Kullanıcı: "sanırım sıçrama olmadı".
 - Uzak (hotspot) denemesi henüz yapılmadı.
 - Ertelenen: evdeki imleç sıçraması için debug APK A/B gerekmedi; 0036 v3 aynı kök nedeni çözdü.
+- 2026-10-13 (hotspot): Tailscale doğrudan yol (ping 41 ms, MateBridge TCP srtt 74–80 ms), uzak profil 15 fps 1400×920. Kullanıcı: "imleç çok iyi, sıçrama yok". 0036 v3 uzakta da doğrulandı.
