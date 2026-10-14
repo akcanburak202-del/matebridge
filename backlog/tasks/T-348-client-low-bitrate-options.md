@@ -1,7 +1,7 @@
 ---
 id: T-348
 title: İstemci — panelde 5 ve 8 Mbps bit hızı seçenekleri
-status: review
+status: done
 phase: 7
 owner: android-client-dev
 depends_on: []
