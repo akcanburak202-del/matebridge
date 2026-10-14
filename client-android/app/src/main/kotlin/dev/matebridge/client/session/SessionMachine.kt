@@ -727,7 +727,6 @@ class SessionMachine(
     /** The FILES_INFO this session may announce: a READY of another session's server (or none) is OFF. */
     private fun effectiveFiles(): FilesInfo? {
         val f = files ?: return null
-        if (remote != null) return FilesInfo.OFF // decision 0038: no tablet files in a remote session
         return if (f.ready && filesScope.generation != controlGen) FilesInfo.OFF else f
     }
 

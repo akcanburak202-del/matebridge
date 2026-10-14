@@ -56,6 +56,9 @@ class FilesController(
         private set
 
     @Volatile private var videoKbps = 0
+
+    /** T-347: a remote session (decision 0038): the cap is fixed at [REMOTE_FILES_CAP_BYTES_PER_SEC]. */
+    @Volatile private var remote = false
     @Volatile private var wifiServer: DavServer? = null
 
     /** The last [sync] inputs, so [rescope] can start again with them (main thread). */
@@ -88,7 +91,7 @@ class FilesController(
             } else {
                 MbLog.i("scope", logFields, COMPONENT)
                 val secret = ByteArray(32).also { random.nextBytes(it) }
-                val config = if (events.wifi) FilesConfig.wifi(filesCapBytesPerSec(videoKbps), sc.readOnly) else FilesConfig(readOnly = sc.readOnly)
+                val config = if (events.wifi) FilesConfig.wifi(filesCapBytesPerSec(videoKbps, remote), sc.readOnly) else FilesConfig(readOnly = sc.readOnly)
                 val server = DavServer(dir, token, secret, config, object : DavServer.Hooks {
                     override fun threadStarted() = Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
                     override fun log(ev: String, fields: String) = MbLog.i(ev, fields, COMPONENT)
@@ -142,9 +145,20 @@ class FilesController(
      */
     fun onStreamBitrate(kbps: Int) {
         videoKbps = kbps
-        val cap = filesCapBytesPerSec(kbps)
+        applyCap()
+    }
+
+    /** T-347: the session kind changed; the running Wi-Fi server's cap follows at once. Any thread. */
+    fun setRemote(on: Boolean) {
+        if (remote == on) return
+        remote = on
+        applyCap()
+    }
+
+    private fun applyCap() {
+        val cap = filesCapBytesPerSec(videoKbps, remote)
         wifiServer?.setRate(cap)
-        MbLog.i("rate_cap", "cap_kbps=${cap * 8 / 1000} video_kbps=$kbps", COMPONENT)
+        MbLog.i("rate_cap", "cap_kbps=${cap * 8 / 1000} video_kbps=$videoKbps remote=${if (remote) 1 else 0}", COMPONENT)
     }
 
     /**
