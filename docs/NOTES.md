@@ -1939,3 +1939,13 @@ Host release, `main`. Tablette ölçüm için debug APK kullanıldı; sonunda da
 - Yakalama→decode p50 48 ms, p95 70 ms, en kötü 109 ms. Girdi yaşı (tablet→enjekte): imleç p50 33 / p95 41 ms, tuş p50 31 ms, `late_250ms=0`. `inject_to_frame` tipik 60–80 ms, en kötü 112 ms.
 - Video TCP yeniden iletim %2,1 (74/3518); tablette `drop=0 overflows=0`, decode 8,4 ms. `heartbeat_silence` 14 uyarı, kopma yok.
 - 2026-10-12'deki açık madde kapandı: `input_watchdog events=1` ~83 ms arayla = host'un tuş tekrarı (tek tuş basılı tutuldu, `key_n=1`); takılı tuş değil.
+
+## 2026-10-14 ~10:08 — Tailscale üzerinden normal profil (elle adres 100.77.121.48:47001)
+
+- Elle adres alanı portu şart koşuyor ("Geçersiz adres, IP:port"); uzak alan varsayılan 47001'i kendisi ekliyor.
+- Oturum: 2800×1840, 60 fps, 15 Mbps (kullanıcı), HEVC, ses açık (PCM). ~5 dk; masaüstü + YouTube (~86–210 s).
+- Veri: video 142 MB / 297 s (ort. 3,8 Mbps); YouTube sırasında 6–11 Mbps; ses PCM ~1,5 Mbps × 164 s ≈ 30 MB. Toplam ≈ 170 MB / 5 dk.
+- Yol kaldırmıyor: video TCP yeniden iletim **%11,4** (3809/33372), kontrol %0,44; srtt p50 53 / p95 73 ms (şişme yok → kuyruk değil kayıp). Uzak profilde (1 Mbps) aynı yol %2,1 idi.
+- Takılmalar: t≈128 s ve 175–210 s (YouTube) yakalama→decode 400–900 ms, 0–2 fps saniyeler; `write_ms` 100–430 ms olan 25 saniye; host `queue_drops` 280. ~86–121 s 8 Mbps'te ~50 ms ile temizdi → bu yolda sürdürülebilir üst sınır ~5–8 Mbps.
+- Girdi etkilenmedi: imleç p95 medyan 43 ms, `late_250ms=0`.
+- Tablet logcat halkası yalnız son ~30 sn'yi tutuyordu; YouTube kısmı yalnız host kaydından.
