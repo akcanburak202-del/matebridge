@@ -39,3 +39,8 @@ Kullanıcı isteği (T-102): ayarlara bağlıyken de ulaşılabilsin. Bugün aya
   - T-105: tablet yan paneli;
   - T-106: host bit hızı tercihi ve menü komutu.
 - Tekrar düşünülür: kullanıcı kısayolu ya da paneli kullanışsız bulursa, ya da HarmonyOS Ctrl+Shift+6'yı yutarsa.
+
+## Ek (2026-10-14, kullanıcı): 5 ve 8 Mbps bit hızı seçenekleri
+
+- Normal paneldeki bit hızı seçenekleri **Otomatik / 5 / 8 / 15 / 30 / 60 / 100 Mbps** olur. Varsayılan (Otomatik) değişmez.
+- Gerekçe: Tailscale üzerinden normal profil (elle adres) ~5–8 Mbps'te temiz, 15 Mbps'te %11 yeniden iletim ve donmalar (NOTES 2026-10-14). Host zaten 500 kbps'e kadar kabul ediyor (0038 §3); tel biçimi değişmez. Kart T-348.

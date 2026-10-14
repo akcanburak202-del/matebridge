@@ -87,3 +87,10 @@ Uzak oturum kendi ayarlarıyla çalışır; kullanıcının mod ve görüntü ay
 5. **İstemci ağ değişimi:** uzak oturumda otomatik USB/Wi-Fi geçişi ve ağ geri çağrıları oturumu düşürmemeli ya da başka yola geçirmemeli (VPN/mobil veri etkin ağ olabilir). Kart bunu denetler.
 6. **Reddedilen ilk uzak bağlantı:** istemci mesajı gösterir, giriş ekranında kalır, yeniden denemez. Uzak adres alanı: IPv4 ya da DNS adı (sondaki nokta atılır), isteğe bağlı `:port`; IPv6 desteklenmez (bugünkü `Endpoint` gibi).
 7. **`link`'in ömrü:** oturum başına, son uygulanan STREAM_PREFS'teki değer geçerlidir. STREAM_PREFS gelene kadar normal zamanlamalar geçerlidir. İstemci uzak oturumda `link = 1`'i her STREAM_PREFS'te gönderir.
+
+## Ek (2026-10-14, kullanıcı): uzak oturumda tablet dosyaları açık, tavan 0,5 MB/s
+
+- §2'deki "Tablet dosyaları uzak oturumda kapalı" ve §3'teki "`FILES_NET OPEN` göndermez" kaldırıldı. Uzak oturumda dosyalar Wi-Fi'daki gibi çalışır (0035): istemci STANDBY bildirir, kullanıcı Mac menüsünden "Tablet dosyalarını aç" der, kök yalnız `MateBridge/Wi-Fi/`. Ayrı bir aç/kapa ayarı yok; menü tıklaması onaydır (0035 §2).
+- **Tavan:** uzak oturumda `files_cap` sabit **0,5 MB/s** (4 Mbps). Gerekçe (NOTES 2026-10-14): ev hattı Tailscale üzerinden ~5–8 Mbps taşıyor, üstünde video yeniden iletimi %11'e çıkıyor ve görüntü 0,4–0,9 sn donuyor. Normal formül 1 Mbps videoda 3 MB/s (24 Mbps) verir; bu, hattı doldurup kontrol bağlantısını (girdi) da geciktirir. Hedef kullanım (Obsidian notu, KB'ler) tavandan etkilenmez; büyük bir dosya yalnız daha yavaş gider.
+- **Güvenlik değişmez:** dosya bağlantıları oturum anahtarından türetilir, yalnız PAIRED oturumda açılır; uzaktan eşleşme yasağı (§5) aynen.
+- **Kartlar:** T-346 (host), T-347 (istemci). PROTOCOL.md §4 STREAM_PREFS ve "Dosya bağlantısı" güncellendi; tel biçimi ve fixture'lar değişmez.
