@@ -1,7 +1,7 @@
 ---
 id: T-348
 title: İstemci — panelde 5 ve 8 Mbps bit hızı seçenekleri
-status: todo
+status: review
 phase: 7
 owner: android-client-dev
 depends_on: []
@@ -35,5 +35,11 @@ Karar 0013 eki (2026-10-14): normal paneldeki bit hızı seçenekleri Otomatik /
 3. Tests: options list, store/read, old values, labels, STREAM_PREFS, file cap at 5 Mbps, Game layer with 5/8; update the two SettingsCatalog label lists.
 
 ## Handoff
+
+- Commit: 44a9f6aa on task/T-348-client-low-bitrate-options.
+- Files: Bitrate.kt (OPTIONS_KBPS + 5000, 8000); tests: BitrateSettingTest, GameModeTest, SettingsCatalogTest, AutoBitrateLayerTest; this card.
+- Audit: no code depended on 15 Mbps as the minimum (GameMode passes any choice; files cap clamps to 3 MB/s; VideoHealth/T-294 backoff has no bit rate use). No behavior change.
+- Assumption: host accepts 5000/8000 kbps (0038 section 3, 500 kbps floor).
+- Not tested: device. Check on tablet: panel shows Otomatik/5/8/15/30/60/100; pick 5 Mbps over Tailscale, "Uygulanan: 5 Mbps" appears and the stream stays clean; choice persists after restart.
 
 ## Açık sorular
