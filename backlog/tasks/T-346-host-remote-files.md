@@ -1,7 +1,7 @@
 ---
 id: T-346
 title: Host — uzak oturumda tablet dosyaları (FILES_NET OPEN), tavan 0,5 MB/s
-status: review
+status: done
 phase: 7
 owner: mac-host-dev
 depends_on: []
