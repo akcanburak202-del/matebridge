@@ -52,3 +52,7 @@ Karar 0038 eki (2026-10-14); PROTOCOL.md §4 STREAM_PREFS "Uzak profil" ve §4 "
 - Not: uzak oturumda açık bir Wi-Fi paylaşımı link geçişinde artık kapatılmaz (paylaşım sürer, yalnız hız değişir).
 
 ## Açık sorular
+
+### Codex turu 1 düzeltmeleri
+- P2 (başlangıç yarışı): `remoteLink` anlık görüntüsü kaldırıldı. En yeni `link` `FilesNetService.desiredRemote` içinde (kilitli) durur; `start` onu kendi kuyruğunda okur, `setRemote` uygulaması aynı kuyrukta çalışır, bu yüzden eski değer yenisini ezemez.
+- P2 (sınırsız kuyruk): `setRemote` en-yeni-kazanır tek bekleyen boşaltma bloğu kullanır (`linkDrainPending`); salvo kaç STREAM_PREFS getirirse getirsin en çok 1 blok bekler. Host hedefinde birim test altyapısı yok (sokete/kuyruğa bağlı); Core mantığı değişmedi.

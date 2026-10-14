@@ -55,8 +55,6 @@ public final class TabletFilesBridge: @unchecked Sendable {
     private var link: (any FilesNetLink)?
     /// Last `STREAM_CONFIG.bitrate_kbps` seen (0 unknown): the Wi-Fi file budget derives from it.
     private var videoKbps: UInt32 = 0
-    /// The live session's last `STREAM_PREFS.link` is 1 (decision 0038 addendum): only the file rate cap changes.
-    private var remoteLink = false
     /// Far above what can matter: the planner watches at most `rememberedMounts + 1` paths.
     private static let maxPendingUnmounts = 16
 
@@ -102,7 +100,7 @@ public final class TabletFilesBridge: @unchecked Sendable {
 
     /// `netCapable`: the client announced `FILES_NET` (HELLO bit12) and the session is not a USB one (decision 0035).
     public func sessionStarted(sessionID: UInt32, transport: SessionTransport, capabilities: Capabilities) {
-        lock.withLock { epoch += 1; remoteLink = false }  // normal until a STREAM_PREFS says otherwise
+        lock.withLock { epoch += 1 }  // normal until a STREAM_PREFS says otherwise
         netService.setRemote(false)
         let netCapable = capabilities.contains(.filesNet) && transport != .usb
         queue.async { [self] in
@@ -117,7 +115,6 @@ public final class TabletFilesBridge: @unchecked Sendable {
     public func deliver(_ message: Message) {
         if case .streamPrefs(let prefs) = message {
             // Decision 0038 addendum (2026-10-14): a remote session keeps the share, at a fixed rate cap.
-            lock.withLock { remoteLink = prefs.isRemote }
             netService.setRemote(prefs.isRemote)
             return
         }
@@ -309,12 +306,12 @@ public final class TabletFilesBridge: @unchecked Sendable {
     /// Opens the file listener and the loopback proxy for the live session. nil: no session, no control peer or no
     /// port could be bound (the menu shows the failure and the user may try again).
     private func startProxy() -> FilesNetService.Ports? {
-        let (link, kbps, remote) = lock.withLock { (self.link, videoKbps, remoteLink) }
+        let (link, kbps) = lock.withLock { (self.link, videoKbps) }
         guard let link, netSessionID != 0, let peer = link.controlPeerHost(sessionID: netSessionID) else {
             logger.log(.warning, "files_net", sessionID: netSessionID, generation: 0, fields: "state=failed stage=session")
             return nil
         }
-        return netService.start(sessionID: netSessionID, controlPeer: peer, videoKbps: kbps, remote: remote) { [weak link] sid, cn, hn in
+        return netService.start(sessionID: netSessionID, controlPeer: peer, videoKbps: kbps) { [weak link] sid, cn, hn in
             link?.filesKeys(sessionID: sid, clientNonce: cn, hostNonce: hn)
         }
     }
