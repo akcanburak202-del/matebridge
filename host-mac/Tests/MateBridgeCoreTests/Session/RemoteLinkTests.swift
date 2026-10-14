@@ -334,45 +334,15 @@ private func pings(_ actions: [SessionAction]) -> Int {
         return p
     }
 
-    @Test func remoteLinkSuppressesFilesNetOpen() {
+    @Test func remoteSessionCanSendFilesNetOpen() {
+        // Decision 0038 addendum (2026-10-14): files work as on Wi-Fi; the planner no longer knows the link.
         var p = wifiPlanner()
         #expect(p.filesInfo(.standby).isEmpty)
-        #expect(p.linkChanged(remote: true).isEmpty)
-        #expect(p.menu == .hidden)
-        #expect(p.openRequested().isEmpty)  // no proxy, so no FILES_NET(OPEN)
-        #expect(p.menu == .hidden)
-    }
-
-    @Test func remoteLinkClosesAnOpenShare() {
-        var p = wifiPlanner()
-        _ = p.filesInfo(.standby)
+        #expect(p.menu == .ready(lastMountFailed: false))
         var gen: UInt64?
         for case .startProxy(let g) in p.openRequested() { gen = g }
+        #expect(gen != nil)
         let afterProxy = p.proxyFinished(generation: gen!, localPort: 47012, filesPort: 47003)
         #expect(afterProxy.contains { if case .sendFilesNet(let m) = $0 { m.isOpen } else { false } })
-        let closing = p.linkChanged(remote: true)
-        #expect(closing.contains { if case .sendFilesNet(let m) = $0 { !m.isOpen } else { false } })
-        #expect(closing.contains { if case .stopProxy = $0 { true } else { false } })
-        #expect(!p.remountsAfterRestart)
-        // The tablet's STANDBY/READY after that does not bring a proxy back.
-        #expect(!p.filesInfo(.standby).contains { if case .startProxy = $0 { true } else { false } })
-    }
-
-    @Test func backToNormalOffersTheVolumeAgain() {
-        var p = wifiPlanner()
-        _ = p.filesInfo(.standby)
-        _ = p.linkChanged(remote: true)
-        _ = p.linkChanged(remote: false)
-        #expect(p.menu == .ready(lastMountFailed: false))
-        #expect(p.openRequested().contains { if case .startProxy = $0 { true } else { false } })
-    }
-
-    @Test func aNewSessionIsNotRemote() {
-        var p = wifiPlanner()
-        _ = p.linkChanged(remote: true)
-        _ = p.sessionEnded()
-        _ = p.sessionStarted(transport: .network, capable: true, netCapable: true)
-        _ = p.filesInfo(.standby)
-        #expect(p.menu == .ready(lastMountFailed: false))
     }
 }

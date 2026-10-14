@@ -155,3 +155,32 @@ private let sec: UInt64 = 1_000_000_000
         #expect(a.reserve(8 * 1024, lane: &la2, now: 0) == b.reserve(8 * 1024, lane: &lb2, now: 0))
     }
 }
+
+@Suite struct FilesRateCapRemoteTests {
+    @Test func remoteIsFixedAtHalfAMegabyteWhatEverTheBitRate() {
+        for kbps: UInt32 in [0, 500, 1000, 2000, 15_000, 30_000, UInt32.max] {
+            #expect(FilesRateCap.capBytesPerSec(videoKbps: kbps, remote: true) == 500_000)
+        }
+        #expect(FilesRateCap.remoteBytesPerSec == 500_000)
+    }
+
+    @Test func normalLinkKeepsTheOldFormulaBitForBit() {
+        for kbps: UInt32 in [0, 1, 1000, 15_000, 24_000, 30_000, 40_000, 44_000, 48_000, 100_000, UInt32.max] {
+            #expect(FilesRateCap.capBytesPerSec(videoKbps: kbps, remote: false) == FilesRateCap.capBytesPerSec(videoKbps: kbps))
+        }
+        #expect(FilesRateCap.capBytesPerSec(videoKbps: 30_000, remote: false) == 2_250_000)
+        #expect(FilesRateCap.capBytesPerSec(videoKbps: 0, remote: false) == 2_000_000)
+    }
+
+    @Test func limiterFollowsLinkAndBitRateChanges() {
+        var l = FilesRateLimiter(videoKbps: 1000, now: 0)
+        #expect(l.mainBytesPerSec == 3_000_000)
+        l.setRemote(true, now: 1)
+        #expect(l.mainBytesPerSec == 500_000)
+        l.setVideoKbps(30_000, now: 2)  // remote ignores the bit rate
+        #expect(l.mainBytesPerSec == 500_000)
+        l.setRemote(false, now: 3)
+        #expect(l.mainBytesPerSec == 2_250_000)
+        #expect(FilesRateLimiter(videoKbps: 1000, remote: true, now: 0).mainBytesPerSec == 500_000)
+    }
+}

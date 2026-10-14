@@ -107,6 +107,13 @@ public final class FilesNetService: @unchecked Sendable {
     private var nextLocalID: UInt64 = 0
     private var limiter = FilesRateLimiter(videoKbps: 0, now: 0)
     private var videoKbps: UInt32 = 0
+    /// Applied link of the running limiter (on queue).
+    private var remote = false
+    /// Latest `STREAM_PREFS.link` (any thread), newest wins; `start` reads it on the queue, so a newer value is never
+    /// overwritten by an older snapshot, and at most one drain block is pending however many prefs arrive.
+    private let linkLock = NSLock()
+    private var desiredRemote = false
+    private var linkDrainPending = false
     private var timer: DispatchSourceTimer?
     private var window = Window()
     private var windowTicks = 0
@@ -166,7 +173,9 @@ public final class FilesNetService: @unchecked Sendable {
             fileListener = filesListener
             proxyListener = proxy
             self.videoKbps = videoKbps
-            limiter = FilesRateLimiter(videoKbps: videoKbps, now: Self.nowNs())
+            let remote = linkLock.withLock { desiredRemote }
+            self.remote = remote
+            limiter = FilesRateLimiter(videoKbps: videoKbps, remote: remote, now: Self.nowNs())
             machine = FilesConnectionMachine()
             window = Window()
             windowTicks = 0
@@ -177,7 +186,7 @@ public final class FilesNetService: @unchecked Sendable {
             filesListener.start()
             proxy.start()
             logger.log(.info, "files_net", sessionID: sessionID, generation: 0,
-                       fields: "state=listening files_port=\(filesListener.port) proxy_port=\(proxy.port) fallback=\(fallbacks)")
+                       fields: "state=listening files_port=\(filesListener.port) proxy_port=\(proxy.port) fallback=\(fallbacks) cap_bps=\(limiter.mainBytesPerSec) remote=\(remote ? 1 : 0)")
             run(machine.open(sessionID: sessionID, controlPeer: controlPeer, max: Int(TabletFilesPlanner.netMax),
                              pool: Int(TabletFilesPlanner.netPool), now: Self.nowUs()))
             startTimer()
@@ -214,6 +223,30 @@ public final class FilesNetService: @unchecked Sendable {
         queue.async { [self] in
             videoKbps = kbps
             if running { limiter.setVideoKbps(kbps, now: Self.nowNs()) }
+        }
+    }
+
+    /// The session's link changed (`STREAM_PREFS.link`, decision 0038 addendum): `true` fixes the file cap at 0.5 MB/s.
+    /// Remembered for the next `start`; the running bucket follows at once.
+    public func setRemote(_ isRemote: Bool) {
+        let schedule = linkLock.withLock { () -> Bool in
+            desiredRemote = isRemote
+            if linkDrainPending { return false }
+            linkDrainPending = true
+            return true
+        }
+        guard schedule else { return }
+        queue.async { [self] in
+            let latest = linkLock.withLock { () -> Bool in
+                linkDrainPending = false
+                return desiredRemote
+            }
+            guard remote != latest else { return }
+            remote = latest
+            guard running else { return }
+            limiter.setRemote(latest, now: Self.nowNs())
+            logger.log(.info, "files_net", sessionID: sessionID, generation: 0,
+                       fields: "state=cap cap_bps=\(limiter.mainBytesPerSec) remote=\(latest ? 1 : 0)")
         }
     }
 
