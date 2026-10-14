@@ -1,7 +1,7 @@
 ---
 id: T-347
 title: İstemci — uzak oturumda tablet dosyaları (STANDBY), tavan 0,5 MB/s
-status: review
+status: done
 phase: 7
 owner: android-client-dev
 depends_on: []

@@ -34,7 +34,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-334](tasks/T-334-dav-copy-put-concurrency.md) | WebDAV — eşzamanlı COPY/MOVE geri alması başka bağlantının başarılı PUT'unu silmesin | 7 | android-client-dev | [T-288] |
 | [T-335](tasks/T-335-host-pipeline-stop-join.md) | Host — pipeline teardown sürerken ikinci stop çağıranı beklesin; hata zamanı teardown'dan önce alınsın | 7 | mac-host-dev | [T-325, T-293] |
 | [T-346](tasks/T-346-host-remote-files.md) | Host — uzak oturumda tablet dosyaları (FILES_NET OPEN), tavan 0,5 MB/s | 7 | mac-host-dev | [] |
-| [T-347](tasks/T-347-client-remote-files.md) | İstemci — uzak oturumda tablet dosyaları (STANDBY), tavan 0,5 MB/s | 7 | android-client-dev | [] |
 
 ## done
 
@@ -359,4 +358,5 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-343](tasks/T-343-client-cursor-predict-rtt.md) | İstemci — yerel imleç tahmini uzun hatlarda (RTT 250+ ms) geri sıçramasın | 7 | android-client-dev | [] |
 | [T-344](tasks/T-344-host-cursor-rel-ack.md) | Host — CURSOR_STATE `rel_ack_count` (işlenen POINTER_REL sayısı) | 7 | mac-host-dev | [] |
 | [T-345](tasks/T-345-client-cursor-rel-ack.md) | İstemci — CURSOR_STATE `rel_ack_count` ile tahmin (geri sıçrama yok) | 7 | android-client-dev | [] |
+| [T-347](tasks/T-347-client-remote-files.md) | İstemci — uzak oturumda tablet dosyaları (STANDBY), tavan 0,5 MB/s | 7 | android-client-dev | [] |
 | [T-348](tasks/T-348-client-low-bitrate-options.md) | İstemci — panelde 5 ve 8 Mbps bit hızı seçenekleri | 7 | android-client-dev | [] |
