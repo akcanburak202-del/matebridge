@@ -31,6 +31,13 @@ Karar 0038 eki (2026-10-14); PROTOCOL.md §4 STREAM_PREFS "Uzak profil" ve §4 "
 
 ## Plan
 
+1. `SessionMachine.effectiveFiles()`: uzak oturumda zorla `OFF` kuralını kaldır (STANDBY/READY normal akar; tünel planı zaten kontrol bağlantısının `ep.host`'unu kullanır = uzak adres). Eski test `filesInfoIsOffInARemoteSession` yeni davranışa çevrilir (STANDBY gider, OPEN+READY tünel planı çıkar).
+2. `MainActivity.syncFiles()`: `&& !remoteSession` kaldır.
+3. `filesCapBytesPerSec(videoKbps, remote = false)`: `remote` ise sabit `REMOTE_FILES_CAP_BYTES_PER_SEC = 500_000`; yoksa eski formül aynen. `FilesController.setRemote(on)` bayrağı tutar, çalışan Wi-Fi sunucusunun kovasını günceller (`setRate`); `onStreamBitrate` ve sunucu başlangıcı bayrağı kullanır. `MainActivity.setRemoteSession` bayrağı `syncFiles`'tan önce iletir. Küçük şerit DavServer'da zaten ayrı ve değişmez.
+4. Ağ geri çağrıları (0038 ek §5): dosya yolu ayrı ağ geri çağrısı kullanmıyor; oturumu düşüren bir şey eklenmez (kod incelemesiyle doğrulanır).
+5. Ayarlar satırı `files_remote`: metin "Uzak oturumda dosya hızı 0,5 MB/s ile sınırlıdır." (anahtar sabit).
+6. Testler: WifiProfileTest (tavan), RemoteSessionMachineTest (STANDBY + tünel), SettingsCatalogTest metin. LOGGING.md `rate_cap` satırına `remote=` alanı.
+
 ## Handoff
 
 ## Açık sorular
