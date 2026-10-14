@@ -107,6 +107,7 @@ public final class FilesNetService: @unchecked Sendable {
     private var nextLocalID: UInt64 = 0
     private var limiter = FilesRateLimiter(videoKbps: 0, now: 0)
     private var videoKbps: UInt32 = 0
+    private var remote = false
     private var timer: DispatchSourceTimer?
     private var window = Window()
     private var windowTicks = 0
@@ -134,7 +135,7 @@ public final class FilesNetService: @unchecked Sendable {
     /// Opens the file listener and the loopback proxy for the active session `sessionID` whose control connection came
     /// from `controlPeer`, and opens the connection machine. Replaces a previous run. nil when a listener could not be
     /// bound (nothing stays open). `videoKbps` is the current `STREAM_CONFIG.bitrate_kbps` (0 unknown).
-    public func start(sessionID: UInt32, controlPeer: String, videoKbps: UInt32, keys: @escaping KeyProvider) -> Ports? {
+    public func start(sessionID: UInt32, controlPeer: String, videoKbps: UInt32, remote: Bool = false, keys: @escaping KeyProvider) -> Ports? {
         queue.sync {
             if running { stopLocked(reason: "restart") }
             var fallbacks = 0
@@ -166,7 +167,8 @@ public final class FilesNetService: @unchecked Sendable {
             fileListener = filesListener
             proxyListener = proxy
             self.videoKbps = videoKbps
-            limiter = FilesRateLimiter(videoKbps: videoKbps, now: Self.nowNs())
+            self.remote = remote
+            limiter = FilesRateLimiter(videoKbps: videoKbps, remote: remote, now: Self.nowNs())
             machine = FilesConnectionMachine()
             window = Window()
             windowTicks = 0
@@ -177,7 +179,7 @@ public final class FilesNetService: @unchecked Sendable {
             filesListener.start()
             proxy.start()
             logger.log(.info, "files_net", sessionID: sessionID, generation: 0,
-                       fields: "state=listening files_port=\(filesListener.port) proxy_port=\(proxy.port) fallback=\(fallbacks)")
+                       fields: "state=listening files_port=\(filesListener.port) proxy_port=\(proxy.port) fallback=\(fallbacks) cap_bps=\(limiter.mainBytesPerSec) remote=\(remote ? 1 : 0)")
             run(machine.open(sessionID: sessionID, controlPeer: controlPeer, max: Int(TabletFilesPlanner.netMax),
                              pool: Int(TabletFilesPlanner.netPool), now: Self.nowUs()))
             startTimer()
@@ -214,6 +216,19 @@ public final class FilesNetService: @unchecked Sendable {
         queue.async { [self] in
             videoKbps = kbps
             if running { limiter.setVideoKbps(kbps, now: Self.nowNs()) }
+        }
+    }
+
+    /// The session's link changed (`STREAM_PREFS.link`, decision 0038 addendum): `true` fixes the file cap at 0.5 MB/s.
+    /// Remembered for the next `start`; the running bucket follows at once.
+    public func setRemote(_ isRemote: Bool) {
+        queue.async { [self] in
+            guard remote != isRemote else { return }
+            remote = isRemote
+            guard running else { return }
+            limiter.setRemote(isRemote, now: Self.nowNs())
+            logger.log(.info, "files_net", sessionID: sessionID, generation: 0,
+                       fields: "state=cap cap_bps=\(limiter.mainBytesPerSec) remote=\(isRemote ? 1 : 0)")
         }
     }
 

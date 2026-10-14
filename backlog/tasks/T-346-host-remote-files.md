@@ -1,7 +1,7 @@
 ---
 id: T-346
 title: Host — uzak oturumda tablet dosyaları (FILES_NET OPEN), tavan 0,5 MB/s
-status: todo
+status: review
 phase: 7
 owner: mac-host-dev
 depends_on: []
@@ -42,5 +42,13 @@ Karar 0038 eki (2026-10-14); PROTOCOL.md §4 STREAM_PREFS "Uzak profil" ve §4 "
 6. LOGGING.md: `cap_bps` / `remote` alanları.
 
 ## Handoff
+
+- Commit: dalın son commit'i "T-346: remote files, 0.5 MB/s cap" (SHA orkestratöre raporlandı).
+- Dosyalar: `MateBridgeCore/Files/FilesRateCap.swift`, `Files/TabletFilesPlanner.swift`, `MateBridgeHost/Files/FilesNetService.swift`, `Files/TabletFilesBridge.swift`, `Tests/.../FilesRateCapTests.swift`, `Session/RemoteLinkTests.swift`, `docs/LOGGING.md`, bu kart.
+- Planner artık link'i bilmez (`linkChanged` ve `Session.remote` silindi); link yalnız hız kovasını etkiler. STREAM_PREFS -> `TabletFilesBridge.deliver` -> `FilesNetService.setRemote` (kova hemen güncellenir). Yeni oturum remote=false ile başlar, `start` mevcut değeri alır.
+- Eş adres: `FilesPeer.same(peer, controlPeer)` zaten adres eşitliği; `100.x` için kod değişikliği gerekmedi. Eşleşme yasağı ve dosya güvenliği dokunulmadı.
+- Log: `ev=files_net state=listening|cap ... cap_bps= remote=0|1`; `files_stats.cap_bps` zaten vardı.
+- check.sh geçti. Cihazda doğrulanmadı: uzak oturumda menüden "Tablet dosyalarını aç", gerçek aktarım hızı ~0,5 MB/s, link değişiminde kova. Mac'te GUI/mount çalıştırılmadı.
+- Not: uzak oturumda açık bir Wi-Fi paylaşımı link geçişinde artık kapatılmaz (paylaşım sürer, yalnız hız değişir).
 
 ## Açık sorular

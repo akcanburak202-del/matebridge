@@ -10,6 +10,9 @@
 public enum FilesRateCap {
     public static let minBytesPerSec: UInt64 = 500_000
     public static let maxBytesPerSec: UInt64 = 3_000_000
+    /// Remote session (`STREAM_PREFS.link = 1`, decision 0038 addendum 2026-10-14): fixed 0.5 MB/s (4 Mbps),
+    /// independent of the video rate.
+    public static let remoteBytesPerSec: UInt64 = 500_000
     /// `STREAM_CONFIG.bitrate_kbps = 0`.
     public static let unknownVideoBytesPerSec: UInt64 = 2_000_000
     /// Bucket depth of the main lane on Wi-Fi (the USB profile uses 256 KiB).
@@ -23,7 +26,8 @@ public enum FilesRateCap {
     /// Integer arithmetic: `(48 000 - kbps) / 8 * 1000 / 1000` = `(48 000 - kbps) * 125` bytes/s, clamped. (The client
     /// computes the same in floating point; the two can differ by one byte per second between the clamps, never at the
     /// table values.)
-    public static func capBytesPerSec(videoKbps: UInt32) -> UInt64 {
+    public static func capBytesPerSec(videoKbps: UInt32, remote: Bool = false) -> UInt64 {
+        if remote { return remoteBytesPerSec }
         if videoKbps == 0 { return unknownVideoBytesPerSec }
         if videoKbps >= 48_000 { return minBytesPerSec }
         let raw = UInt64(48_000 - videoKbps) * 125
@@ -98,12 +102,14 @@ public struct FilesRateLane: Equatable, Sendable {
 /// bursts at 2 MB/s are ~250 ms). The overall ceiling is therefore main + small (~256 KB/s on top of 0.5-3 MB/s).
 public struct FilesRateLimiter: Equatable, Sendable {
     public private(set) var videoKbps: UInt32
+    public private(set) var remote: Bool
     private var main: FilesTokenBucket
     private var small: FilesTokenBucket
 
-    public init(videoKbps: UInt32, now: UInt64) {
+    public init(videoKbps: UInt32, remote: Bool = false, now: UInt64) {
         self.videoKbps = videoKbps
-        main = FilesTokenBucket(rateBytesPerSec: FilesRateCap.capBytesPerSec(videoKbps: videoKbps),
+        self.remote = remote
+        main = FilesTokenBucket(rateBytesPerSec: FilesRateCap.capBytesPerSec(videoKbps: videoKbps, remote: remote),
                                 burstBytes: FilesRateCap.burstBytes, now: now)
         small = FilesTokenBucket(rateBytesPerSec: FilesRateCap.smallRateBytesPerSec,
                                  burstBytes: FilesRateCap.smallBurstBytes, now: now)
@@ -115,7 +121,13 @@ public struct FilesRateLimiter: Equatable, Sendable {
     /// The video target changed (`STREAM_CONFIG.bitrate_kbps`): the main rate follows at once.
     public mutating func setVideoKbps(_ kbps: UInt32, now: UInt64) {
         videoKbps = kbps
-        main.setRate(FilesRateCap.capBytesPerSec(videoKbps: kbps), now: now)
+        main.setRate(FilesRateCap.capBytesPerSec(videoKbps: kbps, remote: remote), now: now)
+    }
+
+    /// The session's link changed (`STREAM_PREFS.link`): remote is a fixed rate, normal follows the video target.
+    public mutating func setRemote(_ remote: Bool, now: UInt64) {
+        self.remote = remote
+        main.setRate(FilesRateCap.capBytesPerSec(videoKbps: videoKbps, remote: remote), now: now)
     }
 
     /// Books `bytes` of one exchange through `lane` and returns the wait in nanoseconds. The small part and the main
