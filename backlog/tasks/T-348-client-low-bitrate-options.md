@@ -30,6 +30,10 @@ Karar 0013 eki (2026-10-14): normal paneldeki bit hızı seçenekleri Otomatik /
 
 ## Plan
 
+1. `Bitrate.OPTIONS_KBPS` gets 5000 and 8000 (panel list is built from it; sanitize/Settings/StreamPrefs follow).
+2. Audit of "lowest = 15 Mbps" assumptions: GameMode (`layerBitrateKbps` passes any choice through; only Otomatik maps to 60 Mbps), `filesCapBytesPerSec` (clamps to 3 MB/s at <=15 Mbps, fine for 5/8), video health/T-294 backoff (no bit rate use), labels (`Bitrate.mbps`). No behavior change needed.
+3. Tests: options list, store/read, old values, labels, STREAM_PREFS, file cap at 5 Mbps, Game layer with 5/8; update the two SettingsCatalog label lists.
+
 ## Handoff
 
 ## Açık sorular
