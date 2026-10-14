@@ -159,6 +159,13 @@ class WifiProfileTest {
         assertEquals(2_000_000L, filesCapBytesPerSec(-5))
     }
 
+    @Test fun remoteCapIsFixedWhateverTheBitRate() {
+        for (k in listOf(-5, 0, 1, 500, 1_000, 15_000, 30_000, 60_000)) assertEquals(500_000L, filesCapBytesPerSec(k, remote = true))
+        assertEquals(REMOTE_FILES_CAP_BYTES_PER_SEC, 500_000L)
+        // the normal formula is unchanged (default and explicit false agree)
+        for (k in listOf(-5, 0, 1, 15_000, 30_000, 40_000, 60_000)) assertEquals(filesCapBytesPerSec(k), filesCapBytesPerSec(k, remote = false))
+    }
+
     // ---- Wi-Fi root ----
 
     private fun storage(): File = tmp.newFolder("storage").canonicalFile

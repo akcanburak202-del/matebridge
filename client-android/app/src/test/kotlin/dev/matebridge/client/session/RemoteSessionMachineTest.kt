@@ -5,6 +5,7 @@ import dev.matebridge.client.protocol.AudioPrefs
 import dev.matebridge.client.protocol.Bytes
 import dev.matebridge.client.protocol.Codec
 import dev.matebridge.client.protocol.FilesInfo
+import dev.matebridge.client.protocol.FilesNet
 import dev.matebridge.client.protocol.FixtureTest
 import dev.matebridge.client.protocol.Hello
 import dev.matebridge.client.protocol.HelloAck
@@ -95,15 +96,20 @@ class RemoteSessionMachineTest {
         assertEquals(AudioPrefs(false), s[2])
     }
 
-    @Test fun filesInfoIsOffInARemoteSession() {
+    @Test fun filesInfoIsStandbyAndTheTunnelFollowsInARemoteSession() { // T-347 (0038 addendum 2026-10-14)
         val ready = FilesInfo(FilesInfo.STATE_READY, 47010, "0123456789abcdef0123456789abcdef")
-        val m = machine(files = FilesInfo.OFF)
+        val m = machine(files = FilesInfo.STANDBY)
         val gen = start(m, 0, profile)
         val s = sends(accept(m, gen, 0))
-        assertEquals(FilesInfo.OFF, s.last())
-        // the server comes up later: the Mac is still told OFF
-        val sent = sends(m.handle(Event.SetFiles(ready, FilesServerScope(false, gen)), 1_000))
-        assertTrue(sent.all { it == FilesInfo.OFF })
+        assertEquals(FilesInfo.STANDBY, s.last())
+        // the Mac's menu opens: the tablet's server comes up, READY is announced and the tunnel targets the remote host
+        val open = FilesNet(FilesNet.STATE_OPEN, 47003, 2, 12)
+        m.handle(Event.Received(gen, open), 1_000)
+        val a = m.handle(Event.SetFiles(ready, FilesServerScope(true, gen, 1)), 2_000)
+        assertEquals(ready, sends(a).single())
+        val plan = a.filterIsInstance<Action.FilesTunnel>().single().plan!!
+        assertEquals(ep.host, plan.host)
+        assertEquals(47010, plan.davPort)
     }
 
     @Test fun idleRemotePingsEveryTwoSecondsAndFastWhileInputIsActive() {

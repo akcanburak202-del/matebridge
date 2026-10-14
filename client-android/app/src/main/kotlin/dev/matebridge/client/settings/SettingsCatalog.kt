@@ -471,7 +471,7 @@ object SettingsCatalog {
                 ) { id -> h.selectFilesRoot(FilesRoot.parse(id)) },
                 SettingItem.Toggle("files_ro", "Salt okunur", { h.filesReadOnly }, { h.setFilesReadOnly(it) }),
                 SettingItem.Info("files_status") { h.filesStatus },
-                SettingItem.Info("files_remote", { !h.remoteSession }) { "Uzak oturumda tablet dosyaları kapalıdır." }, // decision 0038
+                SettingItem.Info("files_remote", { !h.remoteSession }) { "Uzak oturumda dosya hızı 0,5 MB/s ile sınırlıdır." }, // decision 0038
             ),
         )
         out += SettingsSection(

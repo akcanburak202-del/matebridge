@@ -2188,7 +2188,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun syncFiles(foreground: Boolean = started) {
         // T-269: while sharing is off or not permitted the Mac has seen OFF and closed; a stale open request must not
         // restart the server when it is switched back on (the Mac's menu sends a new one).
-        val share = settings.filesShare() && !remoteSession // T-339 (decision 0038): no tablet files in a remote session
+        val share = settings.filesShare() // T-347 (decision 0038 addendum 2026-10-14): a remote session shares like Wi-Fi, at the 0.5 MB/s cap
         if (!share || !files.hasPermission()) {
             val id = filesGate.netRequestId
             if (filesGate.forgetNet() && id != 0) controller.forgetFilesNet(id) // the machine forgets that request only
@@ -2597,6 +2597,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             if (currentEndpoint != null && currentEndpoint == remoteAddress) currentEndpoint = null
             remoteAddress = null
         }
+        if (::files.isInitialized) files.setRemote(on) // T-347: the file rate cap is fixed 0.5 MB/s in a remote session
         applyCursorWish() // the remote profile always draws the cursor on the tablet (5 s timeout); the user's wish returns after it
         if (::files.isInitialized) syncFiles()
         refreshSettings()

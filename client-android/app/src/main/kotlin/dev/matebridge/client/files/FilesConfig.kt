@@ -199,10 +199,14 @@ object WifiFilesRoot {
  * clamp((48 - video_Mbps) / 8, 0.5, 3.0). 30 Mbps gives 2.25 MB/s, 15 gives 3, 60 gives 0.5. An unknown video rate
  * (0 or less) gets [UNKNOWN_VIDEO_BYTES_PER_SEC], not the lowest.
  */
-fun filesCapBytesPerSec(videoKbps: Int): Long {
+fun filesCapBytesPerSec(videoKbps: Int, remote: Boolean = false): Long {
+    if (remote) return REMOTE_FILES_CAP_BYTES_PER_SEC // T-347, decision 0038 addendum: fixed, whatever the bit rate
     if (videoKbps <= 0) return UNKNOWN_VIDEO_BYTES_PER_SEC
     val mbps = videoKbps / 1000.0
     return (((48.0 - mbps) / 8.0).coerceIn(0.5, 3.0) * 1_000_000).toLong()
 }
 
 const val UNKNOWN_VIDEO_BYTES_PER_SEC = 2_000_000L
+
+/** T-347: the total C->H file rate in a remote session (link = 1), 4 Mbps. */
+const val REMOTE_FILES_CAP_BYTES_PER_SEC = 500_000L

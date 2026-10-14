@@ -1,7 +1,7 @@
 ---
 id: T-347
 title: İstemci — uzak oturumda tablet dosyaları (STANDBY), tavan 0,5 MB/s
-status: todo
+status: review
 phase: 7
 owner: android-client-dev
 depends_on: []
@@ -39,5 +39,11 @@ Karar 0038 eki (2026-10-14); PROTOCOL.md §4 STREAM_PREFS "Uzak profil" ve §4 "
 6. Testler: WifiProfileTest (tavan), RemoteSessionMachineTest (STANDBY + tünel), SettingsCatalogTest metin. LOGGING.md `rate_cap` satırına `remote=` alanı.
 
 ## Handoff
+
+- Commit: son commit "T-347: remote tablet files" (SHA için `git log task/T-347-client-remote-files`).
+- Dosyalar: `session/SessionMachine.kt` (effectiveFiles zorla OFF kalktı), `MainActivity.kt` (syncFiles `!remoteSession` kalktı; setRemoteSession -> `files.setRemote`), `files/FilesConfig.kt` (`filesCapBytesPerSec(kbps, remote)`, `REMOTE_FILES_CAP_BYTES_PER_SEC`), `files/FilesController.kt` (`setRemote`, `applyCap`), `settings/SettingsCatalog.kt` (files_remote metni), `docs/LOGGING.md` (`rate_cap ... remote=`), testler: WifiProfileTest, RemoteSessionMachineTest.
+- Varsayımlar: tünel planı zaten kontrol bağlantısının `ep.host`'unu kullanıyor (uzak adres); dosya yolu için ayrı ağ geri çağrısı yok, madde 3 için kod eklenmedi. Küçük şerit DavServer'da sabit, değişmedi. `files_remote` anahtarı korundu (yalnız metin).
+- check.sh: geçti.
+- Cihazda TEST EDİLMEDİ: uzak oturumda Mac menüsünde "Tablet dosyalarını aç" görünür/açılır mı; büyük dosya kopyada C->H ~0,5 MB/s (`rate_cap remote=1 cap_kbps=4000`); video/girdi donmaz; normal oturumda tavan formüle döner; ağ geçişinde oturum düşmez.
 
 ## Açık sorular
