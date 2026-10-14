@@ -84,9 +84,9 @@ class AutoBitrateLayerTest {
 
     @Test fun optionLabels() {
         val labels = { layer: StreamMode? -> Bitrate.OPTIONS_KBPS.map { GameModeSettings.bitrateOptionLabel(layer, it) } }
-        assertEquals(listOf("Otomatik", "15 Mbps", "30 Mbps", "60 Mbps", "100 Mbps"), labels(null))
-        assertEquals(listOf("Otomatik (60 Mbps)", "15 Mbps", "30 Mbps", "60 Mbps", "100 Mbps"), labels(StreamMode.GAME))
-        assertEquals(listOf("Otomatik (60 Mbps)", "15 Mbps", "30 Mbps", "60 Mbps", "100 Mbps"), labels(StreamMode.DRAWING))
-        assertEquals(listOf("Otomatik", "15 Mbps", "30 Mbps", "60 Mbps", "100 Mbps"), labels(StreamMode.DAILY))
+        assertEquals(listOf("Otomatik", "5 Mbps", "8 Mbps", "15 Mbps", "30 Mbps", "60 Mbps", "100 Mbps"), labels(null))
+        assertEquals(listOf("Otomatik (60 Mbps)", "5 Mbps", "8 Mbps", "15 Mbps", "30 Mbps", "60 Mbps", "100 Mbps"), labels(StreamMode.GAME))
+        assertEquals(listOf("Otomatik (60 Mbps)", "5 Mbps", "8 Mbps", "15 Mbps", "30 Mbps", "60 Mbps", "100 Mbps"), labels(StreamMode.DRAWING))
+        assertEquals(listOf("Otomatik", "5 Mbps", "8 Mbps", "15 Mbps", "30 Mbps", "60 Mbps", "100 Mbps"), labels(StreamMode.DAILY))
     }
 }

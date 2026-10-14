@@ -102,7 +102,7 @@ class GameModeTest {
         g.setBitrateKbps(8_000)
         assertEquals(8_000L, g.prefs(StreamMode.GAME).bitrateKbps)
         assertEquals(8_000L, GameModeSettings.layerBitrateKbps(8_000))
-        assertEquals("5 Mbps", GameModeSettings.bitrateOptionLabel(5_000, StreamMode.GAME))
+        assertEquals("5 Mbps", GameModeSettings.bitrateOptionLabel(StreamMode.GAME, 5_000))
     }
 
     @Test fun overriddenSettingsOfTheGameLayerOnlyTouchTheLayer() {
