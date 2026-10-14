@@ -1949,3 +1949,9 @@ Host release, `main`. Tablette ölçüm için debug APK kullanıldı; sonunda da
 - Takılmalar: t≈128 s ve 175–210 s (YouTube) yakalama→decode 400–900 ms, 0–2 fps saniyeler; `write_ms` 100–430 ms olan 25 saniye; host `queue_drops` 280. ~86–121 s 8 Mbps'te ~50 ms ile temizdi → bu yolda sürdürülebilir üst sınır ~5–8 Mbps.
 - Girdi etkilenmedi: imleç p95 medyan 43 ms, `late_250ms=0`.
 - Tablet logcat halkası yalnız son ~30 sn'yi tutuyordu; YouTube kısmı yalnız host kaydından.
+
+## 2026-10-14 akşam — Uyku: evde elle uyutma çalışıyor, Tailscale üzerinden uyandırma yok
+
+- Evde `Uyut` → tablet ön plana dönünce Mac uyandı (pmset `DarkWake … enet lan0` → `HID Activity`), T-134 yolu. Mac Ethernet'te (en0).
+- Uzaktan deneme (tablet hotspot, Mac 19:49 uykuda): "Uzaktan bağlan" ve elle `100.77.121.48:47001` Mac'i uyandırmadı; uyku boyunca host'a hiç bağlantı gelmedi, yalnız rtc bakım uyanması. Sebep: uykuda Tailscale da duruyor. Kodla çözülmez.
+- Ev modemi sağlayıcı cihazı (Aidata AX3000), uzaktan WoL beklenmez. Kullanıcı kararı: dışarıdayken Mac uykusu kapalı, evde elle uyutur.
