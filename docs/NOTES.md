@@ -1932,10 +1932,10 @@ Host release, `main`. Tablette ölçüm için debug APK kullanıldı; sonunda da
 - Ertelenen: evdeki imleç sıçraması için debug APK A/B gerekmedi; 0036 v3 aynı kök nedeni çözdü.
 - 2026-10-13 (hotspot): Tailscale doğrudan yol (ping 41 ms, MateBridge TCP srtt 74–80 ms), uzak profil 15 fps 1400×920. Kullanıcı: "imleç çok iyi, sıçrama yok". 0036 v3 uzakta da doğrulandı.
 
-## 2026-10-14 ~09:55 — Uzak oturum performansı (mobil veri, Tailscale direct)
+## 2026-10-14 ~09:55 — Uzak oturum performansı (evden uzakta Wi-Fi, Tailscale direct)
 
 - Yol: Tailscale direct (DERP değil), `tailscale ping` 46 ms. TCP srtt p50 ~50 ms; video p95 182 ms (ekran değişince uplink kuyruğu).
-- Profil: uzak, 1400×920, 15 fps, 1 Mbps tavan. ~4 dk oturumda ortalama 327 kbps (≈150 MB/saat bu kullanımda), durağan ekranda 1–10 kbps.
+- Profil: uzak, 1400×920, 15 fps, 1 Mbps tavan. ~4 dk oturumda ortalama 327 kbps (≈150 MB/saat), durağan ekranda 1–10 kbps.
 - Yakalama→decode p50 48 ms, p95 70 ms, en kötü 109 ms. Girdi yaşı (tablet→enjekte): imleç p50 33 / p95 41 ms, tuş p50 31 ms, `late_250ms=0`. `inject_to_frame` tipik 60–80 ms, en kötü 112 ms.
 - Video TCP yeniden iletim %2,1 (74/3518); tablette `drop=0 overflows=0`, decode 8,4 ms. `heartbeat_silence` 14 uyarı, kopma yok.
 - 2026-10-12'deki açık madde kapandı: `input_watchdog events=1` ~83 ms arayla = host'un tuş tekrarı (tek tuş basılı tutuldu, `key_n=1`); takılı tuş değil.
