@@ -10,8 +10,8 @@ import java.util.Locale
 object Bitrate {
     const val AUTO_KBPS = 0L
 
-    /** Panel order: Otomatik, 15, 30, 60, 100 Mbps. */
-    val OPTIONS_KBPS: List<Long> = listOf(AUTO_KBPS, 15_000L, 30_000L, 60_000L, 100_000L)
+    /** Panel order: Otomatik, 5, 8, 15, 30, 60, 100 Mbps (5 and 8: decision 0013 addendum 2026-10-14, T-348). */
+    val OPTIONS_KBPS: List<Long> = listOf(AUTO_KBPS, 5_000L, 8_000L, 15_000L, 30_000L, 60_000L, 100_000L)
 
     /** A stored or requested value, kept only when it is one of [OPTIONS_KBPS]; anything else is [AUTO_KBPS]. */
     fun sanitize(kbps: Long?): Long = if (kbps != null && kbps in OPTIONS_KBPS) kbps else AUTO_KBPS

@@ -10,6 +10,7 @@ import dev.matebridge.client.protocol.StreamConfig
 import dev.matebridge.client.protocol.StreamPrefs
 import dev.matebridge.client.session.SessionMachine.Action
 import dev.matebridge.client.session.SessionMachine.Event
+import dev.matebridge.client.files.filesCapBytesPerSec
 import dev.matebridge.client.stream.Bitrate
 import dev.matebridge.client.stream.StreamMode
 import org.junit.Assert.assertArrayEquals
@@ -46,6 +47,21 @@ class BitrateSettingTest {
         }
         settings.setBitrateKbps(60_000)
         assertEquals("60000", map["bitrate_kbps"])
+    }
+
+    @Test fun lowOptionsAreStoredAndRead() { // T-348
+        assertEquals(listOf(0L, 5_000L, 8_000L, 15_000L, 30_000L, 60_000L, 100_000L), Bitrate.OPTIONS_KBPS)
+        settings.setBitrateKbps(5_000)
+        assertEquals("5000", map["bitrate_kbps"])
+        assertEquals(5_000L, settings.bitrateKbps())
+        map["bitrate_kbps"] = "8000"
+        assertEquals(8_000L, settings.bitrateKbps())
+        map["bitrate_kbps"] = "15000" // an old stored value reads the same
+        assertEquals(15_000L, settings.bitrateKbps())
+        assertEquals("5 Mbps", Bitrate.label(5_000))
+        assertEquals("8 Mbps", Bitrate.label(8_000))
+        assertEquals(StreamPrefs(120, 1000, 5_000), StreamMode.DAILY.toPrefs(bitrateKbps = 5_000))
+        assertEquals(3_000_000L, filesCapBytesPerSec(5_000)) // the Wi-Fi file cap tops out at 3 MB/s
     }
 
     @Test fun invalidStoredOrRequestedValueIsAuto() {
