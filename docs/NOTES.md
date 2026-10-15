@@ -1964,3 +1964,4 @@ Host release, `main`. Tablette ölçüm için debug APK kullanıldı; sonunda da
 - Yakalama→decode p50 99 / p95 185 / en kötü 230 ms (hotspot doğrudan yolda p50 48 ms). Tablet `dropped` 0–2, host `queue_drops` 2.
 - Girdi yaşı: imleç p95 medyanı 90 ms, tuş p95 medyanı 89 ms, `late_250ms=0`. `inject_to_frame` 79–114 ms.
 - `heartbeat_silence` 18 uyarı, kopma yok. Tablet dosyaları (T-346) bağlı.
+- ~10:13 aynı yerden telefon hotspot'u: Tailscale **doğrudan** (ping 46 ms), video srtt p50 47 / p95 59 ms, yakalama→decode p50 39 / en kötü 50 ms, tuş p95 medyanı 49 ms, `dropped=0`. Kısa örnek (~40 sn). Kurum ağındaki ~2× gecikmenin sebebi DERP aktarması; kurum ağı UDP'yi engelliyor.
