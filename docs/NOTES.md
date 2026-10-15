@@ -1955,3 +1955,12 @@ Host release, `main`. Tablette ölçüm için debug APK kullanıldı; sonunda da
 - Evde `Uyut` → tablet ön plana dönünce Mac uyandı (pmset `DarkWake … enet lan0` → `HID Activity`), T-134 yolu. Mac Ethernet'te (en0).
 - Uzaktan deneme (tablet hotspot, Mac 19:49 uykuda): "Uzaktan bağlan" ve elle `100.77.121.48:47001` Mac'i uyandırmadı; uyku boyunca host'a hiç bağlantı gelmedi, yalnız rtc bakım uyanması. Sebep: uykuda Tailscale da duruyor. Kodla çözülmez.
 - Ev modemi sağlayıcı cihazı (Aidata AX3000), uzaktan WoL beklenmez. Kullanıcı kararı: dışarıdayken Mac uykusu kapalı, evde elle uyutur.
+
+## 2026-10-15 ~10:10 — Uzak oturum iş yeri ağından (kurum Wi-Fi'ı)
+
+- Yol: Tailscale **DERP aktarması (fra)**, doğrudan yol kurulamadı (`tailscale ping` 145–156 ms, "direct connection not established"). Kurum ağı büyük olasılıkla dışa UDP'yi engelliyor; trafik 443 üzerinden DERP'e gidiyor. Hotspot'ta aynı cihazlar doğrudan (41–46 ms) bağlanıyordu.
+- Profil: uzak, 1400×920, 15 fps, 1 Mbps. ~4 dk oturum, ortalama 178 kbps (≈80 MB/saat), durgun ekranda ~15–20 kbps, tepe ~1,1 Mbps.
+- Video TCP srtt p50 151 / p95 270 / en kötü 338 ms; yeniden iletim %0,05 (1/2120), kontrol 0. Kayıp yok; gecikme aktarmadan geliyor.
+- Yakalama→decode p50 99 / p95 185 / en kötü 230 ms (hotspot doğrudan yolda p50 48 ms). Tablet `dropped` 0–2, host `queue_drops` 2.
+- Girdi yaşı: imleç p95 medyanı 90 ms, tuş p95 medyanı 89 ms, `late_250ms=0`. `inject_to_frame` 79–114 ms.
+- `heartbeat_silence` 18 uyarı, kopma yok. Tablet dosyaları (T-346) bağlı.
