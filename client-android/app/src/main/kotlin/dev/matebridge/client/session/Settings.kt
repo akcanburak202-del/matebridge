@@ -69,6 +69,11 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
     /** The stored remote profile (bit rate and audio). */
     fun remoteProfile(): RemoteProfile = RemoteProfile(remoteBitrateKbps(), remoteAudio())
 
+    /** "Performans artışı" (T-350, decision 0039); default off, only a stored "1" enables. */
+    fun perfBoost(): Boolean = store.getString(KEY_PERF_BOOST) == "1"
+
+    fun setPerfBoost(on: Boolean) = store.putString(KEY_PERF_BOOST, if (on) "1" else "0")
+
     /** Whether the on-screen statistics overlay is enabled (default off). */
     fun statsOverlay(): Boolean = store.getString(KEY_STATS) == "1"
 
@@ -256,6 +261,7 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
             KEY_STATS, KEY_STREAM_MODE, KEY_BITRATE, KEY_PAD_SPEED, KEY_MOUSE_SPEED, KEY_CLIPBOARD, KEY_FILES,
             KEY_FILES_ROOT, KEY_FILES_RO, KEY_AUDIO, KEY_AUDIO_OUT, KEY_PEN_TRAIL, KEY_PEN_DOT, KEY_FINGER_OFF,
             KEY_TRANSPORT, KEY_GAME_RESOLUTION, KEY_FPS_DAILY, KEY_FPS_GAME, KEY_HDR_GAME, KEY_HDR_DAILY, KEY_CURSOR, KEY_REMOTE_BITRATE, KEY_REMOTE_AUDIO,
+            KEY_PERF_BOOST,
         )
 
         const val KEY_DEVICE_ID = "device_id"
@@ -284,6 +290,7 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
         const val KEY_PEN_DOT = "pen_dot"
         const val KEY_FINGER_OFF = "finger_touch_disabled"
         const val KEY_CURSOR = "cursor_local"
+        const val KEY_PERF_BOOST = "perf_boost"
     }
 }
 

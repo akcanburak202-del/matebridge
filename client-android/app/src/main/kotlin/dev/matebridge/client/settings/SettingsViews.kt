@@ -45,7 +45,12 @@ class SettingsViews(
         is SettingItem.Choice -> choice(item)
         is SettingItem.Toggle -> button("") {
             item.set(!item.get())
-        }.also { b -> refreshers += { b.text = item.text() } }
+        }.also { b ->
+            refreshers += {
+                b.visibility = if (item.hidden()) View.GONE else View.VISIBLE // T-350
+                b.text = item.text()
+            }
+        }
         is SettingItem.Stepper -> stepper(item)
         is SettingItem.Action -> button(item.title) { item.run() }
         is SettingItem.Info -> text("", 15f, INFO_COLOR).also { t ->

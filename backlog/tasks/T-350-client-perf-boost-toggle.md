@@ -1,7 +1,7 @@
 ---
 id: T-350
 title: İstemci — panelde "Performans artışı" anahtarı (T-319 fling boost, varsayılan kapalı)
-status: todo
+status: review
 phase: 7
 owner: android-client-dev
 depends_on: [T-319]
@@ -34,6 +34,22 @@ Karar 0039: T-319'un FLING yükseltmesi main'e kullanıcı ayarı olarak gelir. 
 
 ## Plan
 
+1. `video/PerfBoost.kt`: `PerfBoostRules` (koşul sırası), `BoostAction`/`PulseScheduler`, `FlingBoost`, `PerfBoost` (yalnız koşullar tamamsa action ve zamanlayıcı oluşur).
+2. `Settings.perfBoost` (varsayılan kapalı, USER_KEYS'te), `SettingsHost` + katalog: Görüntü bölümünde Toggle + açıklama; uzak oturumda gizli.
+3. `MainActivity`: `syncPerfBoost()` render / onStop / uzak oturum / reset / anahtar değişiminde.
+4. Testler: PerfBoostTest, SettingsCatalogTest.
+
 ## Handoff
+
+- Dal task/T-350-perf-boost-toggle; commit SHA: son commit of the branch.
+- Dosyalar: video/PerfBoost.kt (yeni), session/Settings.kt, settings/SettingsCatalog.kt, settings/SettingsViews.kt, MainActivity.kt, testler video/PerfBoostTest.kt + settings/SettingsCatalogTest.kt, docs/KNOBS.md, bu kart.
+- Yerlesim: panelde (hem baglanti hem yan panel) "Goruntu" bolumunun sonunda, "Imlec"ten sonra: "Performans artisi: Acik/Kapali" dugmesi + altinda "Cozmeyi hizlandirir, pil tuketimi artabilir." Uzak oturumda ikisi de gizli.
+- Mekanizma: yalniz T-319 FLING (abortAnimation + fling, 1 sn, kendi tek is parcacikli zamanlayicisi mb-boost). Dev dugmeleri, PerfLever, GpuKeep, iaware yok.
+- Kosullar: ayar acik, render() akiyor (Connected + framesReceived>0 + renderer), started (onStop'ta durur), uzak oturum degil. Ayar degisince syncPerfBoost() aninda; yeniden baglanma yok. "Varsayilanlara don" kapatir (USER_KEYS).
+- Kapaliyken: PerfBoost nesnesi yalniz bir alan; action/zamanlayici/thread ilk baslatmada olusur (test: offCreatesNothing).
+- Gunluk: ev=perf_boost state=on reason=ok period_ms=1000 / state=off reason=setting|stream|background|remote|unsupported; pulse basina log yok.
+- Varsayim: "on plan" = started (onStart..onStop), pencere odagi degil.
+- check.sh: ilk tam kosuda android+protocol+kit OK; host asamasi eszamanli Gradle kosusuyla cakisti, --only host ayrica ALL OK.
+- Tablette bakilacak: (1) Ayar kapaliyken logcat'te perf_boost yok, mb-boost thread yok. (2) Ac: akis surerken ev=perf_boost state=on reason=ok, DDR devfreq 1536 MHz, dec suresi ~15,6 -> ~12 ms (60 fps). (3) Kapat: state=off reason=setting, DDR duser, yeniden baglanma olmaz. (4) Arka plan: reason=background; Uzaktan baglan: dugme gorunmez. (5) Varsayilanlara don: kapanir.
 
 ## Open questions

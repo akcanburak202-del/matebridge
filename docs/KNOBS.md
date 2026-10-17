@@ -152,5 +152,6 @@ Geldiklerinde buraya satır eklenir; hepsinin varsayılanı kapalı:
 - T-197: `ctl_lowat_kb` (`WifiKnobs.kt`'ye; dosya T-300'den beri yalnız `pingMs` taşıyor).
 - T-198: `MATEBRIDGE_PEN_PLAYOUT_MS`.
 - T-312: `--es dec_out_park` (satır 23l; dalda var, `main`'de yok).
+- T-350 (karar 0039): panel ayarı "Performans artışı" (Görüntü bölümü; `Settings.perfBoost`, anahtar `perf_boost`). Dev düğmesi değil, kullanıcı ayarı: varsayılan kapalı, "Varsayılanlara dön" kapatır. Açıkken video akarken, ön planda ve uzak olmayan oturumda her 1 sn görünmez `OverScroller.fling` (`video/PerfBoost.kt`). Günlük: `ev=perf_boost state=on|off reason=...`.
 
 Listeden çıkanlar: T-278 `cursor_predict` eklendi (satır 23m). T-196 `MATEBRIDGE_WIFI_ADAPT` uygulanmadı (2026-10-04, T-195 ile kapatıldı).

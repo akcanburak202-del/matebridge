@@ -81,7 +81,10 @@ import dev.matebridge.client.stream.HdrPolicy
 import dev.matebridge.client.stream.HdrRequestLog
 import dev.matebridge.client.stream.HzSwitchCounter
 import dev.matebridge.client.protocol.StreamPrefs
+import dev.matebridge.client.video.ExecutorPulseScheduler
+import dev.matebridge.client.video.FlingBoost
 import dev.matebridge.client.video.IntervalHistogram
+import dev.matebridge.client.video.PerfBoost
 import dev.matebridge.client.stream.StatsFormat
 import dev.matebridge.client.stream.StatsLogWindow
 import dev.matebridge.client.stream.RefreshMismatch
@@ -289,6 +292,19 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     )
     private var surfaceValid = false
     private var statsOn = false
+
+    // T-350 (decision 0039): "Performans artışı". Creates nothing until every condition holds (switch on, streaming, foreground, not remote).
+    private val perfBoost = PerfBoost({ FlingBoost(applicationContext) }, ExecutorPulseScheduler) { ev, f -> MbLog.i(ev, f) }
+    private var perfStreaming = false
+
+    private fun syncPerfBoost() {
+        perfBoost.update(
+            enabled = ::settings.isInitialized && settings.perfBoost(),
+            streaming = perfStreaming && !isDestroyed,
+            foreground = started && !isDestroyed,
+            remote = remoteSession,
+        )
+    }
     private var lastStatsMs = 0L
     /** T-141: log window of the video stats lines (10 s; `--ez stats_1s true` = 1 s). The STATS message stays per second. */
     private var statsLog = StatsLogWindow()
@@ -1120,6 +1136,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             clipboard.sync.enabled = on
             settings.setClipboardShare(on)
         }
+        override val perfBoost get() = settings.perfBoost()
+        override fun setPerfBoost(on: Boolean) { // T-350: starts or stops at once, no reconnect
+            settings.setPerfBoost(on)
+            syncPerfBoost()
+            refreshSettings()
+        }
         override val statsOverlay get() = statsOn
         override fun setStatsOverlay(on: Boolean) { if (on != statsOn) toggleStats() }
 
@@ -1174,6 +1196,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (::clipboard.isInitialized) clipboard.sync.enabled = settings.clipboardShare()
         statsOn = settings.statsOverlay()
         applyStatsVisibility()
+        syncPerfBoost() // T-350: the switch is off again
         // Files: off by default (the server stops); a changed folder or read-only flag restarts a running one.
         syncFiles()
         if (settings.filesScope() != scopeWas) files.rescope()
@@ -2388,6 +2411,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     override fun onStop() {
         started = false
+        syncPerfBoost() // T-350: no boost in the background
         promptVisibility.onStop()?.let { controller.setConfirmPromptVisible(it) } // T-151: the 2-min timer pauses
         ui.removeCallbacks(forgetSettle)
         forgetFlow.abandon() // T-151: a forget result after this is not reported (the next screen shows the real state)
@@ -2422,6 +2446,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     override fun onDestroy() {
         if (benchForwarded) { super.onDestroy(); return } // T-090: nothing below was initialised
         ui.removeCallbacksAndMessages(null)
+        perfBoost.shutdown() // T-350
         releaseRenderer()
         controller.shutdown()
         if (::files.isInitialized) files.shutdown()
@@ -2592,6 +2617,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun setRemoteSession(on: Boolean) {
         if (remoteSession == on) return
         remoteSession = on
+        syncPerfBoost() // T-350: never in a remote session
         MbLog.i("remote_session", "on=${if (on) 1 else 0}")
         if (!on) {
             if (currentEndpoint != null && currentEndpoint == remoteAddress) currentEndpoint = null
@@ -2721,6 +2747,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val streaming = state is SessionUi.Connected && state.framesReceived > 0 && renderer != null
         if (streaming && panel.visibility != View.GONE) hideManualEntry() // T-078: before the panel goes away
         panel.visibility = if (streaming) View.GONE else View.VISIBLE
+        perfStreaming = streaming
+        syncPerfBoost() // T-350
         syncImeTarget() // T-342
         syncVideoFaultOverlay() // T-159: only over the video, never over the connect panel
         if (!streaming) closeSettingsPanel(SettingsPanelState.Via.STREAM_END, resync = false) // T-105; synced below
