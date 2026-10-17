@@ -1,7 +1,7 @@
 ---
 id: T-350
 title: İstemci — panelde "Performans artışı" anahtarı (T-319 fling boost, varsayılan kapalı)
-status: review
+status: done
 phase: 7
 owner: android-client-dev
 depends_on: [T-319]
