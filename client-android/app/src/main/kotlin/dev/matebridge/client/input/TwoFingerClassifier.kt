@@ -28,13 +28,20 @@ object TwoFingerClassifier {
     /**
      * [baseDist]: finger distance at the baseline, [dist]: distance now, [common]: centroid travel since the
      * baseline, [slop]: scroll slop, [minDist]: floor of the baseline distance; all in the same unit.
+     * [pinchMinAbs]: absolute floor of the distance change for a pinch; [dominance]: how many times the centroid travel
+     * the distance change must be when both thresholds are crossed in one frame.
      */
-    fun classify(baseDist: Float, dist: Float, common: Float, slop: Float, minDist: Float): Kind? {
+    fun classify(
+        baseDist: Float, dist: Float, common: Float, slop: Float, minDist: Float,
+        pinchMinAbs: Float = 0f, dominance: Float = 2f,
+    ): Kind? {
         val dd = abs(dist - baseDist)
-        val pinch = dd / max(baseDist, minDist) >= PINCH_REL
+        // [pinchMinAbs] (T-349, pad): the distance change must also exceed an absolute floor, so a few mm of finger
+        // wobble during a scroll never counts as a pinch. 0 (touchscreen) keeps the relative rule alone.
+        val pinch = dd / max(baseDist, minDist) >= PINCH_REL && dd >= pinchMinAbs
         val scroll = common > slop
         return when {
-            pinch && scroll -> if (dd >= 2f * common) Kind.PINCH else Kind.SCROLL
+            pinch && scroll -> if (dd >= dominance * common) Kind.PINCH else Kind.SCROLL
             pinch -> Kind.PINCH
             scroll -> Kind.SCROLL
             else -> null

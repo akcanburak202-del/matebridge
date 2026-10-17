@@ -263,7 +263,7 @@ class PinchTest {
 
     @Test fun padSpreadIsAPinchFromTheTouchpadWithCenterZero() {
         padTwoDown()
-        val m = pad(PadAction.MOVE, 20, -1, f(0, 80f, 100f), f(1, 420f, 100f)) // 300 -> 340
+        val m = pad(PadAction.MOVE, 70, -1, f(0, 80f, 100f), f(1, 420f, 100f)) // 300 -> 340 (after the T-349 settle window)
         val p = m.filterIsInstance<Pinch>()
         assertEquals(listOf(Pinch.BEGAN, Pinch.CHANGED), p.map { it.phase })
         assertTrue(p.all { it.source == Pinch.SOURCE_TOUCHPAD && it.x == 0 && it.y == 0 })
@@ -272,7 +272,7 @@ class PinchTest {
         assertTrue(m.none { it is Scroll || it is PointerRel })
         assertTrue(rel.isPinching)
         assertTrue(rel.holdsState)
-        val next = pad(PadAction.MOVE, 30, -1, f(0, 60f, 100f), f(1, 440f, 100f)).filterIsInstance<Pinch>()
+        val next = pad(PadAction.MOVE, 80, -1, f(0, 60f, 100f), f(1, 440f, 100f)).filterIsInstance<Pinch>()
         assertEquals(380f / 340f - 1f, next.single().scale, 1e-5f)
     }
 
@@ -287,16 +287,16 @@ class PinchTest {
 
     @Test fun padPinchEndsWhenAFingerLiftsWhenBothLiftTogetherAndOnRelease() {
         padTwoDown()
-        pad(PadAction.MOVE, 20, -1, f(0, 80f, 100f), f(1, 420f, 100f))
-        val end = pad(PadAction.UP, 40, 1, f(0, 80f, 100f), f(1, 420f, 100f))
+        pad(PadAction.MOVE, 70, -1, f(0, 80f, 100f), f(1, 420f, 100f))
+        val end = pad(PadAction.UP, 90, 1, f(0, 80f, 100f), f(1, 420f, 100f))
         assertEquals(listOf(Pinch.ENDED), end.filterIsInstance<Pinch>().map { it.phase })
         assertFalse(rel.isPinching)
-        pad(PadAction.UP, 50, 0, f(0, 80f, 100f))
+        pad(PadAction.UP, 100, 0, f(0, 80f, 100f))
         // release()
         rel.reset()
         padTwoDownFresh()
-        pad(PadAction.MOVE, 20, -1, f(0, 80f, 100f), f(1, 420f, 100f))
-        val rl = rel.release(60).messages().filterIsInstance<Pinch>()
+        pad(PadAction.MOVE, 70, -1, f(0, 80f, 100f), f(1, 420f, 100f))
+        val rl = rel.release(110).messages().filterIsInstance<Pinch>()
         assertEquals(listOf(Pinch.ENDED), rl.map { it.phase })
         assertFalse(rel.holdsState)
     }
@@ -310,13 +310,13 @@ class PinchTest {
 
     @Test fun padPinchKeepaliveAndIdleEnd() {
         padTwoDown()
-        pad(PadAction.MOVE, 20, -1, f(0, 80f, 100f), f(1, 420f, 100f))
-        val ka = rel.tick(20 + PadTuning.SCROLL_KEEPALIVE_MS).messages().filterIsInstance<Pinch>()
+        pad(PadAction.MOVE, 70, -1, f(0, 80f, 100f), f(1, 420f, 100f))
+        val ka = rel.tick(70 + PadTuning.SCROLL_KEEPALIVE_MS).messages().filterIsInstance<Pinch>()
         assertEquals(listOf(Pinch.CHANGED), ka.map { it.phase })
         assertEquals(0f, ka[0].scale, 0f)
-        val end = rel.tick(20 + PadTuning.SCROLL_IDLE_END_MS).messages().filterIsInstance<Pinch>()
+        val end = rel.tick(70 + PadTuning.SCROLL_IDLE_END_MS).messages().filterIsInstance<Pinch>()
         assertEquals(listOf(Pinch.ENDED), end.map { it.phase })
-        assertTrue(rel.tick(20 + PadTuning.SCROLL_IDLE_END_MS + 500).isEmpty())
+        assertTrue(rel.tick(70 + PadTuning.SCROLL_IDLE_END_MS + 500).isEmpty())
         val again = pad(PadAction.MOVE, 6_000, -1, f(0, 60f, 100f), f(1, 440f, 100f)).filterIsInstance<Pinch>()
         assertEquals(listOf(Pinch.BEGAN, Pinch.CHANGED), again.map { it.phase })
     }
@@ -415,10 +415,10 @@ class PinchTest {
 
     @Test fun captureLossEndsAnOpenPadPinch() {
         padPair(0)
-        capPad(PadAction.MOVE, 30, -1, f(0, 80f, 100f), f(1, 420f, 100f))
+        capPad(PadAction.MOVE, 100, -1, f(0, 80f, 100f), f(1, 420f, 100f)) // after the T-349 settle window
         assertEquals(listOf("P1", "P2"), phases())
         sink.clearSent()
-        cap.onPointerCaptureLost(50)
+        cap.onPointerCaptureLost(120)
         assertEquals(listOf("P3"), phases())
     }
 
@@ -434,7 +434,7 @@ class PinchTest {
         cap.onSessionReset()
         sink.clearSent()
         padPair(3_000)
-        capPad(PadAction.MOVE, 3_030, -1, f(0, 80f, 100f), f(1, 420f, 100f))
+        capPad(PadAction.MOVE, 3_100, -1, f(0, 80f, 100f), f(1, 420f, 100f))
         assertEquals(listOf("P1", "P2"), phases())
     }
 

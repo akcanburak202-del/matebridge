@@ -14,6 +14,15 @@ object PadTuning {
     /** A touch that moves further than this fraction of the pad extent is not a tap; it also arms cursor motion and scrolling. */
     const val SLOP_FRAC = 0.02f
 
+    /** T-349: a pad pinch needs a distance change of at least this many scroll slops (extent * 4 percent). */
+    const val PINCH_MIN_SLOPS = 2f
+
+    /** T-349: when both thresholds are crossed in one frame, the distance change must be this many times the centroid travel. */
+    const val PINCH_DOMINANCE = 3f
+
+    /** T-349: after the second finger lands, no pinch decision for this long (contact points still settling). */
+    const val SETTLE_MS = 60L
+
     /** Fallback pad extent (raw units) when the device reports no motion range: NOTES 2026-09-29 measured x 174..1734. */
     const val DEFAULT_EXTENT = 1560f
 
@@ -160,6 +169,8 @@ class RelPointerTracker(private val counters: InputCounters = InputCounters()) {
     private var scroll = ScrollMode.NONE
     private var pinch = ScrollMode.NONE
     private var twoD0 = 0f
+    private var settleActive = false
+    private var settleUntilMs = 0L
     private var prevD = 0f
     private var lastScrollMs = 0L
     private var lastMotionMs = 0L
@@ -215,11 +226,12 @@ class RelPointerTracker(private val counters: InputCounters = InputCounters()) {
         if (before == 0 && n > 0) {
             gestureStartMs = nowMs; maxCount = 0; moved = false; clicked = false; locked = false; armed = false
             accX = 0f; accY = 0f; twoX = 0f; twoY = 0f; scroll = ScrollMode.NONE; pinch = ScrollMode.NONE
+            settleActive = false
             downPos.clear()
         }
         for (id in added) downPos[id] = next[id]!!.copyOf()
         if (n > maxCount) maxCount = n
-        if (n == 2 && before < 2) resetTwoBaseline()
+        if (n == 2 && before < 2) { resetTwoBaseline(); settleActive = true; settleUntilMs = nowMs + PadTuning.SETTLE_MS }
         if (n >= 3 || (before >= 2 && n in 1 until before)) {
             if (scroll != ScrollMode.NONE || pinch != ScrollMode.NONE) endScroll(timeUs, out)
             locked = true
@@ -280,8 +292,16 @@ class RelPointerTracker(private val counters: InputCounters = InputCounters()) {
             return
         }
         if (scroll == ScrollMode.NONE) {
-            twoX += dx; twoY += dy
-            val kind = TwoFingerClassifier.classify(twoD0, d, hypot(twoX, twoY), slop, extent * TwoFingerClassifier.MIN_DIST_FRAC) ?: return
+            twoX += dx; twoY += dy // motion during the settle window is kept and counts towards the decision
+            // Settle window: the contacts of a fresh second finger still move, so no PINCH can be decided yet and the
+            // distance baseline follows them; a scroll can be decided (no added latency).
+            val settling2 = settleActive && nowMs < settleUntilMs
+            if (settling2) { twoD0 = d; prevD = d } else settleActive = false
+            val kind = TwoFingerClassifier.classify(
+                twoD0, d, hypot(twoX, twoY), slop, extent * TwoFingerClassifier.MIN_DIST_FRAC,
+                pinchMinAbs = if (settling2) Float.MAX_VALUE else slop * PadTuning.PINCH_MIN_SLOPS,
+                dominance = PadTuning.PINCH_DOMINANCE,
+            ) ?: return
             moved = true
             lastScrollMs = nowMs; lastMotionMs = nowMs
             if (kind == TwoFingerClassifier.Kind.PINCH) {
