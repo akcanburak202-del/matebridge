@@ -79,6 +79,8 @@ class SettingsCatalogTest {
         override fun setCursorLocal(on: Boolean) { calls += "cursor $on"; v["cursor"] = on }
         override val clipboardShare get() = v["clip"] ?: true
         override fun setClipboardShare(on: Boolean) { calls += "clip $on"; v["clip"] = on }
+        override val perfBoost get() = v["perf"] ?: false
+        override fun setPerfBoost(on: Boolean) { calls += "perf $on"; v["perf"] = on }
         override val statsOverlay get() = v["stats"] ?: false
         override fun setStatsOverlay(on: Boolean) { calls += "stats $on"; v["stats"] = on }
         var clock = 1_000L
@@ -136,7 +138,7 @@ class SettingsCatalogTest {
         assertEquals(side - setOf("disconnect", "bitrate_applied", "hdr_applied", "colour_applied"), connect)
         assertEquals(
             listOf(
-                "transport", "disconnect", "forget_host", "remote_mode", "remote_profile", "remote_bitrate", "stream_mode", "frame_rate", "game_resolution", "bitrate", "bitrate_applied", "hdr", "hdr_applied", "colour", "colour_note", "colour_applied", "idle_dim", "cursor", "audio", "audio_out",
+                "transport", "disconnect", "forget_host", "remote_mode", "remote_profile", "remote_bitrate", "stream_mode", "frame_rate", "game_resolution", "bitrate", "bitrate_applied", "hdr", "hdr_applied", "colour", "colour_note", "colour_applied", "idle_dim", "cursor", "perf_boost", "perf_boost_note", "audio", "audio_out",
                 "touchpad_speed", "mouse_speed", "finger_off", "pen_trail", "pen_dot", "files", "files_root", "files_ro", "files_status", "files_remote",
                 "clipboard", "stats", "reset_defaults", "reset_hint", "shortcuts", "version",
             ),
@@ -616,5 +618,20 @@ class SettingsCatalogTest {
         ro.set(!ro.get())
         assertEquals("Salt okunur: açık", ro.text())
         assertEquals(listOf("files_root all", "files_root matebridge", "files_ro true"), h.calls)
+    }
+
+    @Test fun perfBoostToggle() { // T-350, decision 0039
+        val s = SettingsCatalog.sections(h, inStream = true)
+        val t = item(s, "perf_boost") as SettingItem.Toggle
+        assertEquals("Performans artışı: Kapalı", t.text())
+        assertFalse(t.hidden())
+        t.set(true)
+        assertEquals("Performans artışı: Açık", t.text())
+        assertEquals("Görüntü", s.first { sec -> sec.items.any { it.key == "perf_boost" } }.title)
+        val note = item(s, "perf_boost_note") as SettingItem.Info
+        assertEquals("Çözmeyi hızlandırır, pil tüketimi artabilir.", note.text())
+        h.remoteSession = true
+        assertTrue(t.hidden())
+        assertTrue(note.hidden())
     }
 }

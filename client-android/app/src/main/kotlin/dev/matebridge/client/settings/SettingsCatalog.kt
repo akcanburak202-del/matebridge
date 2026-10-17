@@ -93,6 +93,10 @@ interface SettingsHost {
     /** Persists the choice and tells the host (CURSOR_PREFS) when what it should do changed. Oyun always shows it in the video. */
     fun setCursorLocal(on: Boolean)
 
+    /** "Performans artışı" (decision 0039, T-350): stored; off by default; never runs in a remote session. */
+    val perfBoost: Boolean
+    fun setPerfBoost(on: Boolean)
+
     // Ses
     /** False with `--ez audio false`: no audio controls at all. */
     val audioAvailable: Boolean
@@ -219,6 +223,8 @@ sealed interface SettingItem {
         val onText: String = "açık",
         val offText: String = "kapalı",
         val marker: () -> String = { "" },
+        /** T-350: true while the button is not shown (e.g. "Performans artışı" in a remote session). */
+        val hidden: () -> Boolean = { false },
     ) : SettingItem {
         fun text() = "$title${marker()}: " + if (get()) onText else offText
     }
@@ -275,6 +281,8 @@ object SettingsCatalog {
 
     /** T-276 (decision 0036): where the Mac's cursor is drawn. */
     const val CURSOR_TITLE = "İmleç"
+    const val PERF_BOOST_TITLE = "Performans artışı"
+    const val PERF_BOOST_NOTE = "Çözmeyi hızlandırır, pil tüketimi artabilir."
     const val CURSOR_TABLET = "tablet"
     const val CURSOR_VIDEO = "video"
 
@@ -415,6 +423,8 @@ object SettingsCatalog {
                         hidden = { h.remoteSession }, // decision 0038: the remote profile always draws the cursor on the tablet
                     ) { id -> h.setCursorLocal(id != CURSOR_VIDEO) },
                 )
+                add(SettingItem.Toggle("perf_boost", PERF_BOOST_TITLE, { h.perfBoost }, { h.setPerfBoost(it) }, onText = "Açık", offText = "Kapalı", hidden = { h.remoteSession }))
+                add(SettingItem.Info("perf_boost_note", { h.remoteSession }) { PERF_BOOST_NOTE })
             },
         )
         if (h.audioAvailable) {
