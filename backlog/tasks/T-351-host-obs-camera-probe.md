@@ -1,7 +1,7 @@
 ---
 id: T-351
 title: Host deneme — OBS sanal kamera sink akışına dışarıdan kare yazılabiliyor mu?
-status: todo
+status: review
 phase: 7
 owner: mac-host-dev
 depends_on: []
@@ -32,6 +32,14 @@ Karar 0040'ın ön koşulu: MateBridge, ücretli developer hesabı olmadan OBS S
 
 ## Plan
 
+Tek dosyalık Swift CLI (`tools/obs-cam-probe/Sources/obs-cam-probe/main.swift`): CMIO cihaz listesi, OBS cihazını plist'teki `OBSCameraDeviceUUID` (yoksa ad) ile bul, yön=1 (sink) akışı seç (yoksa indeks 1), `CMIOStreamCopyBufferQueue` + `CMIODeviceStartStream`, BGRA CVPixelBuffer havuzu, desen çiz, `CMSimpleQueueEnqueue`, çıkışta `CMIODeviceStopStream`.
+
 ## Handoff
+
+- Dosyalar: tools/obs-cam-probe/{Package.swift,README.md,Sources/obs-cam-probe/main.swift}, bu kart.
+- Çalıştır: `cd tools/obs-cam-probe && swift build -c release && .build/release/obs-cam-probe --list` ; `.build/release/obs-cam-probe --pattern --seconds 60` (varsayılan 1920x1080 @30, BGRA; OBS 32.2.2 uzantısı bu biçimi sabit kullanıyor, `--size/--fps` deneme için).
+- Varsayımlar: OBS cihaz UUID'si `/Applications/OBS.app/Contents/PlugIns/mac-virtualcam.plugin/Contents/Info.plist` içindeki `OBSCameraDeviceUUID` (7626645E-4425-469E-9D8B-97E0FA59AC75); sink akışı `kCMIOStreamPropertyDirection==1`, yoksa OBS'teki gibi indeks 1. Örnek tampon enqueue'da +1 retain'le devredilir.
+- Doğrulanan: build geçti; uzantı henüz onaylı değilken `--list` 0 cihaz + "NOT FOUND" ipucu yazıp 0 ile çıkıyor, `--pattern` kısa hata + çıkış kodu 2. Kamera izni istenmedi, pencere açılmadı.
+- Doğrulanmadı: gerçek sink'e yazım (uzantı onayı + OBS'te sanal kamera bir kez başlatma gerekir), FaceTime/Photo Booth'ta görüntü, OBS açık/kapalı farkı. Uzantının sink akışı OBS başlatılana kadar var olmayabilir (CameraNotStarted yolu).
 
 ## Open questions
