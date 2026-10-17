@@ -1,7 +1,7 @@
 ---
 id: T-349
 title: İstemci — trackpad'de iki parmak kaydırma bazen pinch sanılıyor (kaydırma lehine sınıflandırma)
-status: review
+status: done
 phase: 7
 owner: android-client-dev
 depends_on: []

@@ -360,3 +360,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-346](tasks/T-346-host-remote-files.md) | Host — uzak oturumda tablet dosyaları (FILES_NET OPEN), tavan 0,5 MB/s | 7 | mac-host-dev | [] |
 | [T-347](tasks/T-347-client-remote-files.md) | İstemci — uzak oturumda tablet dosyaları (STANDBY), tavan 0,5 MB/s | 7 | android-client-dev | [] |
 | [T-348](tasks/T-348-client-low-bitrate-options.md) | İstemci — panelde 5 ve 8 Mbps bit hızı seçenekleri | 7 | android-client-dev | [] |
+| [T-349](tasks/T-349-client-pad-scroll-pinch-bias.md) | İstemci — trackpad'de iki parmak kaydırma bazen pinch sanılıyor (kaydırma lehine sınıflandırma) | 7 | android-client-dev | [] |
