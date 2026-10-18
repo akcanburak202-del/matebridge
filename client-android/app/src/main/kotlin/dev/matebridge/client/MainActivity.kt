@@ -91,6 +91,15 @@ import dev.matebridge.client.stream.RefreshMismatch
 import dev.matebridge.client.stream.StreamMode
 import dev.matebridge.client.overlay.PenOverlayView
 import dev.matebridge.client.cursor.CursorOverlayView
+import dev.matebridge.client.camera.AndroidCameraRunFactory
+import dev.matebridge.client.camera.CameraController
+import dev.matebridge.client.camera.CameraFacing
+import dev.matebridge.client.camera.CameraMath
+import dev.matebridge.client.camera.CameraMode
+import dev.matebridge.client.camera.CameraPrefsPolicy
+import dev.matebridge.client.camera.CameraStatusText
+import dev.matebridge.client.camera.CameraUiState
+import dev.matebridge.client.camera.CameraWish
 import dev.matebridge.client.cursor.CursorPrefsPolicy
 import dev.matebridge.client.stream.VideoLayout
 import dev.matebridge.client.stream.VideoViewport
@@ -223,6 +232,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var cursorOverlay: CursorOverlayView
     /** T-276: what the host is told about the local cursor, and the 1.5 s timeout back to the video cursor. UI thread only. */
     private val cursorPolicy = CursorPrefsPolicy()
+
+    // T-355 (decision 0040): the tablet camera as a Mac webcam. Null when the device has no camera or no H.264 encoder.
+    private var cameraController: CameraController? = null
+    private var cameraPermissionDenied = false
     private var cursorStatsMs = 0L
     private lateinit var statsView: TextView
     private val ui = Handler(Looper.getMainLooper())
@@ -547,6 +560,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val stallDiag = devKnobs.stallDiag
         cursorPolicy.setWish(CursorPrefsPolicy.wishOf(streamMode, settings.cursorLocal()), SystemClock.elapsedRealtime()) // T-276
         MbLog.i("stall_diag", "enabled=${if (stallDiag) 1 else 0}", "diag") // T-142
+        if (AndroidCameraRunFactory.supported(this)) {
+            cameraController = CameraController(
+                AndroidCameraRunFactory(this) { cameraDisplayDegrees() },
+                permissionGranted = { AndroidCameraRunFactory.hasPermission(this) },
+                onState = { ui.post { if (!isDestroyed) refreshSettings() } },
+                log = { warn, ev, fields -> if (warn) MbLog.w(ev, fields, "camera") else MbLog.i(ev, fields, "camera") },
+            )
+        }
         controller = SessionController(buildHello(), pairKeys, object : SessionListener {
             override fun onUi(state: SessionUi) { runOnUiThread { render(state) } }
             override fun onStreamConfig(config: StreamConfig) { runOnUiThread { installConfig(config) } }
@@ -634,7 +655,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             initialFiles = FilesInfo.OFF, // T-135: FILES_INFO once per session, READY when the server listens
             stallDiag = stallDiag, // T-142
             // T-259 (decision 0034): HELLO bit11 only while the full colour self-test has passed (read per connection)
-            helloCapabilities = { if (fullChromaOn()) Capabilities.FULL_CHROMA.toLong() else 0L },
+            helloCapabilities = {
+                (if (fullChromaOn()) Capabilities.FULL_CHROMA.toLong() else 0L) or
+                    (if (cameraController != null) Capabilities.CAMERA.toLong() else 0L) // T-355: bit15 only with a camera and an H.264 encoder
+            },
+            initialCamera = if (cameraController != null) cameraPrefsNow() else null, // T-355: CAMERA_PREFS right after each session is accepted
+            camera = cameraController,
             initialCursor = cursorPolicy.wire, // T-276: CURSOR_PREFS right after each session is accepted
             // T-339 (decision 0038 section 6): the remote PING rate follows held / recent input (engine thread; volatile reads)
             inputActive = { nowUs -> ::capture.isInitialized && RemoteTimings.inputActive(capture.holdsInput, capture.lastInputUs, nowUs) },
@@ -1125,6 +1151,17 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         override fun setFilesReadOnly(on: Boolean) { settings.setFilesReadOnly(on); files.rescope() } // T-190
         override val filesStatus get() = files.statusText
 
+        override val cameraAvailable get() = cameraController != null // T-355
+        override val cameraMode get() = settings.cameraMode()
+        override fun selectCameraMode(m: CameraMode) = setCameraMode(m)
+        override val cameraFacing get() = settings.cameraFacing()
+        override fun selectCameraFacing(f: CameraFacing) {
+            settings.setCameraFacing(f)
+            applyCameraWish()
+            refreshSettings()
+        }
+        override val cameraStatus get() = cameraStatusText()
+
         override val cursorLocal get() = settings.cursorLocal()
         override fun setCursorLocal(on: Boolean) { // T-276 (decision 0036)
             settings.setCursorLocal(on)
@@ -1176,6 +1213,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         streamMode = settings.streamMode()
         gameSettings.onModeChanged(streamMode)?.let { change -> applyGameLayer(change) }
         applyCursorWish() // T-276: the "İmleç" default (Tablette) and the mode's rule, before STREAM_PREFS
+        cameraPermissionDenied = false
+        applyCameraWish() // T-355: "Kamera" is Kapalı again
         sendStreamPrefs(gameSettings.prefs(streamMode))
         // T-234: idle dim back to its default (its key lives in IdleTimeoutStore, not Settings).
         idleStore.reset()
@@ -1321,6 +1360,60 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         cursorPolicy.timeoutMs = if (remoteSession) CursorPrefsPolicy.TIMEOUT_REMOTE_MS else CursorPrefsPolicy.TIMEOUT_MS
         cursorPolicy.setWish(wish, SystemClock.elapsedRealtime())?.let { cursorWireChanged(it, fallback = false) }
     }
+
+    // ---- T-355 (decision 0040): tablet camera ----
+
+    /** Display rotation from the natural orientation in degrees; read on the camera thread (a flip while streaming stays upright). */
+    @Suppress("DEPRECATION")
+    private fun cameraDisplayDegrees(): Int =
+        CameraMath.degreesOfSurfaceRotation(try { windowManager.defaultDisplay.rotation } catch (_: RuntimeException) { Surface.ROTATION_90 })
+
+    private fun cameraWish() = CameraWish(settings.cameraMode(), settings.cameraFacing())
+
+    /** The CAMERA_PREFS the host should see: Otomatik only with the permission and outside a remote session. */
+    private fun cameraPrefsNow() =
+        CameraPrefsPolicy.wire(cameraWish(), AndroidCameraRunFactory.hasPermission(this), remoteSession)
+
+    /** The setting, the permission or the session kind changed: tell the camera state machine and the host. */
+    private fun applyCameraWish() {
+        val cam = cameraController ?: return
+        cam.setWish(cameraWish())
+        controller.setCameraPrefs(cameraPrefsNow())
+    }
+
+    private fun setCameraMode(m: CameraMode) {
+        if (cameraController == null) return
+        settings.setCameraMode(m)
+        if (m == CameraMode.AUTO) {
+            cameraPermissionDenied = false
+            if (!AndroidCameraRunFactory.hasPermission(this)) {
+                requestPermissions(arrayOf(android.Manifest.permission.CAMERA), REQ_CAMERA) // the answer: onRequestPermissionsResult
+            }
+        }
+        applyCameraWish()
+        refreshSettings()
+    }
+
+    @Deprecated("Deprecated in Java")
+    @Suppress("DEPRECATION")
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != REQ_CAMERA || cameraController == null) return
+        val granted = grantResults.isNotEmpty() && grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED
+        MbLog.i("camera_permission", "granted=${if (granted) 1 else 0}", "camera")
+        if (!granted) { // the setting goes back to Kapalı and the status line says why
+            cameraPermissionDenied = true
+            settings.setCameraMode(CameraMode.OFF)
+        }
+        cameraController?.onPermissionChanged()
+        applyCameraWish()
+        refreshSettings()
+    }
+
+    private fun cameraStatusText(): String = CameraStatusText.text(
+        settings.cameraMode(), AndroidCameraRunFactory.hasPermission(this), cameraPermissionDenied,
+        cameraController?.uiState ?: CameraUiState.IDLE,
+    )
 
     /** The accepted session began or ended (from [render]): the layer follows; a session that ends resets the policy to the wish. */
     private fun onCursorSession(connected: Boolean) {
@@ -2088,6 +2181,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     override fun onStart() {
         super.onStart()
         started = true
+        cameraController?.setForeground(true) // T-355: a held START reopens the same cam_id
+        if (cameraController != null) applyCameraWish() // the permission may have changed in the system settings
         dev.matebridge.client.session.MbLog.i("activity_start")
         currentEndpoint = null
         manualMode = false
@@ -2411,6 +2506,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     override fun onStop() {
         started = false
+        cameraController?.setForeground(false) // T-355: camera, encoder, GL and socket closed at once
         syncPerfBoost() // T-350: no boost in the background
         promptVisibility.onStop()?.let { controller.setConfirmPromptVisible(it) } // T-151: the 2-min timer pauses
         ui.removeCallbacks(forgetSettle)
@@ -2448,6 +2544,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         ui.removeCallbacksAndMessages(null)
         perfBoost.shutdown() // T-350
         releaseRenderer()
+        cameraController?.onSessionEnd()
         controller.shutdown()
         if (::files.isInitialized) files.shutdown()
         audio?.shutdown()
@@ -2625,6 +2722,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }
         if (::files.isInitialized) files.setRemote(on) // T-347: the file rate cap is fixed 0.5 MB/s in a remote session
         applyCursorWish() // the remote profile always draws the cursor on the tablet (5 s timeout); the user's wish returns after it
+        applyCameraWish() // T-355: a remote session never uses the camera (CAMERA_PREFS OFF)
         if (::files.isInitialized) syncFiles()
         refreshSettings()
     }
@@ -3132,6 +3230,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private companion object {
+        /** T-355: request code of the camera permission prompt. */
+        const val REQ_CAMERA = 355
+
         /** T-090 bench, in the debug source set only (T-185): main code may not reference the class. */
         const val NET_BENCH_ACTIVITY = "dev.matebridge.client.bench.NetBenchActivity"
         const val RESET_DONE_TEXT =

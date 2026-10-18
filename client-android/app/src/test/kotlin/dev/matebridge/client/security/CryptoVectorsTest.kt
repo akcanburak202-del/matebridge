@@ -107,6 +107,14 @@ class CryptoVectorsTest {
             val viaSecrets = SessionSecrets(prk, pairing = false, hostId = ByteArray(16)).filesKeys(cn, hn)
             assertArrayEquals("$name SessionSecrets.filesKeys c2h", hex(m.getValue("key_files_c2h")), viaSecrets.c2h)
             assertArrayEquals("$name SessionSecrets.filesKeys h2c", hex(m.getValue("key_files_h2c")), viaSecrets.h2c)
+            // decision 0040: both nonces of a camera connection are in the info string
+            val ccn = inp("client_cam_nonce")
+            val chn = inp("host_cam_nonce")
+            assertArrayEquals("$name key_camera_c2h", hex(m.getValue("key_camera_c2h")), KeySchedule.cameraC2h(prk, ccn, chn))
+            assertArrayEquals("$name key_camera_h2c", hex(m.getValue("key_camera_h2c")), KeySchedule.cameraH2c(prk, ccn, chn))
+            val camViaSecrets = SessionSecrets(prk, pairing = false, hostId = ByteArray(16)).cameraKeys(ccn, chn)
+            assertArrayEquals("$name SessionSecrets.cameraKeys c2h", hex(m.getValue("key_camera_c2h")), camViaSecrets.c2h)
+            assertArrayEquals("$name SessionSecrets.cameraKeys h2c", hex(m.getValue("key_camera_h2c")), camViaSecrets.h2c)
             if (name == "pairing") {
                 assertArrayEquals("sas_bytes", hex(m.getValue("sas_bytes")), KeySchedule.sasBytes(prk))
                 assertEquals("sas", m.getValue("sas"), KeySchedule.sas(prk))
@@ -245,6 +253,29 @@ class CryptoVectorsTest {
     }
 
     @Test
+    fun cameraConnectionRecordsOfTheVectorsOpenAndSealWithTheDerivedKeys() {
+        @Suppress("UNCHECKED_CAST")
+        val frames = v["frames"] as List<Map<String, String>>
+        val m = mode("paired")
+        val cn = inp("client_cam_nonce")
+        val hn = inp("host_cam_nonce")
+        val ch = CameraChannel(SessionSecrets(hex(m.getValue("prk")), pairing = false, hostId = ByteArray(16)).cameraKeys(cn, hn))
+        // c2h counter 0: the proof PING (the first sealed record of a camera connection)
+        val c2h = frames.single { it.getValue("key") == m.getValue("key_camera_c2h") }
+        assertArrayEquals(
+            "camera c2h counter 0", hex(c2h.getValue("frame")),
+            ch.sealer.seal(c2h.getValue("type").removePrefix("0x").toInt(16), hex(c2h.getValue("payload"))),
+        )
+        // h2c counter 0: the Mac's first CAM_KEYFRAME_REQUEST decodes on the tablet's camera decoder
+        val h2c = frames.single { it.getValue("key") == m.getValue("key_camera_h2c") }
+        ch.decoder.feed(hex(h2c.getValue("frame")))
+        val msg = ch.decoder.next() as dev.matebridge.client.protocol.CamKeyframeRequest
+        assertEquals(dev.matebridge.client.protocol.CamKeyframeRequest.FRAMES_DROPPED, msg.reason)
+        assertTrue(!hex(m.getValue("key_camera_c2h")).contentEquals(hex(m.getValue("key_files_c2h"))))
+        assertTrue(!hex(m.getValue("key_camera_c2h")).contentEquals(hex(m.getValue("key_camera_h2c"))))
+    }
+
+    @Test
     fun filesChannelWipesTheKeyArraysItWasGiven() {
         val keys = FilesKeys(ByteArray(32) { 1 }, ByteArray(32) { 2 })
         FilesChannel(keys)
@@ -301,7 +332,7 @@ class CryptoVectorsTest {
     fun wipedSecretsRefuseToDeriveAnything() {
         val s = SessionSecrets(ByteArray(32) { 1 }, pairing = true, hostId = ByteArray(16))
         s.wipe()
-        for (f in listOf<() -> Any>({ s.sas() }, { s.newPairKey() }, { s.videoKeys(ByteArray(16)) }, { s.filesKeys(ByteArray(16), ByteArray(16)) })) {
+        for (f in listOf<() -> Any>({ s.sas() }, { s.newPairKey() }, { s.videoKeys(ByteArray(16)) }, { s.filesKeys(ByteArray(16), ByteArray(16)) }, { s.cameraKeys(ByteArray(16), ByteArray(16)) })) {
             try {
                 f(); fail()
             } catch (e: IllegalStateException) {

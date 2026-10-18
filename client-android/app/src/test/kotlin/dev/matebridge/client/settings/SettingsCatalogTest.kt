@@ -1,6 +1,8 @@
 package dev.matebridge.client.settings
 
 import dev.matebridge.client.audio.AudioOutPref
+import dev.matebridge.client.camera.CameraFacing
+import dev.matebridge.client.camera.CameraMode
 import dev.matebridge.client.files.FilesRoot
 import dev.matebridge.client.idle.IdleTimeout
 import dev.matebridge.client.session.SpeedRange
@@ -75,6 +77,12 @@ class SettingsCatalogTest {
         override val filesReadOnly get() = v["files_ro"] ?: false
         override fun setFilesReadOnly(on: Boolean) { calls += "files_ro $on"; v["files_ro"] = on }
         override var filesStatus = "Durum: kapalı"
+        override var cameraAvailable = false
+        override var cameraMode = CameraMode.OFF
+        override fun selectCameraMode(m: CameraMode) { calls += "camera ${m.id}"; cameraMode = m }
+        override var cameraFacing = CameraFacing.FRONT
+        override fun selectCameraFacing(f: CameraFacing) { calls += "camera_facing ${f.id}"; cameraFacing = f }
+        override var cameraStatus = "Mac kamerayı kullanmıyor"
         override val cursorLocal get() = v["cursor"] ?: true
         override fun setCursorLocal(on: Boolean) { calls += "cursor $on"; v["cursor"] = on }
         override val clipboardShare get() = v["clip"] ?: true
@@ -125,6 +133,33 @@ class SettingsCatalogTest {
         assertTrue(audio.text().startsWith("Ses (uzak oturum)"))
         h.remoteSession = false
         assertTrue(audio.text().startsWith("Ses:"))
+    }
+
+    /** T-355 (decision 0040): the "Kamera" section exists only on a device with a camera and is quiet in a remote session. */
+    @Test fun cameraSectionIsHiddenWithoutACameraAndInARemoteSession() {
+        h.cameraAvailable = false
+        assertFalse(SettingsCatalog.sections(h, inStream = true).any { it.title == "Kamera" })
+        h.cameraAvailable = true
+        val s = SettingsCatalog.sections(h, inStream = true)
+        assertEquals(listOf("Bağlantı", "Görüntü", "Kamera", "Ses", "Girdi", "Tablet dosyaları", "Diğer"), s.map { it.title })
+        val mode = choice(s, "camera_mode")
+        assertEquals(listOf("off", "auto"), mode.options.map { it.id })
+        assertEquals(listOf("Kapalı", "Otomatik"), mode.options.map { it.label })
+        assertEquals("off", mode.selected()) // the default is Kapalı
+        val facing = choice(s, "camera_facing")
+        assertEquals(listOf("Ön", "Arka"), facing.options.map { it.label })
+        assertEquals("front", facing.selected()) // the default is Ön
+        val status = item(s, "camera_status") as SettingItem.Info
+        assertEquals("Mac kamerayı kullanmıyor", status.text())
+        mode.select("auto")
+        facing.select("back")
+        assertEquals(listOf("camera auto", "camera_facing back"), h.calls.takeLast(2))
+        assertEquals("auto", mode.selected())
+        assertFalse(mode.hidden())
+        h.remoteSession = true
+        assertTrue(mode.hidden())
+        assertTrue(facing.hidden())
+        assertEquals("Uzak oturumda kamera kapalı.", status.text())
     }
 
     @Test fun sectionsInOrder() {

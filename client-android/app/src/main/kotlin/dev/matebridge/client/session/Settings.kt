@@ -74,6 +74,16 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
 
     fun setPerfBoost(on: Boolean) = store.putString(KEY_PERF_BOOST, if (on) "1" else "0")
 
+    /** "Kamera" (T-355, decision 0040): Kapalı by default, also for an unknown stored value. */
+    fun cameraMode(): dev.matebridge.client.camera.CameraMode = dev.matebridge.client.camera.CameraMode.parse(store.getString(KEY_CAMERA_MODE))
+
+    fun setCameraMode(m: dev.matebridge.client.camera.CameraMode) = store.putString(KEY_CAMERA_MODE, m.id)
+
+    /** "Kamera yönü" (T-355): Ön by default, also for an unknown stored value. */
+    fun cameraFacing(): dev.matebridge.client.camera.CameraFacing = dev.matebridge.client.camera.CameraFacing.parse(store.getString(KEY_CAMERA_FACING))
+
+    fun setCameraFacing(f: dev.matebridge.client.camera.CameraFacing) = store.putString(KEY_CAMERA_FACING, f.id)
+
     /** Whether the on-screen statistics overlay is enabled (default off). */
     fun statsOverlay(): Boolean = store.getString(KEY_STATS) == "1"
 
@@ -261,7 +271,7 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
             KEY_STATS, KEY_STREAM_MODE, KEY_BITRATE, KEY_PAD_SPEED, KEY_MOUSE_SPEED, KEY_CLIPBOARD, KEY_FILES,
             KEY_FILES_ROOT, KEY_FILES_RO, KEY_AUDIO, KEY_AUDIO_OUT, KEY_PEN_TRAIL, KEY_PEN_DOT, KEY_FINGER_OFF,
             KEY_TRANSPORT, KEY_GAME_RESOLUTION, KEY_FPS_DAILY, KEY_FPS_GAME, KEY_HDR_GAME, KEY_HDR_DAILY, KEY_CURSOR, KEY_REMOTE_BITRATE, KEY_REMOTE_AUDIO,
-            KEY_PERF_BOOST,
+            KEY_PERF_BOOST, KEY_CAMERA_MODE, KEY_CAMERA_FACING,
         )
 
         const val KEY_DEVICE_ID = "device_id"
@@ -291,6 +301,8 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
         const val KEY_FINGER_OFF = "finger_touch_disabled"
         const val KEY_CURSOR = "cursor_local"
         const val KEY_PERF_BOOST = "perf_boost"
+        const val KEY_CAMERA_MODE = "camera_mode"
+        const val KEY_CAMERA_FACING = "camera_facing"
     }
 }
 

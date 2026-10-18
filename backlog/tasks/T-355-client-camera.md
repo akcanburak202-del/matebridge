@@ -1,7 +1,7 @@
 ---
 id: T-355
 title: İstemci — tablet kamerası: panel ayarı, Camera2 → H.264, kamera bağlantısı
-status: todo
+status: review
 phase: 7
 owner: android-client-dev
 depends_on: []
@@ -35,6 +35,11 @@ Karar 0040 (ek 2026-10-18) ve PROTOCOL.md'deki kamera bölümü (dal `task/T-353
 - Cihaz testi orkestratörde. Tablete dokunma.
 
 ## Plan
+
+1. Kodek: `CameraPrefs`, `CameraControl`, `CamHello`, `CamHelloAck`, `CamFrame`, `CamKeyframeRequest` + `Capabilities.CAMERA` (bit15); `KeySchedule.cameraC2h/H2c`, `SessionSecrets.cameraKeys`, `CameraChannel`; fixture ve kripto testleri.
+2. Saf mantik (`camera/`): `CameraWish`/`CameraPrefsPolicy` (uzakta ve izinsizken OFF), `CameraMath` (donus, GL matrisi, boyut/fps secimi), `CamSendQueue` (<=2 kare, keyframe kapisi, config onde), `CameraConnection` (el sikisma, kanit PING, yazici/okuyucu), `CameraStreamer` (3 yeniden deneme, istatistik), `CameraController` (CAMERA_CONTROL durum makinesi).
+3. Android: `Camera2Pipeline` (Camera2 -> SurfaceTexture -> `GlEncoderSurface` -> H.264 MediaCodec yuzey girdisi), `AndroidCameraRunFactory`.
+4. Oturum: `SessionMachine` (`SetCamera`, CAMERA_PREFS kabulden sonra, `CameraControlReceived`), `SessionController` (oturum sonunda `camera.onSessionEnd()`), `MainActivity` (izin istemi, onStart/onStop, HELLO bit15, ayarlar), `Settings` + `SettingsCatalog` ("Kamera" bolumu, yalniz Choice/Info).
 
 ## Handoff
 
