@@ -54,6 +54,7 @@ class Camera2Pipeline(
     private var gl: GlEncoderSurface? = null
     private var st: SurfaceTexture? = null
     private var camSurface: Surface? = null
+    private var encSurface: Surface? = null // T-357 r3: the encoder's input surface, owned here, released in teardown
     private var device: CameraDevice? = null
     private var session: CameraCaptureSession? = null
     private var facing = CameraFacing.FRONT
@@ -125,9 +126,10 @@ class Camera2Pipeline(
             codec = enc.codec
             outW = enc.w
             outH = enc.h
-            val encSurface = enc.codec.createInputSurface()
+            val encIn = enc.codec.createInputSurface()
+            encSurface = encIn
             enc.codec.start()
-            val g = GlEncoderSurface(encSurface)
+            val g = GlEncoderSurface(encIn)
             gl = g
             val t = SurfaceTexture(g.texId)
             t.setDefaultBufferSize(srcW, srcH)
@@ -211,7 +213,7 @@ class Camera2Pipeline(
             override fun onOpened(d: CameraDevice) {
                 if (stopRequested.get() || released || !openGen.isCurrent(gen)) { d.close(); return } // stale: a switch came first
                 device = d
-                createSession(d)
+                createSession(d, gen)
             }
 
             override fun onDisconnected(d: CameraDevice) {
@@ -230,7 +232,7 @@ class Camera2Pipeline(
         }, handler)
     }
 
-    private fun createSession(d: CameraDevice) {
+    private fun createSession(d: CameraDevice, gen: Int) {
         val surface = camSurface ?: return
         val h = handler ?: return
         try {
@@ -261,7 +263,9 @@ class Camera2Pipeline(
                     }
 
                     override fun onConfigureFailed(s: CameraCaptureSession) {
-                        if (!stopRequested.get()) fail("session")
+                        // T-357 r3: a late failure of an old session (after a facing switch) must not kill the new stream
+                        if (stopRequested.get() || released || device !== d || !openGen.isCurrent(gen)) { try { s.close() } catch (_: RuntimeException) {}; return }
+                        fail("session")
                     }
                 },
             )
@@ -341,6 +345,8 @@ class Camera2Pipeline(
             camSurface = null
             try { gl?.release() } catch (_: RuntimeException) {}
             gl = null
+            try { encSurface?.release() } catch (_: RuntimeException) {} // after the EGL surface on it is gone
+            encSurface = null
             codec?.let { c ->
                 try { c.stop() } catch (_: RuntimeException) {}
                 try { c.release() } catch (_: RuntimeException) {}
