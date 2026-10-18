@@ -53,6 +53,10 @@ private func schedule(paired: Bool) throws -> SessionKeySchedule {
                                              hostNonce: v.bytes("inputs", "host_files_nonce")))
         #expect(files.c2h.bytes == v.bytes("paired", "key_files_c2h"))
         #expect(files.h2c.bytes == v.bytes("paired", "key_files_h2c"))
+        let camera = try #require(s.cameraKeys(clientNonce: v.bytes("inputs", "client_cam_nonce"),
+                                               hostNonce: v.bytes("inputs", "host_cam_nonce")))
+        #expect(camera.c2h.bytes == v.bytes("paired", "key_camera_c2h"))
+        #expect(camera.h2c.bytes == v.bytes("paired", "key_camera_h2c"))
         #expect(s.pairingCode == nil && s.newPairKey == nil)
     }
 
@@ -71,6 +75,10 @@ private func schedule(paired: Bool) throws -> SessionKeySchedule {
                                              hostNonce: v.bytes("inputs", "host_files_nonce")))
         #expect(files.c2h.bytes == v.bytes("pairing", "key_files_c2h"))
         #expect(files.h2c.bytes == v.bytes("pairing", "key_files_h2c"))
+        let camera = try #require(s.cameraKeys(clientNonce: v.bytes("inputs", "client_cam_nonce"),
+                                               hostNonce: v.bytes("inputs", "host_cam_nonce")))
+        #expect(camera.c2h.bytes == v.bytes("pairing", "key_camera_c2h"))
+        #expect(camera.h2c.bytes == v.bytes("pairing", "key_camera_h2c"))
         #expect(KDF.expand(prk: v.bytes("pairing", "prk"), info: "MB1 sas", count: 4) == v.bytes("pairing", "sas_bytes"))
         #expect(s.pairingCode?.digits == v.string("pairing", "sas"))
         #expect(s.newPairKey?.bytes == v.bytes("pairing", "new_pair_key"))
@@ -119,7 +127,7 @@ private func schedule(paired: Bool) throws -> SessionKeySchedule {
 
     @Test func fileConnectionFramesDecodeUnderTheFileKeys() throws {
         let frames = v.frames
-        #expect(frames.count == 7)
+        #expect(frames.count == 9)
         // c2h counter 0: the proof PING; counter 1: the tablet's first reply FILES_DATA. h2c counter 0: the host's request.
         var c2h = RecordDecoder(key: SecretBytes(frames[4].key), connection: .files)
         c2h.append(frames[4].frame + frames[6].frame)
@@ -136,6 +144,72 @@ private func schedule(paired: Bool) throws -> SessionKeySchedule {
         #expect(throws: CryptoError.authenticationFailed) { try wrong.nextMessage() }
         #expect(frames[4].key != frames[5].key)
         #expect(frames[4].key != v.frames[0].key)
+    }
+
+    @Test func cameraConnectionFramesDecodeUnderTheCameraKeys() throws {
+        let frames = v.frames
+        // c2h counter 0: the proof PING. h2c counter 0: the host's CAM_KEYFRAME_REQUEST(FRAMES_DROPPED).
+        var c2h = RecordDecoder(key: SecretBytes(frames[7].key), connection: .camera)
+        c2h.append(frames[7].frame)
+        #expect(try c2h.nextMessage() == .ping(Ping(seq: 1, senderTimeUs: 1_127_500_200_000)))
+        #expect(try c2h.nextMessage() == nil)
+        var h2c = RecordDecoder(key: SecretBytes(frames[8].key), connection: .camera)
+        h2c.append(frames[8].frame)
+        #expect(try h2c.nextMessage() == .camKeyframeRequest(.framesDropped))
+        // The camera keys are their own keys: never the control or file keys.
+        #expect(frames[7].key != frames[8].key)
+        #expect(Set(frames[0...6].map(\.key)).isDisjoint(with: [frames[7].key, frames[8].key]))
+        var wrong = RecordDecoder(key: SecretBytes(frames[8].key), connection: .camera)
+        wrong.append(frames[7].frame)
+        #expect(throws: CryptoError.authenticationFailed) { try wrong.nextMessage() }
+    }
+
+    @Test func cameraKeysDependOnBothNoncesAndDieWithThePrk() throws {
+        let s = try schedule(paired: true)
+        let client = v.bytes("inputs", "client_cam_nonce"), host = v.bytes("inputs", "host_cam_nonce")
+        let base = try #require(s.cameraKeys(clientNonce: client, hostNonce: host))
+        var otherHost = host
+        otherHost[0] ^= 1
+        var otherClient = client
+        otherClient[15] ^= 1
+        let a = try #require(s.cameraKeys(clientNonce: client, hostNonce: otherHost))
+        let b = try #require(s.cameraKeys(clientNonce: otherClient, hostNonce: host))
+        #expect(a.c2h != base.c2h && a.h2c != base.h2c)
+        #expect(b.c2h != base.c2h && b.h2c != base.h2c)
+        // Same nonces as a file connection are still other keys (the info string differs).
+        let asFiles = try #require(s.filesKeys(clientNonce: client, hostNonce: host))
+        #expect(asFiles.c2h.bytes != base.c2h.bytes)
+        #expect(s.cameraKeys(clientNonce: [1, 2, 3], hostNonce: host) == nil)
+        s.wipe()
+        #expect(s.cameraKeys(clientNonce: client, hostNonce: host) == nil)
+        #expect(base.c2h.bytes == v.bytes("paired", "key_camera_c2h"))
+    }
+
+    @Test func cameraRecordsCarryTheFullCameraPayloadLimit() throws {
+        let s = try schedule(paired: true)
+        let keys = try #require(s.cameraKeys(clientNonce: v.bytes("inputs", "client_cam_nonce"),
+                                             hostNonce: v.bytes("inputs", "host_cam_nonce")))
+        var sealer = RecordSealer(key: keys.c2h, maxPayload: ProtocolConstants.maxCameraPayload)
+        var decoder = RecordDecoder(key: keys.c2h, connection: .camera)
+        let biggest = Message.camFrame(CamFrame(frameSeq: 9, captureTimeUs: 1, flags: .keyframe,
+                                                data: [UInt8](repeating: 0x5a, count: CamFrame.maxDataBytes)))
+        let record = try biggest.sealed(using: &sealer)
+        #expect(record.count == 4 + 20 + CamFrame.maxDataBytes + ProtocolConstants.recordOverhead)
+        var offset = 0
+        while offset < record.count {
+            let end = min(offset + FrameDecoder.maxReadChunk, record.count)
+            decoder.append(Array(record[offset..<end]))
+            offset = end
+        }
+        #expect(try decoder.nextMessage() == biggest)
+        #expect(throws: ProtocolError.invalidField("frame_size")) {
+            try Message.camFrame(CamFrame(frameSeq: 0, captureTimeUs: 0, flags: [],
+                                          data: [UInt8](repeating: 0, count: CamFrame.maxDataBytes + 1)))
+                .sealed(using: &sealer)
+        }
+        #expect(throws: ProtocolError.invalidField("frame_size")) {
+            try Message.camFrame(CamFrame(frameSeq: 0, captureTimeUs: 0, flags: [], data: [])).sealed(using: &sealer)
+        }
     }
 
     @Test func fileKeysDependOnBothNoncesAndDieWithThePrk() throws {
@@ -193,7 +267,7 @@ private func schedule(paired: Bool) throws -> SessionKeySchedule {
             for position in 0..<f.frame.count {
                 var bad = f.frame
                 bad[position] ^= 0x01
-                let connection: FrameDecoder.Connection = index == 3 ? .video : (index >= 4 ? .files : .control)
+                let connection: FrameDecoder.Connection = index == 3 ? .video : (index >= 7 ? .camera : (index >= 4 ? .files : .control))
                 var d = RecordDecoder(key: SecretBytes(f.key), connection: connection, startingCounter: f.counter)
                 d.append(bad)
                 do {

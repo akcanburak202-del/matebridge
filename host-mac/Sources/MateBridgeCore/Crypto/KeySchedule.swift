@@ -20,6 +20,12 @@ public struct FilesKeys: Equatable, Sendable {
     public let h2c: SecretBytes
 }
 
+/// Keys of the tablet camera connection (decision 0040), derived like `FilesKeys` from the two camera nonces.
+public struct CameraKeys: Equatable, Sendable {
+    public let c2h: SecretBytes
+    public let h2c: SecretBytes
+}
+
 /// The per-connection ephemeral P-256 key pair.
 public struct EphemeralKeyPair: @unchecked Sendable {
     private let key: P256.KeyAgreement.PrivateKey
@@ -121,6 +127,17 @@ public struct SessionKeySchedule: Sendable {
         return FilesKeys(
             c2h: SecretBytes(KDF.expand(prk: prk, info: "MB1 files c2h", extra: extra, count: Self.keySize)),
             h2c: SecretBytes(KDF.expand(prk: prk, info: "MB1 files h2c", extra: extra, count: Self.keySize)))
+    }
+
+    /// Keys for the camera connection: `Expand(prk, "MB1 camera c2h|h2c" || client_cam_nonce || host_cam_nonce, 32)`
+    /// (PROTOCOL.md 9). nil after `wipe()` or when a nonce is not 16 bytes. Both nonces are fresh per connection.
+    public func cameraKeys(clientNonce: [UInt8], hostNonce: [UInt8]) -> CameraKeys? {
+        guard clientNonce.count == ProtocolConstants.nonceSize, hostNonce.count == ProtocolConstants.nonceSize,
+              let prk = secret.bytes else { return nil }
+        let extra = clientNonce + hostNonce
+        return CameraKeys(
+            c2h: SecretBytes(KDF.expand(prk: prk, info: "MB1 camera c2h", extra: extra, count: Self.keySize)),
+            h2c: SecretBytes(KDF.expand(prk: prk, info: "MB1 camera h2c", extra: extra, count: Self.keySize)))
     }
 
     /// Zeroes the `prk`. Video and file keys can no longer be derived; already handed-out keys are unaffected.

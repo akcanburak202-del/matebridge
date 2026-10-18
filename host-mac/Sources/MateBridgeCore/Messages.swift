@@ -136,6 +136,9 @@ public struct Capabilities: OptionSet, Sendable {
     public static let localCursor = Capabilities(rawValue: 1 << 13)
     /// The client decodes `AUDIO_CONFIG.format = 2` (AAC-LC 48 kHz stereo) and writes `AUDIO_PREFS.codec` (decision 0038).
     public static let audioAAC = Capabilities(rawValue: 1 << 14)
+    /// The client can send its camera as H.264: it sends `CAMERA_PREFS`, handles `CAMERA_CONTROL` and opens the camera
+    /// connection (decision 0040).
+    public static let camera = Capabilities(rawValue: 1 << 15)
 }
 
 public struct PenFlags: OptionSet, Sendable {

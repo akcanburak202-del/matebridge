@@ -2,6 +2,8 @@ package dev.matebridge.client.settings
 
 import dev.matebridge.client.BuildInfo
 import dev.matebridge.client.audio.AudioOutPref
+import dev.matebridge.client.camera.CameraFacing
+import dev.matebridge.client.camera.CameraMode
 import dev.matebridge.client.files.FilesRoot
 import dev.matebridge.client.protocol.StreamConfig
 import dev.matebridge.client.idle.IdleTimeout
@@ -96,6 +98,24 @@ interface SettingsHost {
     /** "Performans artışı" (decision 0039, T-350): stored; off by default; never runs in a remote session. */
     val perfBoost: Boolean
     fun setPerfBoost(on: Boolean)
+
+    // Kamera (decision 0040, T-355)
+    /** The tablet can send its camera (a camera and an H.264 encoder); false hides the whole "Kamera" section. */
+    val cameraAvailable: Boolean get() = false
+    /** "Kamera": Kapalı (default) or Otomatik; stored. */
+    val cameraMode: CameraMode get() = CameraMode.OFF
+    /** Persists the choice and tells the Mac (CAMERA_PREFS); the first Otomatik asks for the camera permission. */
+    fun selectCameraMode(m: CameraMode) {}
+    val cameraFacing: CameraFacing get() = CameraFacing.FRONT
+    /** T-358: the device has a rear wide-angle camera; false hides the "Geniş açı" option. */
+    val cameraWideAvailable: Boolean get() = false
+    fun selectCameraFacing(f: CameraFacing) {}
+    /** True while the camera streams to the Mac (T-357): shows "Kamerayı şimdi kapat". */
+    val cameraStreaming: Boolean get() = false
+    /** "Kamerayı şimdi kapat": the Mac stops the camera and leaves it off until the apps stop using it. */
+    fun releaseCamera() {}
+    /** The small status line under the camera rows ("Mac kamerayı kullanmıyor", "Kamera açık", ...). */
+    val cameraStatus: String get() = ""
 
     // Ses
     /** False with `--ez audio false`: no audio controls at all. */
@@ -238,7 +258,17 @@ sealed interface SettingItem {
         val inc: () -> Unit,
     ) : SettingItem
 
-    class Action(override val key: String, val title: String, val run: () -> Unit) : SettingItem
+    /**
+     * [inline] (T-357): the row stays in its section instead of joining the actions at the bottom; [hidden] hides it
+     * while it does not apply.
+     */
+    class Action(
+        override val key: String,
+        val title: String,
+        val inline: Boolean = false,
+        val hidden: () -> Boolean = { false },
+        val run: () -> Unit,
+    ) : SettingItem
 
     /** Read-only text; [hidden] (T-238) while it is not shown. */
     class Info(override val key: String, val hidden: () -> Boolean = { false }, val text: () -> String) : SettingItem
@@ -288,6 +318,10 @@ object SettingsCatalog {
 
     /** What the "İmleç" title shows: in Oyun the setting is kept but the game draws its own cursor (the video's). */
     fun cursorMarker(mode: StreamMode) = if (mode.isGame) " (Oyun modunda görüntüde)" else ""
+
+    /** Decision 0038: no camera in a remote session. */
+    const val CAMERA_RELEASE_TITLE = "Kamerayı şimdi kapat"
+    const val CAMERA_REMOTE_TEXT = "Uzak oturumda kamera kapalı."
 
     const val RESET_TITLE = "Varsayılanlara dön"
     const val RESET_IDLE = "Tüm ayarları varsayılana döndürür; Mac eşleşmesi korunur."
@@ -427,6 +461,30 @@ object SettingsCatalog {
                 add(SettingItem.Info("perf_boost_note", { h.remoteSession }) { PERF_BOOST_NOTE })
             },
         )
+        if (h.cameraAvailable) {
+            out += SettingsSection(
+                "Kamera",
+                listOf(
+                    SettingItem.Choice(
+                        "camera_mode", "Kamera",
+                        CameraMode.entries.map { SettingItem.Option(it.id, it.label) },
+                        { h.cameraMode.id },
+                        hidden = { h.remoteSession }, // decision 0038: the remote profile never uses the camera
+                    ) { id -> h.selectCameraMode(CameraMode.parse(id)) },
+                    SettingItem.Choice(
+                        "camera_facing", "Kamera yönü",
+                        CameraFacing.entries.filter { it != CameraFacing.BACK_WIDE || h.cameraWideAvailable }.map { SettingItem.Option(it.id, it.label) },
+                        { h.cameraFacing.id },
+                        hidden = { h.remoteSession },
+                    ) { id -> h.selectCameraFacing(CameraFacing.parse(id)) },
+                    SettingItem.Info("camera_status") { if (h.remoteSession) CAMERA_REMOTE_TEXT else h.cameraStatus },
+                    SettingItem.Action(
+                        "camera_release", CAMERA_RELEASE_TITLE, inline = true,
+                        hidden = { h.remoteSession || !inStream || !h.cameraStreaming },
+                    ) { h.releaseCamera() },
+                ),
+            )
+        }
         if (h.audioAvailable) {
             out += SettingsSection(
                 "Ses",

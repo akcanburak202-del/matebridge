@@ -6,11 +6,14 @@ public struct FrameDecoder: Sendable {
     public enum Connection: Sendable {
         /// `.files`: a Wi-Fi file connection (decision 0035); the same payload limit as the control connection.
         case control, video, files
+        /// `.camera`: the tablet camera connection (decision 0040); payload limit 4 MiB for `CAM_FRAME`.
+        case camera
 
         public var maxPayload: Int {
             switch self {
             case .control, .files: ProtocolConstants.maxControlPayload
             case .video: ProtocolConstants.maxVideoPayload
+            case .camera: ProtocolConstants.maxCameraPayload
             }
         }
     }

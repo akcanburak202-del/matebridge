@@ -14,6 +14,9 @@ import dev.matebridge.client.protocol.AudioPrefs
 import dev.matebridge.client.protocol.Bye
 import dev.matebridge.client.protocol.Clipboard
 import dev.matebridge.client.protocol.Codec
+import dev.matebridge.client.camera.CameraController
+import dev.matebridge.client.camera.CameraSessionCtx
+import dev.matebridge.client.protocol.CameraPrefs
 import dev.matebridge.client.protocol.CursorPrefs
 import dev.matebridge.client.protocol.CursorShape
 import dev.matebridge.client.protocol.CursorState
@@ -181,6 +184,10 @@ class SessionController(
     private val helloCapabilities: () -> Long = { 0L },
     /** T-276 (decision 0036): CURSOR_PREFS wish at start; null = this client never draws the cursor, CURSOR_PREFS never sent. */
     initialCursor: Boolean? = null,
+    /** T-355 (decision 0040): CAMERA_PREFS wish at start; null = this client has no camera. */
+    initialCamera: CameraPrefs? = null,
+    /** T-355: the camera state machine fed with `CAMERA_CONTROL`; closed with every session end. Null = no camera. */
+    private val camera: CameraController? = null,
     /**
      * Decision 0038: whether input is active at the given `nanoTime/1000` (held, or an event less than 2 s ago); the
      * engine thread reads it per tick of a remote session to pick the 500 ms or 2 s PING rate. Must be cheap and thread-safe.
@@ -197,6 +204,7 @@ class SessionController(
         hello, initialPrefs, knobs.pingIntervalUs, initialAudio, initialFiles, trust,
         recordAuthenticated = { gen -> recordAuthenticated(gen) },
         initialCursor = initialCursor,
+        initialCamera = initialCamera,
         inputActive = inputActive,
     ) { level, ev, fields -> emit(LogLine(level, ev, fields)) }
 
@@ -408,6 +416,16 @@ class SessionController(
         mail.forget.post(SessionMachine.Event.ForgetFilesNet(requestId))
     }
 
+    /**
+     * Non-blocking. T-355 (decision 0040): the camera wish the host should see (setting + permission combined, see
+     * `CameraPrefsPolicy`); remembered for later sessions, sent as CAMERA_PREFS when accepted and on change. Any thread.
+     */
+    fun setCameraPrefs(prefs: CameraPrefs) {
+        if (terminated.get()) return
+        ensureEngine()
+        mail.camera.post(SessionMachine.Event.SetCamera(prefs))
+    }
+
     /** Non-blocking. T-135: the file server's state; sent as FILES_INFO when accepted and on change. Any thread. */
     fun setFilesInfo(info: FilesInfo, scope: dev.matebridge.client.files.FilesServerScope) {
         if (terminated.get()) return
@@ -538,6 +556,7 @@ class SessionController(
         } finally {
             stallDetector?.stop()
             closeFilesTunnel("shutdown")
+            camera?.onSessionEnd()
             control?.closeGracefully()
             candidate?.abort()
             retired?.abort()
@@ -608,6 +627,7 @@ class SessionController(
                     is DisplayRate -> MbLog.i("display_rate_sent", "hz=${m.hz}")
                     is StreamPrefs -> MbLog.i("stream_prefs_sent", "fps=${m.fps} scale=${m.scalePermille} bitrate_kbps=${m.bitrateKbps}")
                     is AudioPrefs -> MbLog.i("audio_prefs_sent", "enabled=${if (m.enabled) 1 else 0} codec=${m.codec}")
+                    is CameraPrefs -> MbLog.i("camera_prefs_sent", "mode=${m.mode} facing=${m.facing}", "camera")
                     is CursorPrefs -> MbLog.i("cursor_prefs_sent", "enabled=${if (m.enabled) 1 else 0}") // T-276
                     is FilesInfo -> MbLog.i("files_info_sent", "state=${m.state} port=${m.port}") // never the token
                     else -> Unit
@@ -618,6 +638,7 @@ class SessionController(
             }
             is SessionMachine.Action.CloseControl -> {
                 closeFilesTunnel("session_end") // before the keys are wiped: no file connection outlives its session
+                camera?.onSessionEnd() // T-355: nor the camera (camera, encoder, GL, socket)
                 control?.let { if (a.graceful) it.closeGracefully() else it.abort() }
                 control = null
                 stallDetector?.stop()
@@ -672,6 +693,7 @@ class SessionController(
             }
             SessionMachine.Action.RetireControl -> {
                 closeFilesTunnel("session_end") // a migration is a new host session: it starts without file connections
+                camera?.onSessionEnd() // T-355: and without the camera (the new session's host decides again)
                 // No BYE and no more input; queued messages still drain. The host closes it on our takeover proof.
                 retired?.closeGracefully()
                 retired = control
@@ -715,6 +737,15 @@ class SessionController(
                 // the host's file listener port is no secret; the pool sizes are the sanitised ones
                 MbLog.i("files_net_recv", "state=${a.msg.state} port=${a.msg.port} pool=${a.msg.pool} max=${a.msg.max} req=${a.requestId}", "files")
                 listener.onFilesNet(a.msg, a.gen, a.requestId)
+            }
+            is SessionMachine.Action.CameraControlReceived -> {
+                val secrets = control?.takeIf { it.gen == a.gen }?.secrets
+                if (camera == null || secrets == null) {
+                    MbLog.w("camera_no_keys", "state=${a.msg.state}", "camera")
+                } else {
+                    MbLog.i("camera_control_recv", "state=${a.msg.state} cam_id=${a.msg.camId} size=${a.msg.width}x${a.msg.height} fps=${a.msg.fps}", "camera")
+                    camera.onControl(a.msg, CameraSessionCtx(a.gen, a.host, a.sessionId, secrets))
+                }
             }
             is SessionMachine.Action.FilesTunnel -> {
                 closeFilesTunnel("plan")
@@ -1168,6 +1199,7 @@ class SessionController(
             is SessionMachine.Event.SetRemote -> LogLine('I', "remote_profile_set", "bitrate_kbps=${e.profile.bitrateKbps} audio=${if (e.profile.audio) 1 else 0}")
             is SessionMachine.Event.SetCursor -> null // T-276: `cursor_prefs_sent` is logged when it actually goes out
             is SessionMachine.Event.ForgetFilesNet -> LogLine('I', "files_net_forget")
+            is SessionMachine.Event.SetCamera -> null // `camera_prefs_sent` is logged when it actually goes out
             is SessionMachine.Event.SetFiles -> LogLine('I', "files_info_set", "state=${e.info.state} port=${e.info.port}") // never the token
             is SessionMachine.Event.Tick -> null
             is SessionMachine.Event.VideoFirstFrame -> null

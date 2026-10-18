@@ -10,7 +10,7 @@ Loglar hem hata ayıklamanın hem de ajanların cihazdaki davranışı "görmesi
 
 - `mono_ms`: monoton saat (Mac: `ContinuousClock`/`mach_absolute_time`, Android: `SystemClock.elapsedRealtime`). Duvar saati ayrıca satır başına eklenebilir ama karşılaştırmalar monotonla yapılır.
 - `LEVEL`: `E` hata, `W` uyarı, `I` bilgi, `D` debug (varsayılan kapalı).
-- `component`: `capture`, `encoder`, `net`, `vdisplay`, `input`, `pen`, `kbd`, `decoder`, `render`, `session`, `cursor` (Mac, yerel imleç).
+- `component`: `capture`, `encoder`, `net`, `vdisplay`, `input`, `pen`, `kbd`, `decoder`, `render`, `session`, `cursor` (Mac, yerel imleç), `camera` (Mac ve tablet: tablet kamerası, T-354/T-355).
 - `ev`: snake_case olay adı, ör. `ev=connect_ok`, `ev=frame_drop reason=stale`.
 
 ## Nereye yazılır
@@ -662,6 +662,18 @@ Gizlilik: yol, dosya adı, jeton, nonce, HTTP içeriği ve adres **asla** yazıl
 - **Mac (`component=files`):** `ev=files_net` (listening/open/close/stopped, portlar, `send=open|close`; `state=listening` ve `state=cap` satırlarında `cap_bps=` ve `remote=0|1` — uzak oturumda `cap_bps=500000`, `link` değişince `state=cap` yeniden yazılır), `ev=files_conn` (kabul/red nedeni: `not_open`, `peer`, `capacity`, `unproven_limit`, `hello_timeout`, `proof_timeout`, `auth_failed`; `proven`), `ev=files_stats` saniyede bir yalnız hareket varsa (bağlantı sayıları `idle/bound/unproven/closing`, `to_tablet_bytes`, `from_tablet_bytes`, `throttled_ms`, `cap_bps`), `socket_options_refused` (W, bir kez).
 - **Tablet (`MB/files`):** `files_net_recv state= port= pool= max=`, `files_net_repeat`, `files_tunnel_open pool= max=`, `files_tunnel_close reason= opened= proven= paired= failed= rejected= h2c_bytes= c2h_bytes=`, `files_conn_closed conn= reason= [h2c_bytes= c2h_bytes= ms=|idle=1]` (nedenler arasında `write_stall`, `dav_write_failed`, `scope_mismatch`), `files_conn_failed conn= reason= streak=` (W; ilk 3, sonra her 12.), `files_tunnel_no_keys` (W), `rate_cap cap_kbps= video_kbps= remote=` (T-347; `remote=1`: sabit 0,5 MB/s), `scope root=wifi ro=`, `scope_missing root=wifi` (W); `MB/session`: `files_net_ignored reason=` (W).
 
+## Tablet kamerası (Mac `camera`, T-354, karar 0040)
+
+Gizlilik: kare içeriği, kamera görüntüsü ve anahtar/nonce **asla** yazılmaz; yalnız durumlar ve sayaçlar. Kamera kapalıyken (`CAMERA_PREFS` OFF, bit15 yok, uzak oturum) bu bileşen **hiç** satır yazmaz: CMIO dinleyicisi, zamanlayıcı, dinleyici soket ve çözücü yoktur.
+
+- `ev=camera state=start|stop|unavailable cam_id= [port=] [reason=]`: karar satırları. `start` dinleyici açıldıktan sonra `CAMERA_CONTROL(START)` ile birlikte; `stop reason=usage_ended|no_device|off|remote|session|released` (START gittiyse; `released`: tablette "Kamerayı şimdi kapat", `CAMERA_PREFS.release_seq` değişti, kullanım bir kez 0 olup yeniden 1 olana ya da mod OFF olana kadar START yok); `unavailable reason=no_device` (değişince bir kez); `state=failed reason=listener` (E, dinleyici bağlanamadı). `state=usb_not_supported` (I, USB oturumu: kamera portu `adb reverse` kümesinde değil, tablet UNAVAILABLE görür).
+- `ev=camera state=probe reason=idle|sleep`: kullanım denetimi başladı (sink kısa süre durdurulur). `idle`: Mac'te girdi `MATEBRIDGE_CAMERA_IDLE_S` sn yok; `sleep`: Mac ya da ekran uykuya gidiyor. Başka satır yok: sonuç `stop reason=usage_ended` ya da yazımın sürmesidir.
+- `ev=camera_listen state=open|close|listening|stopped|failed cam_id= [port= fallback=0|1] [reason=]`: kamera dinleyicisi. `fallback=1`: 47004 doluydu, sistem portu alındı.
+- `ev=camera_conn conn= state=refused|rejected|timeout|proven|closed reason=` : bağlantı kabul/ret. Nedenler: `not_open`, `peer_mismatch`, `unproven_limit`, `version`/`session`/`cam_id` (rejected), `hello_timeout`, `proof_timeout`, `protocol_error`, `auth_failed`, `superseded` (kanıtlanmış yeni bağlantı eskisini kapattı), `peer_closed`, `session_ended`, `keys_unavailable`.
+- `ev=camera_stats frames_in= bytes_in= decoded= written= dropped= sink_full= sink_paused= decode_errors= keyframe_requests= fps=`: 10 sn'lik özet (yalnız bağlantı etkinken ya da kare geldiyse). `dropped`: çözücü kuyruğu taştığı ya da keyframe beklerken atılan kare; `sink_full`: OBS sink kuyruğu dolu olduğu için atılan; `sink_paused`: kullanım yoklaması için sink durdurulmuşken atılan.
+- `ev=camera_decode_error status=` (W): VideoToolbox bir kareyi çözemedi; `CAM_KEYFRAME_REQUEST(DECODE_ERROR)` gider (500 ms aralıkla). `ev=camera_keyframe_request reason=`, `ev=camera_frame_drop reason=queue_full` yalnız `D`.
+- `ev=camera_cmio state=sink_started|sink_stopped [status= written= queue_full=]|sink_missing|queue_failed|start_failed|hardware_listener_failed status=`: OBS sanal kamera sink akışı (CoreMediaIO).
+
 ## Yerel imleç (Mac `cursor`, T-275, karar 0036)
 
 Gizlilik: imleç konumu, şekil görüntüsü ve uygulama adı **asla** yazılmaz; yalnız sayaçlar, boyutlar, süreler ve kodlar.
@@ -687,3 +699,17 @@ Mac uyumadan önce (`kIOMessageSystemWillSleep`) oturumlar BYE(HOST_SLEEP) ile b
   - `wake`: `NSWorkspace.didWakeNotification`. `expired`: uyanık geçen 30 sn (uyanma bildirimi kaybolsa ya da uyku iptal olsa da tablet girdisi kilitli kalmasın). Yeni oturum kapıyı kaldırmaz.
 - `I audio ev=audio_capture_resume_after_sleep stream_id=<n> reason=wake|expired`: uyku penceresinde reddedilen son ses başlatma isteği uyanınca (ya da 30 sn sonra) geri yüklendi; ses, kullanıcı bir şeyi açıp kapatmadan başlar. Pencerede istek yoksa yazılmaz.
 - Tuş, karakter ya da koordinat yazılmaz; yalnız sayı, süre ve neden.
+
+## Tablet kamerası (tablet, `MB/camera`, T-355, karar 0040)
+
+Kamera görüntüsü hiçbir yerde loglanmaz ya da yazılmaz; yalnız sayaçlar (kare sayısı, bayt, düşen kare) ve durumlar. Kamera kapalıyken (Kapalı ayarı ya da `START` yok) bu bileşen **hiç satır yazmaz**.
+
+- `ev=camera_prefs_sent mode=0|1 facing=0|1`: `CAMERA_PREFS` gitti (oturum kabulünden sonra ve her değişiklikte; uzak oturumda hep `mode=0`).
+- `ev=camera_control_recv state=0|1|2 cam_id=<n> size=<w>x<h> fps=<n>`: Mac'ten `CAMERA_CONTROL`. `W ev=camera_no_keys`: anahtar ya da denetleyici yoktu, yok sayıldı. `W session ev=camera_start_ignored reason=remote`: uzak oturumda gelen `START`.
+- `ev=camera_permission granted=0|1`: çalışma zamanı izin isteminin sonucu (reddedilirse ayar Kapalı'ya döner).
+- `ev=camera state=start reason=control cam_id= size=<w>x<h> fps= facing=front|back`: akış başladı (istenen boyut).
+- `ev=camera state=encoder size=<kodlayıcı boyutu> src=<kamera boyutu> fps= facing=`: gerçek kodlayıcı ve kamera boyutu.
+- `ev=camera state=stop reason= cam_id=`: her şey kapandı (kamera, kodlayıcı, GL, soket, iş parçacıkları). `reason`: `stop`, `unavailable`, `new_cam_id`, `session_end`, `session_switch`, `background`, `mode_off`, `permission`, `not_wanted` (denetleyici); `link_lost` / `link_rejected` / `link_keys_gone` / `pipeline_<kod>` (akış kendi kendine bitti).
+- `ev=camera state=link_up|link_down|retry|keyframe_request|switch|switched cam_id= [reason=…] [up_ms=…] [n=…]`: kamera bağlantısı. `link_down reason`: `closed`, `io`, `host_eof`, `rejected`, `ack_timeout`, `protocol`, `write_stall`, `keys_gone`; `retry n=1..3` (1 sn arayla), sonra `stop`.
+- `W ev=camera state=error reason=no_camera|permission|camera_access|camera_disconnected|camera_error_<n>|session|encoder|gl_<sınıf>|setup_<sınıf>`: kamera ya da kodlayıcı hatası; akış kapanır, yeni `START` beklenir.
+- `ev=camera_stats cam_id= encoded=<n> sent=<n> dropped=<n> avg_bytes=<n>`: 10 sn özeti (kodlanan, gönderilen, atılan kare; ortalama kodlanmış kare boyutu). Kapanışta bir kez de `final=1 total_encoded= total_sent= total_dropped=` ile.

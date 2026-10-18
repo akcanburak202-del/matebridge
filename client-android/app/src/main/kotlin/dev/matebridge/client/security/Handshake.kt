@@ -41,6 +41,12 @@ class SessionSecrets(prk: ByteArray, val pairing: Boolean, val hostId: ByteArray
         return FilesKeys(KeySchedule.filesC2h(p, clientFilesNonce, hostFilesNonce), KeySchedule.filesH2c(p, clientFilesNonce, hostFilesNonce))
     }
 
+    /** Decision 0040: the keys of one camera connection from its two fresh nonces. Throws IllegalStateException once wiped. */
+    fun cameraKeys(clientCamNonce: ByteArray, hostCamNonce: ByteArray): CameraKeys {
+        val p = prkOrThrow()
+        return CameraKeys(KeySchedule.cameraC2h(p, clientCamNonce, hostCamNonce), KeySchedule.cameraH2c(p, clientCamNonce, hostCamNonce))
+    }
+
     fun wipe() {
         prk?.fill(0)
         prk = null
@@ -50,6 +56,8 @@ class SessionSecrets(prk: ByteArray, val pairing: Boolean, val hostId: ByteArray
 class VideoKeys(val c2h: ByteArray, val h2c: ByteArray)
 
 class FilesKeys(val c2h: ByteArray, val h2c: ByteArray)
+
+class CameraKeys(val c2h: ByteArray, val h2c: ByteArray)
 
 /** Everything the control connection needs after a valid encrypted first HELLO_ACK. */
 class SecureSession(
@@ -215,6 +223,20 @@ object PlainFrames {
  * (counter from 0, one writer at a time) and the decoder of the host's. Both hold their own copy of the keys.
  */
 class FilesChannel(keys: FilesKeys) {
+    val sealer = RecordSealer(keys.c2h)
+    val decoder = RecordDecoder(Limits.CONTROL_MAX_PAYLOAD, RecordOpener(keys.h2c))
+
+    init {
+        keys.c2h.fill(0)
+        keys.h2c.fill(0)
+    }
+}
+
+/**
+ * Client side of one camera connection's crypto (decision 0040, PROTOCOL.md section 9): the sealer of the tablet's records
+ * (counter from 0, one writer) and the decoder of the host's (only `CAM_KEYFRAME_REQUEST` and `PING` are valid there).
+ */
+class CameraChannel(keys: CameraKeys) {
     val sealer = RecordSealer(keys.c2h)
     val decoder = RecordDecoder(Limits.CONTROL_MAX_PAYLOAD, RecordOpener(keys.h2c))
 

@@ -149,6 +149,12 @@ object KeySchedule {
     fun filesH2c(prk: ByteArray, clientNonce: ByteArray, hostNonce: ByteArray) =
         Hkdf.expand(prk, ascii("MB1 files h2c") + clientNonce + hostNonce, 32)
 
+    /** Decision 0040: camera connection keys; both nonces are fresh per connection (client's in CAM_HELLO, host's in CAM_HELLO_ACK). */
+    fun cameraC2h(prk: ByteArray, clientNonce: ByteArray, hostNonce: ByteArray) =
+        Hkdf.expand(prk, ascii("MB1 camera c2h") + clientNonce + hostNonce, 32)
+    fun cameraH2c(prk: ByteArray, clientNonce: ByteArray, hostNonce: ByteArray) =
+        Hkdf.expand(prk, ascii("MB1 camera h2c") + clientNonce + hostNonce, 32)
+
     fun sasBytes(prk: ByteArray) = Hkdf.expand(prk, ascii("MB1 sas"), 4)
 
     /** 6-digit pairing code: u32 little-endian of the 4 bytes, mod 1 000 000, zero padded. */

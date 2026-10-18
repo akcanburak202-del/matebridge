@@ -130,7 +130,7 @@ object Codec {
     /** Encodes a full frame: 5-byte header plus payload. */
     fun encode(msg: Message): ByteArray {
         val payload = encodePayload(msg)
-        val limit = if (msg is VideoHello || msg is VideoFrame) Limits.VIDEO_MAX_PAYLOAD else Limits.CONTROL_MAX_PAYLOAD
+        val limit = if (msg is VideoHello || msg is VideoFrame || msg is CamFrame) Limits.VIDEO_MAX_PAYLOAD else Limits.CONTROL_MAX_PAYLOAD
         require(payload.size <= limit) { "payload ${payload.size} exceeds limit $limit" }
         val out = Writer(payload.size + 5)
         out.u8(msg.type)
@@ -221,6 +221,25 @@ object Codec {
                 require(msg.data.size in 1..FilesData.MAX_DATA_BYTES) { "FILES_DATA size must be 1..${FilesData.MAX_DATA_BYTES}" }
                 w.u16(msg.data.size); w.bytes(msg.data.value)
             }
+            is CameraPrefs -> { w.u8(msg.mode); w.u8(msg.facing); w.u16(msg.releaseSeq and 0xFFFF) }
+            is CameraControl -> {
+                w.u8(msg.state); w.u16(msg.camId); w.u16(msg.port); w.u16(msg.width); w.u16(msg.height)
+                w.u8(msg.fps); w.u8(0); w.u32(msg.bitrateKbps)
+            }
+            is CamHello -> {
+                require(msg.clientCamNonce.size == Limits.NONCE_BYTES) { "client_cam_nonce must be 16 bytes" }
+                w.u16(msg.protocolVersion); w.u32(msg.sessionId); w.u16(msg.camId); w.bytes(msg.clientCamNonce.value)
+            }
+            is CamHelloAck -> {
+                require(msg.hostCamNonce.size == Limits.NONCE_BYTES) { "host_cam_nonce must be 16 bytes" }
+                w.u8(msg.status); w.bytes(msg.hostCamNonce.value)
+            }
+            is CamFrame -> {
+                require(msg.data.size in 1..Limits.CAM_FRAME_MAX_BYTES) { "CAM_FRAME size must be 1..${Limits.CAM_FRAME_MAX_BYTES}" }
+                w.u32(msg.frameSeq); w.u64(msg.captureTimeUs); w.u8(msg.flags); w.u8(0); w.u16(0)
+                w.u32(msg.data.size.toLong()); w.bytes(msg.data.value)
+            }
+            is CamKeyframeRequest -> w.u8(msg.reason)
             is Pen -> {
                 require(msg.tool == Pen.TOOL_PEN || msg.tool == Pen.TOOL_ERASER) { "invalid tool" }
                 require(msg.samples.size in 1..Limits.PEN_MAX_SAMPLES) { "sample count must be 1..64" }
@@ -390,6 +409,31 @@ object Codec {
                 if (size == 0) throw ProtocolException(ProtocolException.Kind.INVALID_VALUE, "FILES_DATA size 0")
                 FilesData(Bytes(r.bytes(size))) // shorter than size: SHORT_PAYLOAD from the reader; trailing bytes ignored
             }
+            MsgType.CAMERA_PREFS -> {
+                val mode = r.u8(); val facing = r.u8(); val releaseSeq = r.u16()
+                CameraPrefs(
+                    if (mode == CameraPrefs.MODE_AUTO) CameraPrefs.MODE_AUTO else CameraPrefs.MODE_OFF, // unknown mode = OFF
+                    when (facing) { CameraPrefs.FACING_BACK -> CameraPrefs.FACING_BACK; CameraPrefs.FACING_BACK_WIDE -> CameraPrefs.FACING_BACK_WIDE; else -> CameraPrefs.FACING_FRONT }, // unknown facing = FRONT
+                    releaseSeq,
+                )
+            }
+            MsgType.CAMERA_CONTROL -> {
+                val state = r.u8(); val id = r.u16(); val port = r.u16(); val w = r.u16(); val h = r.u16()
+                val fps = r.u8(); r.skip(1); val kbps = r.u32()
+                CameraControl(state, id, port, w, h, fps, kbps) // unknown state kept: the receiver treats it as STOP
+            }
+            MsgType.CAM_HELLO -> CamHello(r.u16(), r.u32(), r.u16(), Bytes(r.bytes(Limits.NONCE_BYTES)))
+            MsgType.CAM_HELLO_ACK -> CamHelloAck(r.u8(), Bytes(r.bytes(Limits.NONCE_BYTES))) // unknown status: rejected
+            MsgType.CAM_FRAME -> {
+                val seq = r.u32(); val capture = r.u64(); val flags = r.u8(); r.skip(3)
+                val size = r.u32()
+                if (size == 0L || size > Limits.CAM_FRAME_MAX_BYTES) {
+                    throw ProtocolException(ProtocolException.Kind.INVALID_VALUE, "invalid CAM_FRAME size $size")
+                }
+                if (size > r.remaining()) throw ProtocolException(ProtocolException.Kind.SHORT_PAYLOAD, "camera data shorter than frame_size")
+                CamFrame(seq, capture, flags, Bytes(r.bytes(size.toInt())))
+            }
+            MsgType.CAM_KEYFRAME_REQUEST -> CamKeyframeRequest(r.u8())
             MsgType.PEN -> decodePen(r)
             MsgType.KEY -> {
                 val time = r.u64(); val scan = r.u16(); val code = r.u16()

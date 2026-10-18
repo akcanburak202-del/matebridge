@@ -507,6 +507,17 @@ public struct SessionMachine: Sendable {
         return nil
     }
 
+    /// Keys of the tablet camera connection (decision 0040) from the `prk` of the active session `sessionID`; nil when
+    /// that session is not the active one any more or a nonce is malformed.
+    public func cameraKeys(sessionID: UInt32, clientNonce: [UInt8], hostNonce: [UInt8]) -> CameraKeys? {
+        for conn in connections.values {
+            if case .active(let s) = conn.phase, s.id == sessionID {
+                return s.schedule.cameraKeys(clientNonce: clientNonce, hostNonce: hostNonce)
+            }
+        }
+        return nil
+    }
+
     /// Sends `message` on the control connection of the active session `sessionID` (host-initiated messages such as
     /// CLIPBOARD). Nothing happens for an unknown or pending session.
     public func send(sessionID: UInt32, _ message: Message) -> [SessionAction] {
@@ -903,7 +914,7 @@ public struct SessionMachine: Sendable {
             if isActive { connections[id]?.remote = prefs.isRemote }
             return isActive ? [.deliver(id, message)] : []
         case .pen, .key, .pointerRel, .pointerAbs, .scroll, .pinch, .penGesture, .stats, .keyframeRequest, .clipboard, .displayRate,
-             .filesInfo, .cursorPrefs:
+             .filesInfo, .cursorPrefs, .cameraPrefs:
             // Before ACCEPTED input is ignored and nothing is injected (PROTOCOL.md section 3).
             return isActive ? [.deliver(id, message)] : []
         case .audioPrefs:
@@ -911,7 +922,8 @@ public struct SessionMachine: Sendable {
         case .pong(let pong):
             return isActive ? hostPong(id, pong) : []  // T-171: only answers to the host's own PINGs
         case .helloAck, .streamConfig, .settingsOpen, .audioConfig, .audioFrame, .videoHello, .videoFrame,
-             .filesNet, .cursorShape, .cursorState, .filesHello, .filesHelloAck, .filesData:
+             .filesNet, .cursorShape, .cursorState, .filesHello, .filesHelloAck, .filesData,
+             .cameraControl, .camHello, .camHelloAck, .camFrame, .camKeyframeRequest:
             return []  // wrong direction or connection: ignored
         }
     }

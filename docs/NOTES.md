@@ -1975,3 +1975,12 @@ Host release, `main`. Tablette ölçüm için debug APK kullanıldı; sonunda da
 - `systemextensionsctl list`: onaydan önce `[activated waiting for user]`, sonra `[activated enabled]`. Onaydan önce CMIO cihaz sayısı 0.
 - Cihaz `OBS Virtual Camera`, 2 akış. `kCMIOStreamPropertyDirection` cihaza göre: [0] = 1 (input, kaynak), [1] = 0 (output = sink). İlk deneme yön 1'e yazdı: 10 kare sonra kuyruk doldu, kimse okumadı, Photo Booth OBS logosu + üstü çizili kamera gösterdi. Sink [1]'e (OBS eklentisinin kullandığı indeks) yazınca 1920x1080 BGRA 30 fps, düşen kare 0.
 - Kullanıcı Photo Booth'ta hareketli deseni gördü. **OBS uygulaması kapalıydı.** Ücretli Apple Developer hesabı gerekmiyor. Karar 0040'ın ön koşulu sağlandı.
+
+## 2026-10-18 ~12:30–12:45 — Tablet kamerası cihazda (T-354/T-355/T-357)
+
+- Kurulum: host `task/T-356-camera-integration` (T-357 r2), APK aynı dal + döndürme düzeltmesi. OBS 32.2.2 kamera uzantısı onaylı.
+- Otomatik: Photo Booth OBS Virtual Camera'yı açınca START ~1 sn içinde; host `camera_stats` 27–30 fps, decode_errors 0, sink_full 0. Ön/arka geçişi çalışıyor.
+- "Kamerayı şimdi kapat": görüntü durdu, Photo Booth yeniden açılınca kamera açılmadı (kullanıcı doğruladı).
+- **Döndürme:** MatePad doğal yönü dikey (base 1840x2800), uygulama ROTATION_90. Sensör: arka 90, ön 270. Camera2 → SurfaceTexture dönüşüm matrisi sensör yönünü (ve önde aynalamayı) **zaten içeriyor**; CameraX formülüyle bir kez daha döndürmek 90° yan ve basık görüntü verdi. Düzeltme: doğal yöndeki boyut + yalnız ekran dönüşü (mvp kuralında 270), ön kamerada yatay çevirme. Photo Booth önizlemesinde: ön kamerada sağ el sağda (doğru), arka kamerada yazılar aynalı (Photo Booth her kamerada önizlemeyi aynalar; gönderilen görüntü düz).
+- Test edilmedi: boşta (10 dk) ve uyku denetimiyle STOP, USB oturumu (UNAVAILABLE beklenir), uzun görüşmede ısı/pil.
+- 12:55 **Geniş açı (T-358):** mantıksal arka kamera 0 + fiziksel "4" (1,95 mm) yolu çalışıyor; görüntü düz, görüş alanı belirgin geniş, döndürme kuralı aynı (fiziksel akışta da SurfaceTexture matrisi sensör yönünü içeriyor). Kullanıcı doğruladı.
