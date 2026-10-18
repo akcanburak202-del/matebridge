@@ -52,4 +52,6 @@ Saf secici `CameraTargets` (CamInfo listesi -> CameraTarget: openId/physicalId/c
 - Cihazda bak: logcat `camera_wide_probe wide=supported path=b_physical open=0 char=4`; panelde Ön / Arka / Geniş açı; Geniş açı'da Photo Booth'ta belirgin genis gorus (~83 derece), dik, aynasiz, ekran donunce dik; akis surerken Arka<->Geniş açı gecisi ayni baglantida yeni config+keyframe; fiziksel oturum hatasi olursa `reason=wide_unavailable` ve BACK'e dusus.
 - Test edilmedi: Camera2 cagrilari (cihaz gerekli).
 
+- Round 2 (task/T-358-client-r2): session-creation, repeating-request and open `CameraAccessException` paths (Camera2Pipeline 4 places) now go through `failOrFallback`, so a failing physical wide camera falls back to BACK instead of closing the stream; other facings unchanged. Decision is `CameraTargets.fallbackOnFailure` (unit-tested). Camera2 flow needs the tablet.
+
 ## Open questions

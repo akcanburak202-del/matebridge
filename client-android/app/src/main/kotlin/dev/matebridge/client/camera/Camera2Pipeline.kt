@@ -142,7 +142,7 @@ class Camera2Pipeline(
         } catch (e: SecurityException) {
             fail("permission")
         } catch (e: CameraAccessException) {
-            fail("camera_access")
+            failOrFallback("camera_access")
         } catch (e: RuntimeException) {
             fail("setup_${e.javaClass.simpleName}")
         }
@@ -196,10 +196,10 @@ class Camera2Pipeline(
 
     /** Wide-angle failed (T-358): log it, continue with BACK. Returns BACK, or null when this already is the fallback. */
     private fun fallBackToBack(why: String): CameraFacing? {
-        if (facing != CameraFacing.BACK_WIDE) return null
+        val next = CameraTargets.fallbackOnFailure(facing) ?: return null
         log(true, "camera", "state=error reason=wide_unavailable detail=$why")
-        facing = CameraFacing.BACK
-        return CameraFacing.BACK
+        facing = next
+        return next
     }
 
     /** A camera/session failure: a wide-angle one reopens the plain rear camera, anything else ends the stream. */
@@ -288,7 +288,7 @@ class Camera2Pipeline(
                             }
                             s.setRepeatingRequest(req.build(), null, h)
                         } catch (e: CameraAccessException) {
-                            fail("camera_access")
+                            failOrFallback("camera_access")
                             return
                         } catch (e: IllegalStateException) {
                             return // closed meanwhile
@@ -309,7 +309,7 @@ class Camera2Pipeline(
             )
             d.createCaptureSession(cfg)
         } catch (e: CameraAccessException) {
-            fail("camera_access")
+            failOrFallback("camera_access")
         } catch (e: IllegalStateException) {
             // closed meanwhile
         }
@@ -330,7 +330,7 @@ class Camera2Pipeline(
         } catch (e: SecurityException) {
             fail("permission")
         } catch (e: CameraAccessException) {
-            fail("camera_access")
+            failOrFallback("camera_access")
         } catch (e: RuntimeException) {
             fail("switch_${e.javaClass.simpleName}")
         }

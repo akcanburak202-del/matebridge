@@ -58,4 +58,10 @@ class CameraTargetsTest {
         val unknown = Codec.encodePayload(wide).also { it[1] = 9 }
         assertEquals(CameraPrefs.FACING_FRONT, (Codec.decodePayload(MsgType.CAMERA_PREFS, unknown) as CameraPrefs).facing)
     }
+
+    @Test fun onlyWideFallsBackToBackOnFailure() {
+        assertEquals(CameraFacing.BACK, CameraTargets.fallbackOnFailure(CameraFacing.BACK_WIDE))
+        assertNull(CameraTargets.fallbackOnFailure(CameraFacing.BACK))
+        assertNull(CameraTargets.fallbackOnFailure(CameraFacing.FRONT))
+    }
 }
