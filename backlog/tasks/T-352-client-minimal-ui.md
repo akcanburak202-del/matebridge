@@ -1,7 +1,7 @@
 ---
 id: T-352
 title: İstemci — giriş ekranı ve ayar paneli için sade (minimalist) yeniden tasarım
-status: todo
+status: review
 phase: 7
 owner: android-client-dev
 depends_on: []
@@ -47,6 +47,24 @@ Mevcut panelin ekran görüntüsü (yan panel, akış sırasında): `/private/tm
 
 ## Plan
 
+Renk, ölçü ve stil kaynakları `res/values` (colors, dimens, styles) + drawable seçiciler; `SettingsViews` görünüm katmanı yeniden yazılır (katalog dokunulmaz); `activity_main.xml` giriş ekranı sadeleşir; "Ayarlar" metin düğmesi ayar listesini açar/kapatır (MainActivity'de 3 satır).
+
 ## Handoff
+
+Commit: `git log task/T-352-minimal-ui` (tek T-352 commit). Dosyalar: `res/values/{colors,dimens,styles}.xml`, `res/drawable/mb_*.xml`, `res/layout/activity_main.xml`, `settings/SettingsViews.kt`, `MainActivity.kt` (yalnız settings_toggle dinleyicisi), bu kart. `SettingsCatalog`, `SettingsButtonPalette` ve testler değişmedi.
+
+Önce / sonra:
+- Panel: yarı saydam (%85) -> opak #121212; tek vurgu mavi #2E7DFF; yazı 24/16/13 sp.
+- Choice: dolgulu hap düğmeler + yatay kaydırma -> ince çerçeveli segmentli kontrol; satırda en çok 4 (uzun etiket veya 5+ seçenekte 3) segment, fazlası alt satıra sarılır, hiçbir şey kesilmez (etiket 2 satıra sarabilir). Bölüm başlığıyla aynı olan seçenek başlığı ("Bağlantı") kaldırıldı.
+- Toggle: "başlık: açık" düğmesi -> etiket solda, Switch sağda (tüm satır dokunma alanı).
+- Stepper: dolgulu "− +" düğmeleri -> sağda ince çerçeveli küçük "− değer +".
+- Info ("Uygulanan: …", kısayollar, sürüm): 13 sp soluk gri, kontrolün altında.
+- Eylemler (Bağlantıyı kes, Bu Mac'i unut [kırmızımsı], Varsayılanlara dön + ipucu): bölümlerden çıkarılıp en altta ayırıcı çizgi altında metin satırları.
+- Giriş ekranı: simge + "MateBridge" + durum (soluk) + tek büyük "Bağlan"; Mac'i uyandır / Uzaktan bağlan / Uzak adres / Manuel adres / Ayarlar metin düğmeleri; ayar listesi "Ayarlar" ile açılır (varsayılan kapalı). Alanlar çerçeveli.
+- Odak: kendi çizilen beyaz halka; defaultFocusHighlight kapalı (T-246).
+
+Varsayımlar: Material yok, `android.widget.Switch` kullanıldı. Giriş simgesi `@mipmap/ic_launcher`. Güven (trust) düğmeleri hâlâ eski `styleSettingsButton` ile (kodla üretiliyor, kapsam dışı).
+
+Tablette bakılacak: (1) giriş ekranı düzeni, "Ayarlar" aç/kapa; (2) yan panelde segment satırları (Oyun çözünürlüğü, Bit hızı) kesilmeden sığıyor mu, "Otomatik (60 Mbps)" okunuyor mu; (3) Switch satırları, uzak oturumda gizlenen satırlar; (4) klavye/gamepad odak halkası ve Tab gezinmesi, video yüzeyinde beyaz örtü yok; (5) Kapat, dışarı dokunma, Bu Mac'i unut iki adımlı onay çalışıyor mu. Cihazda hiçbir şey test edilmedi (görünüm birim testi yok).
 
 ## Open questions

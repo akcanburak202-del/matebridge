@@ -1,6 +1,7 @@
 package dev.matebridge.client.settings
 
 import android.content.Context
+import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -11,15 +12,21 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.FrameLayout
-import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.Switch
 import android.widget.TextView
+import dev.matebridge.client.R
 
 /**
  * Renders [SettingsCatalog] sections into [container] with plain Views (decision 0004: no Compose). The connect panel
  * and the in-stream side panel each own one instance over the same [SettingsHost]; [onChanged] runs after every user
  * action so the activity can refresh both. Main thread only.
+ *
+ * T-352 look: one heading per section; Choice = segmented control (rows of at most four segments, so no option is ever
+ * cut off); Toggle = label left, Switch right; Stepper = label left, small "- value +" right; Info = small grey text
+ * under the control it belongs to; Actions (Bağlantıyı kes, Bu Mac'i unut, Varsayılanlara dön) are collected into a
+ * quiet text-button group at the very end. The catalog is untouched: same items, keys and hiding rules.
  */
 class SettingsViews(
     private val context: Context,
@@ -31,9 +38,24 @@ class SettingsViews(
     private val density = context.resources.displayMetrics.density
 
     init {
+        val actions = ArrayList<SettingItem.Action>()
+        var resetHint: SettingItem.Info? = null
         for (s in sections) {
-            container.addView(header(s.title), rowParams(top = 20))
-            for (item in s.items) container.addView(build(item), rowParams(top = 6))
+            container.addView(header(s.title), rowParams(top = 32, bottom = 8))
+            for (item in s.items) {
+                when {
+                    item is SettingItem.Action -> actions += item
+                    item is SettingItem.Info && item.key == "reset_hint" -> resetHint = item // sits under "Varsayılanlara dön"
+                    else -> container.addView(build(item, s.title), rowParams(top = if (item is SettingItem.Info) 4 else 8))
+                }
+            }
+        }
+        if (actions.isNotEmpty()) {
+            container.addView(divider(), rowParams(top = 32, height = dp(1)))
+            for (a in actions) {
+                container.addView(actionRow(a), rowParams(top = 8))
+                if (a.key == "reset_defaults") resetHint?.let { container.addView(build(it, ""), rowParams(top = 0)) }
+            }
         }
         refresh()
     }
@@ -41,19 +63,12 @@ class SettingsViews(
     /** Re-reads every label and selection from the host. */
     fun refresh() = refreshers.forEach { it() }
 
-    private fun build(item: SettingItem): View = when (item) {
-        is SettingItem.Choice -> choice(item)
-        is SettingItem.Toggle -> button("") {
-            item.set(!item.get())
-        }.also { b ->
-            refreshers += {
-                b.visibility = if (item.hidden()) View.GONE else View.VISIBLE // T-350
-                b.text = item.text()
-            }
-        }
+    private fun build(item: SettingItem, sectionTitle: String): View = when (item) {
+        is SettingItem.Choice -> choice(item, sectionTitle)
+        is SettingItem.Toggle -> toggle(item)
         is SettingItem.Stepper -> stepper(item)
-        is SettingItem.Action -> button(item.title) { item.run() }
-        is SettingItem.Info -> text("", 15f, INFO_COLOR).also { t ->
+        is SettingItem.Action -> actionRow(item)
+        is SettingItem.Info -> text("", SECONDARY_SP, color(R.color.mb_text_secondary)).also { t ->
             refreshers += {
                 t.visibility = if (item.hidden()) View.GONE else View.VISIBLE // T-238/T-280: e.g. "Uygulanan: HDR10" in Çizim
                 t.text = item.text()
@@ -61,59 +76,184 @@ class SettingsViews(
         }
     }
 
-    private fun choice(item: SettingItem.Choice): View {
+    private fun choice(item: SettingItem.Choice, sectionTitle: String): View {
         val col = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
-        val title = text(item.titleText(), 16f, TEXT_COLOR)
-        col.addView(title)
-        val row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
-        val buttons = item.options.map { o ->
-            button(o.label) { item.select(o.id) }.also { row.addView(it, rowParams(top = 0, end = 6)) }
+        // T-352: "Bağlantı" under the heading "Bağlantı" said the same thing twice.
+        val title = if (item.title.equals(sectionTitle, ignoreCase = true)) null else text(item.titleText(), LABEL_SP, color(R.color.mb_text))
+        title?.let { col.addView(it, rowParams(bottom = 8)) }
+        val n = item.options.size
+        val maxLen = item.options.maxOf { it.label.length }
+        val perRow = when {
+            n <= 3 -> n
+            n == 4 && maxLen <= 11 -> 4
+            else -> 3
         }
-        val scroller = HorizontalScrollView(context).apply { isHorizontalScrollBarEnabled = false; addView(row) }
-        col.addView(scroller)
+        val segments = ArrayList<TextView>(n)
+        for (rowStart in 0 until n step perRow) {
+            val count = minOf(perRow, n - rowStart)
+            val outer = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL; weightSum = perRow.toFloat() }
+            val row = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                background = GradientDrawable().apply { cornerRadius = dp(RADIUS_DP).toFloat(); setStroke(dp(1), color(R.color.mb_outline)) }
+                setPadding(dp(1), dp(1), dp(1), dp(1))
+            }
+            for (k in 0 until count) {
+                val o = item.options[rowStart + k]
+                if (k > 0) {
+                    row.addView(
+                        View(context).apply { setBackgroundColor(color(R.color.mb_outline)) },
+                        LinearLayout.LayoutParams(dp(1), ViewGroup.LayoutParams.MATCH_PARENT),
+                    )
+                }
+                val seg = segment(first = k == 0, last = k == count - 1).apply {
+                    setOnClickListener { item.select(o.id); onChanged() }
+                }
+                segments += seg
+                row.addView(seg, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
+            }
+            outer.addView(row, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, count.toFloat()))
+            col.addView(outer, rowParams(top = if (rowStart == 0) 0 else 8))
+        }
         refreshers += {
             col.visibility = if (item.hidden()) View.GONE else View.VISIBLE // T-223: e.g. "Kare hızı" in Çizim
-            title.text = item.titleText() // T-109: "(oyun modu)" comes and goes with game mode
+            title?.text = item.titleText() // T-109: "(oyun modu)" comes and goes with game mode
             val enabled = item.enabled() // T-238: grey row, e.g. "HDR (Bu cihazda yok)"
-            title.setTextColor(if (enabled) TEXT_COLOR else DISABLED_COLOR)
+            title?.setTextColor(color(if (enabled) R.color.mb_text else R.color.mb_disabled))
             val sel = item.selected()
-            for ((i, b) in buttons.withIndex()) {
+            for ((i, b) in segments.withIndex()) {
                 val o = item.options[i]
                 val optionEnabled = enabled && o.enabled() // T-260: e.g. "Tam renk (Bu cihazda yok)"
                 b.isEnabled = optionEnabled
                 b.alpha = if (optionEnabled) 1f else DISABLED_ALPHA
                 b.text = o.label // T-242: e.g. "Otomatik (60 Mbps)" inside a mode layer
-                val on = o.id == sel
-                b.isSelected = on // the background's state_selected entry turns it blue (T-107)
-                b.setTypeface(null, if (on) Typeface.BOLD else Typeface.NORMAL)
+                b.isSelected = o.id == sel
+                b.setTextColor(color(if (o.id == sel) R.color.mb_on_accent else R.color.mb_text))
             }
         }
         return col
     }
 
-    private fun stepper(item: SettingItem.Stepper): View {
-        val row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        val label = text("", 16f, TEXT_COLOR)
-        row.addView(label, rowParams(top = 0, end = 12))
-        row.addView(button("−") { item.dec() }, rowParams(top = 0, end = 6))
-        row.addView(button("+") { item.inc() }, rowParams(top = 0))
-        refreshers += { label.text = "${item.title}: ${item.value()}" }
+    private fun toggle(item: SettingItem.Toggle): View {
+        val label = text("", LABEL_SP, color(R.color.mb_text))
+        val sw = Switch(context).apply {
+            showText = false
+            isClickable = false // the whole row is the touch target
+            isFocusable = false
+            thumbTintList = ColorStateList(
+                arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
+                intArrayOf(color(R.color.mb_on_accent), color(R.color.mb_text_secondary)),
+            )
+            trackTintList = ColorStateList(
+                arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
+                intArrayOf(color(R.color.mb_accent), color(R.color.mb_outline)),
+            )
+        }
+        val row = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = dp(CONTROL_DP)
+            setOnClickListener { item.set(!item.get()); onChanged() }
+        }
+        styleFocusable(row)
+        row.addView(label, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).also { it.marginEnd = dp(16) })
+        row.addView(sw)
+        refreshers += {
+            row.visibility = if (item.hidden()) View.GONE else View.VISIBLE // T-350
+            label.text = item.title + item.marker()
+            sw.isChecked = item.get()
+        }
         return row
     }
 
-    private fun button(label: String, action: () -> Unit) = Button(context).apply {
-        text = label
-        isAllCaps = false
-        minWidth = 0
-        minimumWidth = 0
-        styleSettingsButton(this)
-        setOnClickListener {
-            action()
-            onChanged()
+    private fun stepper(item: SettingItem.Stepper): View {
+        val row = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = dp(CONTROL_DP)
         }
+        val label = text(item.title, LABEL_SP, color(R.color.mb_text))
+        val value = text("", LABEL_SP, color(R.color.mb_text)).apply { gravity = Gravity.CENTER; minWidth = dp(64) }
+        row.addView(label, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).also { it.marginEnd = dp(16) })
+        row.addView(smallButton("−") { item.dec() })
+        row.addView(value)
+        row.addView(smallButton("+") { item.inc() })
+        refreshers += { value.text = item.value() }
+        return row
     }
 
-    private fun header(title: String) = text(title, 19f, TEXT_COLOR).apply { setTypeface(typeface, Typeface.BOLD) }
+    private fun smallButton(label: String, action: () -> Unit): View {
+        val box = LinearLayout(context).apply {
+            background = GradientDrawable().apply { cornerRadius = dp(RADIUS_DP).toFloat(); setStroke(dp(1), color(R.color.mb_outline)) }
+            setPadding(dp(1), dp(1), dp(1), dp(1))
+        }
+        val seg = segment(first = true, last = true).apply {
+            text = label
+            minWidth = dp(CONTROL_DP)
+            setTextColor(color(R.color.mb_text))
+            setOnClickListener { action(); onChanged() }
+        }
+        box.addView(seg, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(CONTROL_DP - 4)))
+        return box
+    }
+
+    /** A segment of a segmented control: transparent at rest, accent when [View.isSelected], white ring when focused. */
+    private fun segment(first: Boolean, last: Boolean): TextView = TextView(context).apply {
+        gravity = Gravity.CENTER
+        textSize = 15f
+        maxLines = 2
+        minHeight = dp(CONTROL_DP - 4)
+        setPadding(dp(8), dp(8), dp(8), dp(8))
+        isClickable = true
+        isFocusable = true
+        defaultFocusHighlightEnabled = false
+        val r = (dp(RADIUS_DP) - dp(1)).toFloat()
+        val a = if (first) r else 0f
+        val b = if (last) r else 0f
+        val radii = floatArrayOf(a, a, b, b, b, b, a, a)
+        fun shape(fill: Int, ring: Boolean) = GradientDrawable().apply {
+            cornerRadii = radii
+            setColor(fill)
+            if (ring) setStroke(dp(2), color(R.color.mb_focus))
+        }
+        val sd = StateListDrawable()
+        val clear = Color.TRANSPARENT
+        sd.addState(intArrayOf(android.R.attr.state_focused, android.R.attr.state_selected), shape(color(R.color.mb_accent), true))
+        sd.addState(intArrayOf(android.R.attr.state_focused), shape(clear, true))
+        sd.addState(intArrayOf(android.R.attr.state_pressed, android.R.attr.state_selected), shape(color(R.color.mb_accent_pressed), false))
+        sd.addState(intArrayOf(android.R.attr.state_pressed), shape(color(R.color.mb_pressed), false))
+        sd.addState(intArrayOf(android.R.attr.state_selected), shape(color(R.color.mb_accent), false))
+        sd.addState(intArrayOf(), shape(clear, false))
+        background = sd
+    }
+
+    /** A quiet text button: no fill, pressed/focused feedback only. "Bu Mac'i unut" is reddish. */
+    private fun actionRow(item: SettingItem.Action): View =
+        text(item.title, LABEL_SP, color(if (item.key == "forget_host") R.color.mb_danger else R.color.mb_text)).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            minHeight = dp(CONTROL_DP)
+            setOnClickListener { item.run(); onChanged() }
+            styleFocusable(this)
+        }
+
+    private fun styleFocusable(v: View) {
+        v.isClickable = true
+        v.isFocusable = true
+        v.defaultFocusHighlightEnabled = false // T-246 rule; the controls draw their own ring
+        fun shape(fill: Int, ring: Boolean) = GradientDrawable().apply {
+            cornerRadius = dp(RADIUS_DP).toFloat()
+            setColor(fill)
+            if (ring) setStroke(dp(2), color(R.color.mb_focus))
+        }
+        val sd = StateListDrawable()
+        sd.addState(intArrayOf(android.R.attr.state_focused), shape(Color.TRANSPARENT, true))
+        sd.addState(intArrayOf(android.R.attr.state_pressed), shape(color(R.color.mb_pressed), false))
+        sd.addState(intArrayOf(), shape(Color.TRANSPARENT, false))
+        v.background = sd
+    }
+
+    private fun divider() = View(context).apply { setBackgroundColor(color(R.color.mb_outline)) }
+
+    private fun header(title: String) = text(title, LABEL_SP, color(R.color.mb_accent)).apply { setTypeface(typeface, Typeface.BOLD) }
 
     private fun text(s: String, sp: Float, color: Int) = TextView(context).apply {
         text = s
@@ -121,25 +261,29 @@ class SettingsViews(
         setTextColor(color)
     }
 
-    private fun rowParams(top: Int, end: Int = 0) =
-        LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {
+    private fun color(id: Int) = context.getColor(id)
+
+    private fun rowParams(top: Int = 0, bottom: Int = 0, height: Int = ViewGroup.LayoutParams.WRAP_CONTENT) =
+        LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, height).also {
             it.topMargin = dp(top)
-            it.marginEnd = dp(end)
+            it.bottomMargin = dp(bottom)
         }
 
     private fun dp(v: Int) = (v * density).toInt()
 
     private companion object {
-        val TEXT_COLOR = Color.WHITE
-        val INFO_COLOR = Color.parseColor("#BBBBBB")
-        val DISABLED_COLOR = Color.parseColor("#888888")
+        const val LABEL_SP = 16f
+        const val SECONDARY_SP = 13f
+        const val CONTROL_DP = 48
+        const val RADIUS_DP = 8
         const val DISABLED_ALPHA = 0.4f
     }
 }
 
 /**
- * T-107: gives a settings-panel button explicit colors ([SettingsButtonPalette]) instead of the system theme's light
- * background. Selection is driven by [View.isSelected]; pressing shows a darker/lighter shade.
+ * T-107: gives a button an explicit color set ([SettingsButtonPalette]) instead of the system theme's light
+ * background. Selection is driven by [View.isSelected]; pressing shows a darker/lighter shade. Used by the trust
+ * buttons on the connect screen.
  */
 internal fun styleSettingsButton(b: Button) {
     val density = b.resources.displayMetrics.density
@@ -167,7 +311,7 @@ internal fun styleSettingsButton(b: Button) {
 }
 
 /**
- * The in-stream settings panel (T-105): a full-screen transparent layer over the video with a semi-transparent,
+ * The in-stream settings panel (T-105): a full-screen transparent layer over the video with an opaque (T-352),
  * scrollable panel on the right. The video underneath keeps its size and keeps playing. A tap on the layer outside the
  * panel asks to close it on ACTION_UP, so the whole tap stays here and no half gesture reaches input capture after
  * closing. [content] is where the shared [SettingsViews] renders. Main thread only.
@@ -180,7 +324,7 @@ class SettingsSidePanel(context: Context, private val onCloseRequest: (SettingsP
 
     val content: LinearLayout = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
-        setPadding(dp(20), dp(4), dp(20), dp(24))
+        setPadding(dp(24), dp(0), dp(24), dp(32))
     }
 
     private var downOutside = false
@@ -188,28 +332,26 @@ class SettingsSidePanel(context: Context, private val onCloseRequest: (SettingsP
     init {
         val panel = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(PANEL_COLOR)
+            setBackgroundColor(context.getColor(R.color.mb_surface))
             isClickable = true // touches on the panel's empty areas stay on the panel (not a tap outside)
         }
         val head = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(20), dp(12), dp(12), dp(4))
+            setPadding(dp(24), dp(16), dp(8), dp(8))
         }
         head.addView(
             TextView(context).apply {
                 text = "Ayarlar"
-                textSize = 22f
-                setTextColor(Color.WHITE)
+                textSize = 24f
+                setTextColor(context.getColor(R.color.mb_text))
                 setTypeface(typeface, Typeface.BOLD)
             },
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
         )
         head.addView(
-            Button(context).apply {
+            Button(context, null, 0, R.style.MbButtonText).apply {
                 text = "Kapat"
-                isAllCaps = false
-                styleSettingsButton(this)
                 setOnClickListener { onCloseRequest(SettingsPanelState.Via.CLOSE_BUTTON) }
             },
         )
@@ -254,6 +396,5 @@ class SettingsSidePanel(context: Context, private val onCloseRequest: (SettingsP
 
     private companion object {
         const val PANEL_WIDTH_DP = 460
-        val PANEL_COLOR = Color.parseColor("#D9141418") // ~85 % opaque: the video stays visible behind
     }
 }
