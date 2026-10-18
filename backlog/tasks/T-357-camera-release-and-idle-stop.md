@@ -55,6 +55,8 @@ Karar 0040 ek 2 ve PROTOCOL.md (dal `task/T-356-camera-integration`, commit 2e41
 
 - Round 2 (branch task/T-357-client-r2, base b149f52e): (1) Camera2Pipeline: `OpenGeneration` tags each openCamera; closeCameraOnly invalidates; stale onOpened closes its device, stale onDisconnected/onError only close it (no state change). Pure part unit-tested; the Camera2 callbacks themselves need the tablet (switch facing quickly right after start: no orphaned camera, camera light goes off on stop). (2) `Limits.CAM_FRAME_MAX_BYTES` = 4_194_304 - 20 = 4_194_284; boundary test (max ok, max+1 rejected on encode and decode).
 
+- Round 3 (branch task/T-357-client-r3): (1) `onConfigureFailed` now ignores (and closes) a session whose device is no longer current or whose open generation is stale, so a late failure of the old session after a facing switch cannot kill the new stream. (2) The encoder input `Surface` is kept as a field and released in teardown after `GlEncoderSurface.release()` (also covers EGL setup failure: teardown runs once the owner stops the pipeline). Camera2/GL paths are not JVM-testable (no new unit test; existing OpenGeneration test covers the staleness rule). Tablet: switch facing repeatedly, stop/start the camera several times; no stream kill after a switch, no leaked-surface warnings in logcat.
+
 ## Open questions
 
 ## Handoff (host)
