@@ -207,11 +207,106 @@ func runPattern(seconds: Double, width: Int, height: Int, fps: Int) {
     print("stopped (\(st(sp))); enqueued=\(enqueued) dropped=\(dropped)")
 }
 
+// MARK: - watch (T-354: usage detection experiment)
+
+func ts() -> String {
+    let f = DateFormatter(); f.dateFormat = "HH:mm:ss.SSS"; return f.string(from: Date())
+}
+
+/// Candidate selectors for "is someone using this camera". Polled and listened.
+let watchSelectors: [(String, Int)] = [
+    ("IsRunningSomewhere", kCMIODevicePropertyDeviceIsRunningSomewhere),
+    ("IsAlive", kCMIODevicePropertyDeviceIsAlive),
+    ("IsRunning", kCMIODevicePropertyDeviceIsRunning),
+    ("HogMode", kCMIODevicePropertyHogMode),
+    ("ClientCount", kCMIODevicePropertyClientSyncDiscontinuity),
+    ("SuspendedByUser", kCMIODevicePropertySuspendedByUser),
+    ("StreamsCount", kCMIODevicePropertyStreams),
+]
+let streamSelectors: [(String, Int)] = [
+    ("Direction", kCMIOStreamPropertyDirection),
+    ("Latency", kCMIOStreamPropertyLatency),
+    ("FrameRate", kCMIOStreamPropertyFrameRate),
+    ("FrameRates", kCMIOStreamPropertyFrameRates),
+    ("StartingChannel", kCMIOStreamPropertyStartingChannel),
+    ("TerminalType", kCMIOStreamPropertyTerminalType),
+]
+
+func probeValue(_ obj: CMIOObjectID, _ sel: Int) -> String {
+    var a = addr(sel)
+    guard CMIOObjectHasProperty(obj, &a) else { return "n/a" }
+    var size: UInt32 = 0
+    guard CMIOObjectGetPropertyDataSize(obj, &a, 0, nil, &size) == 0 else { return "err" }
+    if size == 4, let v = uint32(obj, sel) { return String(v) }
+    return "size=\(size)"
+}
+
+nonisolated(unsafe) var lastSeen: [String: String] = [:]
+nonisolated(unsafe) var watchDeviceID: CMIOObjectID = 0
+nonisolated(unsafe) var watchStreams: [CMIOStreamID] = []
+let watchQueue = DispatchQueue(label: "watch")
+
+func pollWatch(_ tag: String) {
+    var rows: [(String, CMIOObjectID, Int)] = []
+    for (n, sel) in watchSelectors { rows.append(("dev.\(n)", watchDeviceID, sel)) }
+    for s in watchStreams { for (n, sel) in streamSelectors { rows.append(("stream\(s).\(n)", s, sel)) } }
+    for (name, obj, sel) in rows {
+        let v = probeValue(obj, sel)
+        if lastSeen[name] != v {
+            print("\(ts()) \(tag) \(name) = \(v)\(lastSeen[name] == nil ? " (initial)" : " (was \(lastSeen[name]!))")")
+            lastSeen[name] = v
+        }
+    }
+}
+
+func startWatch() {
+    let devs = devices()
+    guard let dev = findOBS(devs) else { fail("OBS Virtual Camera device not found (run --list)", 2) }
+    watchDeviceID = dev.id
+    watchStreams = dev.streams
+    print("\(ts()) watching '\(dev.name)' device \(dev.id), streams \(dev.streams.map { "\($0)(dir \(direction($0).map(String.init) ?? "?"))" })")
+    // Listeners: wildcard selector on device and each stream, so unknown property changes show up too.
+    for obj in [dev.id] + dev.streams {
+        var a = CMIOObjectPropertyAddress(mSelector: CMIOObjectPropertySelector(kCMIOObjectPropertySelectorWildcard),
+                                          mScope: CMIOObjectPropertyScope(kCMIOObjectPropertyScopeWildcard),
+                                          mElement: CMIOObjectPropertyElement(kCMIOObjectPropertyElementWildcard))
+        let r = CMIOObjectAddPropertyListenerBlock(obj, &a, watchQueue) { n, addrs in
+            for i in 0..<Int(n) {
+                guard let addrs else { break }; let x = addrs[i]
+                print("\(ts()) LISTENER obj=\(obj) selector=\(st(Int32(bitPattern: x.mSelector))) scope=\(st(Int32(bitPattern: x.mScope)))")
+            }
+            pollWatch("after-listener")
+        }
+        if r != 0 { print("\(ts()) listener on \(obj) failed: \(st(r))") }
+    }
+    pollWatch("poll")
+    // Polling fallback in case listeners do not fire.
+    let t = DispatchSource.makeTimerSource(queue: watchQueue)
+    t.schedule(deadline: .now() + .milliseconds(250), repeating: .milliseconds(250))
+    t.setEventHandler { pollWatch("poll") }
+    t.resume()
+    withExtendedLifetime(t) {}
+    watchTimer = t
+}
+nonisolated(unsafe) var watchTimer: DispatchSourceTimer?
+
 // MARK: - args
 
 let args = Array(CommandLine.arguments.dropFirst())
 func opt(_ n: String) -> String? { if let i = args.firstIndex(of: n), i + 1 < args.count { return args[i + 1] }; return nil }
 
+if args.contains("--watch") {
+    let secs = Double(opt("--seconds") ?? "") ?? 300
+    startWatch()
+    if args.contains("--pattern") {
+        let fps = Int(opt("--fps") ?? "") ?? 30
+        Thread.detachNewThread { runPattern(seconds: secs, width: 1920, height: 1080, fps: fps); exit(0) }
+    } else {
+        print("\(ts()) watching for \(secs) s (Ctrl-C to stop); open/close Photo Booth with 'OBS Virtual Camera' selected")
+        DispatchQueue.main.asyncAfter(deadline: .now() + secs) { exit(0) }
+    }
+    dispatchMain()
+}
 if args.contains("--list") { listDevices(); exit(0) }
 if args.contains("--pattern") {
     let secs = Double(opt("--seconds") ?? "") ?? 30
@@ -226,5 +321,5 @@ if args.contains("--pattern") {
     runPattern(seconds: secs, width: w, height: h, fps: fps)
     exit(0)
 }
-print("usage: obs-cam-probe --list | --pattern [--seconds N] [--size WxH] [--fps N]")
+print("usage: obs-cam-probe --list | --watch [--seconds N] [--pattern] | --pattern [--seconds N] [--size WxH] [--fps N]")
 exit(64)
