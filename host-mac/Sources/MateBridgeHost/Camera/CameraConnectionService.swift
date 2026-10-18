@@ -44,6 +44,10 @@ final class CameraConnectionService: @unchecked Sendable {
     // Everything below is confined to `queue`, except where noted.
     private var machine = CameraConnectionMachine()
     private var gate = CameraStreamGate()
+    /// Identifies one `open()` run (T-357 r4): decode accounting of an older run, still completing on the decode or output
+    /// queue, must not touch the gate of the current one.
+    private var runToken: UInt64 = 0
+    private var outputPolicy = CameraOutputStallPolicy()
     private var listener: FilesListener?
     private var sessionID: UInt32 = 0
     private var camID: UInt16 = 0
@@ -74,6 +78,7 @@ final class CameraConnectionService: @unchecked Sendable {
         var captureTimeUs: UInt64
         var epoch: UInt64
         var generation: UInt64
+        var token: UInt64
         var decoder: H264CameraDecoder
     }
     private struct ConfigWork: @unchecked Sendable {
@@ -124,6 +129,8 @@ final class CameraConnectionService: @unchecked Sendable {
             listener = bound
             machine = CameraConnectionMachine()
             gate = CameraStreamGate()
+            runToken &+= 1
+            outputPolicy.reset()
             epochBox.withLock { $0 = gate.epoch }
             connectionGeneration.withLock { $0 &+= 1 }
             decoder = H264CameraDecoder()
@@ -332,7 +339,7 @@ final class CameraConnectionService: @unchecked Sendable {
         switch gate.frame(keyframe: frame.isKeyframe, now: now) {
         case .submit(let epoch):
             let work = FrameWork(data: frame.data, captureTimeUs: frame.captureTimeUs, epoch: epoch,
-                                 generation: generation, decoder: decoder)
+                                 generation: generation, token: runToken, decoder: decoder)
             if store.withLock({ $0.push(frame: work) }) { scheduleDrain() }
             retireDropped()
         case .dropAwaitingKeyframe:
@@ -366,19 +373,22 @@ final class CameraConnectionService: @unchecked Sendable {
                 _ = c.decoder.configure(annexB: c.data)
             case .frame(let f):
                 guard box.withLock({ $0 }) == f.epoch, generations.withLock({ $0 }) == f.generation else {
-                    queue.async { [weak self] in self?.gate.retire(1) }  // void: never reaches the decoder
+                    let token = f.token
+                    queue.async { [weak self] in
+                        if let self, runToken == token { gate.retire(1) }  // void: never reaches the decoder
+                    }
                     continue
                 }
-                let epoch = f.epoch, generation = f.generation
+                let epoch = f.epoch, generation = f.generation, token = f.token
                 f.decoder.decode(annexB: f.data, captureTimeUs: f.captureTimeUs) { [weak self] result in
-                    out.async { self?.decoded(result, epoch: epoch, generation: generation) }
+                    out.async { self?.decoded(result, epoch: epoch, generation: generation, token: token) }
                 }
             }
         }
     }
 
     /// On `outQueue`: one decode result. The sink gets frames of the current epoch only.
-    private func decoded(_ result: H264CameraDecoder.Result, epoch: UInt64, generation: UInt64) {
+    private func decoded(_ result: H264CameraDecoder.Result, epoch: UInt64, generation: UInt64, token: UInt64) {
         switch result {
         case .frame(let image):
             // The generation is checked again right before the sink: scaling can outlast a STOP (T-357 r2).
@@ -386,12 +396,16 @@ final class CameraConnectionService: @unchecked Sendable {
                let scaled = scaler.scaled(image.value), connectionGeneration.withLock({ $0 }) == generation {
                 sink?(CameraPixelBuffer(scaled))
             }
-            queue.async { [weak self] in self?.gate.finished(epoch: epoch, decoded: true) }
+            queue.async { [weak self] in
+                if let self, runToken == token { gate.finished(epoch: epoch, decoded: true) }
+            }
         case .noPicture:
-            queue.async { [weak self] in self?.gate.finished(epoch: epoch, decoded: false) }
+            queue.async { [weak self] in
+                if let self, runToken == token { gate.finished(epoch: epoch, decoded: false) }
+            }
         case .failed(let status):
             queue.async { [weak self] in
-                guard let self, running else { return }
+                guard let self, running, runToken == token else { return }
                 logger.log(.warning, "camera_decode_error", sessionID: sessionID, generation: camID, fields: "status=\(status)")
                 // The failed frame is done either way; only a failure of the live chain touches the store (T-357 r3).
                 gate.finished(epoch: epoch, decoded: false)
@@ -408,6 +422,17 @@ final class CameraConnectionService: @unchecked Sendable {
     private func sendKeyframeRequest(_ reason: CamKeyframeReason) {
         guard let id = activeID, let conn = conns[id], conn.sealer != nil,
               let record = try? Message.camKeyframeRequest(reason).sealed(using: &conn.sealer!) else { return }
+        switch outputPolicy.request(pendingBytes: conn.socket.pendingBytes, now: HostClock.nowUs()) {
+        case .skip:
+            return  // the client is not reading: never queue behind unsent bytes
+        case .close:
+            logger.log(.warning, "camera_conn", sessionID: sessionID, generation: camID,
+                       fields: "conn=\(id.raw) state=closed reason=write_stall")
+            conn.socket.closeNow()
+            return
+        case .send:
+            break
+        }
         keyframeRequests += 1
         conn.socket.write(record)
         logger.log(.debug, "camera_keyframe_request", sessionID: sessionID, generation: camID, fields: "reason=\(reason.rawValue)")
@@ -444,6 +469,7 @@ final class CameraConnectionService: @unchecked Sendable {
                 }
             case .activated(let id):
                 activeID = id
+                outputPolicy.reset()
                 voidActiveWork()
                 onActive?(true)
                 if let reason = gate.startupRequest(now: HostClock.nowUs()) { sendKeyframeRequest(reason) }
