@@ -82,6 +82,7 @@ class SettingsCatalogTest {
         override fun selectCameraMode(m: CameraMode) { calls += "camera ${m.id}"; cameraMode = m }
         override var cameraFacing = CameraFacing.FRONT
         override fun selectCameraFacing(f: CameraFacing) { calls += "camera_facing ${f.id}"; cameraFacing = f }
+        override var cameraWideAvailable = false
         override var cameraStreaming = false
         override fun releaseCamera() { calls += "camera_release" }
         override var cameraStatus = "Mac kamerayı kullanmıyor"
@@ -135,6 +136,17 @@ class SettingsCatalogTest {
         assertTrue(audio.text().startsWith("Ses (uzak oturum)"))
         h.remoteSession = false
         assertTrue(audio.text().startsWith("Ses:"))
+    }
+
+    /** T-358: the "Geniş açı" option only exists where the device has a rear wide-angle camera. */
+    @Test fun cameraFacingOffersWideOnlyWhenSupported() {
+        h.cameraAvailable = true
+        assertEquals(listOf("front", "back"), choice(SettingsCatalog.sections(h, inStream = true), "camera_facing").options.map { it.id })
+        h.cameraWideAvailable = true
+        val c = choice(SettingsCatalog.sections(h, inStream = true), "camera_facing")
+        assertEquals(listOf("Ön", "Arka", "Geniş açı"), c.options.map { it.label })
+        c.select("back_wide")
+        assertEquals("camera_facing back_wide", h.calls.last())
     }
 
     /** T-357: "Kamerayı şimdi kapat" stays in the Kamera section, shows only while the camera streams. */

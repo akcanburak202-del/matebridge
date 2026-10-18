@@ -120,8 +120,8 @@ class Camera2Pipeline(
             prev?.await(PREVIOUS_CLOSE_WAIT_MS, TimeUnit.MILLISECONDS) // the previous run releases the camera first
             if (stopRequested.get()) return
             val mgr = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-            val id = findCamera(mgr, facing) ?: return fail("no_camera")
-            applyCharacteristics(mgr, id, reqW)
+            val target = resolveTarget(mgr, facing) ?: return fail("no_camera")
+            applyCharacteristics(mgr, target.charId, reqW)
             val enc = createEncoder(reqW, reqH, kbps)
             codec = enc.codec
             outW = enc.w
@@ -138,7 +138,7 @@ class Camera2Pipeline(
             camSurface = Surface(t)
             startDrain(enc.codec)
             log(false, "camera", "state=encoder size=${outW}x$outH src=${srcW}x$srcH fps=$fps facing=${facing.id}")
-            openCamera(mgr, id)
+            openCamera(mgr, target)
         } catch (e: SecurityException) {
             fail("permission")
         } catch (e: CameraAccessException) {
@@ -184,9 +184,46 @@ class Camera2Pipeline(
         throw IllegalStateException("no H.264 encoder configuration worked", last)
     }
 
-    private fun findCamera(mgr: CameraManager, f: CameraFacing): String? {
-        val want = if (f == CameraFacing.FRONT) CameraCharacteristics.LENS_FACING_FRONT else CameraCharacteristics.LENS_FACING_BACK
-        return mgr.cameraIdList.firstOrNull { mgr.getCameraCharacteristics(it).get(CameraCharacteristics.LENS_FACING) == want }
+    /**
+     * The camera for [f] (T-358). BACK_WIDE that cannot be resolved logs `wide_unavailable` and falls back to BACK here
+     * (the setting is not changed); [facing] then says BACK so the rest of the pipeline treats it as the rear camera.
+     */
+    private fun resolveTarget(mgr: CameraManager, f: CameraFacing): CameraTarget? {
+        val t = AndroidCameraTargets.resolve(mgr, f)
+        if (t != null || f != CameraFacing.BACK_WIDE) return t
+        return fallBackToBack("no_wide_camera")?.let { AndroidCameraTargets.resolve(mgr, CameraFacing.BACK) }
+    }
+
+    /** Wide-angle failed (T-358): log it, continue with BACK. Returns BACK, or null when this already is the fallback. */
+    private fun fallBackToBack(why: String): CameraFacing? {
+        if (facing != CameraFacing.BACK_WIDE) return null
+        log(true, "camera", "state=error reason=wide_unavailable detail=$why")
+        facing = CameraFacing.BACK
+        return CameraFacing.BACK
+    }
+
+    /** A camera/session failure: a wide-angle one reopens the plain rear camera, anything else ends the stream. */
+    private fun failOrFallback(reason: String) {
+        if (fallBackToBack(reason) == null) return fail(reason)
+        val h = handler ?: return
+        h.post {
+            if (stopRequested.get() || released) return@post
+            closeCameraOnly()
+            try {
+                val mgr = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+                val t = AndroidCameraTargets.resolve(mgr, CameraFacing.BACK) ?: return@post fail("no_camera")
+                applyCharacteristics(mgr, t.charId, outW)
+                st?.setDefaultBufferSize(srcW, srcH)
+                reannounce = true
+                openCamera(mgr, t)
+            } catch (e: SecurityException) {
+                fail("permission")
+            } catch (e: RuntimeException) {
+                fail("wide_fallback_${e.javaClass.simpleName}")
+            } catch (e: CameraAccessException) {
+                fail("camera_access")
+            }
+        }
     }
 
     /** Source size, sensor orientation, fps range and autofocus support of camera [id]. */
@@ -206,38 +243,39 @@ class Camera2Pipeline(
     }
 
     @SuppressLint("MissingPermission")
-    private fun openCamera(mgr: CameraManager, id: String) {
+    private fun openCamera(mgr: CameraManager, target: CameraTarget) {
         if (context.checkSelfPermission(android.Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) return fail("permission")
         val gen = openGen.next() // T-357: every open attempt has its own generation
+        val id = target.openId
         mgr.openCamera(id, object : CameraDevice.StateCallback() {
             override fun onOpened(d: CameraDevice) {
                 if (stopRequested.get() || released || !openGen.isCurrent(gen)) { d.close(); return } // stale: a switch came first
                 device = d
-                createSession(d, gen)
+                createSession(d, gen, target.physicalId)
             }
 
             override fun onDisconnected(d: CameraDevice) {
                 d.close()
                 if (!openGen.isCurrent(gen)) return // a stale attempt says nothing about the current camera
                 if (device === d) device = null
-                if (!stopRequested.get()) fail("camera_disconnected")
+                if (!stopRequested.get()) failOrFallback("camera_disconnected")
             }
 
             override fun onError(d: CameraDevice, error: Int) {
                 d.close()
                 if (!openGen.isCurrent(gen)) return
                 if (device === d) device = null
-                if (!stopRequested.get()) fail("camera_error_$error")
+                if (!stopRequested.get()) failOrFallback("camera_error_$error")
             }
         }, handler)
     }
 
-    private fun createSession(d: CameraDevice, gen: Int) {
+    private fun createSession(d: CameraDevice, gen: Int, physicalId: String?) {
         val surface = camSurface ?: return
         val h = handler ?: return
         try {
             val cfg = SessionConfiguration(
-                SessionConfiguration.SESSION_REGULAR, listOf(OutputConfiguration(surface)), { r -> h.post(r) },
+                SessionConfiguration.SESSION_REGULAR, listOf(OutputConfiguration(surface).also { if (physicalId != null) it.setPhysicalCameraId(physicalId) }), { r -> h.post(r) },
                 object : CameraCaptureSession.StateCallback() {
                     override fun onConfigured(s: CameraCaptureSession) {
                         if (stopRequested.get() || released || device !== d) { s.close(); return }
@@ -265,7 +303,7 @@ class Camera2Pipeline(
                     override fun onConfigureFailed(s: CameraCaptureSession) {
                         // T-357 r3: a late failure of an old session (after a facing switch) must not kill the new stream
                         if (stopRequested.get() || released || device !== d || !openGen.isCurrent(gen)) { try { s.close() } catch (_: RuntimeException) {}; return }
-                        fail("session")
+                        failOrFallback("session")
                     }
                 },
             )
@@ -283,12 +321,12 @@ class Camera2Pipeline(
         closeCameraOnly()
         try {
             val mgr = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-            val id = findCamera(mgr, f) ?: return fail("no_camera")
-            applyCharacteristics(mgr, id, outW)
+            val target = resolveTarget(mgr, f) ?: return fail("no_camera")
+            applyCharacteristics(mgr, target.charId, outW)
             st?.setDefaultBufferSize(srcW, srcH)
             reannounce = true
-            log(false, "camera", "state=switched facing=${f.id} src=${srcW}x$srcH")
-            openCamera(mgr, id)
+            log(false, "camera", "state=switched facing=${facing.id} open=${target.openId} physical=${target.physicalId ?: "-"} src=${srcW}x$srcH")
+            openCamera(mgr, target)
         } catch (e: SecurityException) {
             fail("permission")
         } catch (e: CameraAccessException) {
