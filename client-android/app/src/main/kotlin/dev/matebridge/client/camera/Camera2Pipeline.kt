@@ -121,8 +121,16 @@ class Camera2Pipeline(
             prev?.await(PREVIOUS_CLOSE_WAIT_MS, TimeUnit.MILLISECONDS) // the previous run releases the camera first
             if (stopRequested.get()) return
             val mgr = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-            val target = resolveTarget(mgr, facing) ?: return fail("no_camera")
-            applyCharacteristics(mgr, target.charId, reqW)
+            var target = resolveTarget(mgr, facing) ?: return fail("no_camera")
+            try {
+                applyCharacteristics(mgr, target.charId, reqW)
+            } catch (e: Exception) {
+                // T-358 r4: nothing is allocated yet, so a wide camera that cannot even report its sizes falls back by
+                // simply picking the rear camera and its sizes here, before the encoder and GL exist.
+                if (e is SecurityException || fallBackToBack("characteristics_${e.javaClass.simpleName}") == null) throw e
+                target = AndroidCameraTargets.resolve(mgr, CameraFacing.BACK) ?: return fail("no_camera")
+                applyCharacteristics(mgr, target.charId, reqW)
+            }
             val enc = createEncoder(reqW, reqH, kbps)
             codec = enc.codec
             outW = enc.w
@@ -205,6 +213,7 @@ class Camera2Pipeline(
 
     /** A camera/session failure: a wide-angle one reopens the plain rear camera, anything else ends the stream. */
     private fun failOrFallback(reason: String) {
+        if (camSurface == null) return fail(reason) // encoder/GL not set up yet: a bare reopen would stream nothing
         if (fallBackToBack(reason) == null) return fail(reason)
         openGen.next() // T-358 r3: the failed open's queued callbacks (onError after a thrown open) are stale from now on
         val h = handler ?: return
