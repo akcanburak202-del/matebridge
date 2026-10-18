@@ -176,17 +176,20 @@ final class ObsVirtualCamera: @unchecked Sendable {
             return start
         }
         guard schedule else { return }
-        queue.async { [self] in
-            while true {
-                let next = stagingLock.withLock { () -> (CameraPixelBuffer, @Sendable () -> Void)? in
-                    guard let item = staged else { drainScheduled = false; return nil }
-                    staged = nil
-                    return item
-                }
-                guard let (frame, onStarted) = next else { return }
-                writeLocked(frame, onStarted: onStarted)
-            }
+        queue.async { [self] in drainStaged() }
+    }
+
+    /// One frame per turn, then the queue is given back (T-357 r5): `pauseSink`, `stopSink` and the synchronous
+    /// `readRunning` of the coordinator must not wait behind a sink that is slower than the input.
+    private func drainStaged() {
+        let next = stagingLock.withLock { () -> (CameraPixelBuffer, @Sendable () -> Void)? in
+            guard let item = staged else { drainScheduled = false; return nil }
+            staged = nil
+            return item
         }
+        guard let (frame, onStarted) = next else { return }
+        writeLocked(frame, onStarted: onStarted)
+        queue.async { [self] in drainStaged() }
     }
 
     private func writeLocked(_ frame: CameraPixelBuffer, onStarted: @Sendable () -> Void) {

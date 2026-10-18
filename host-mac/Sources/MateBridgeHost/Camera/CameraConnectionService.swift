@@ -420,11 +420,12 @@ final class CameraConnectionService: @unchecked Sendable {
     }
 
     private func sendKeyframeRequest(_ reason: CamKeyframeReason) {
-        guard let id = activeID, let conn = conns[id], conn.sealer != nil,
-              let record = try? Message.camKeyframeRequest(reason).sealed(using: &conn.sealer!) else { return }
-        switch outputPolicy.request(pendingBytes: conn.socket.pendingBytes, now: HostClock.nowUs()) {
+        guard let id = activeID, let conn = conns[id], conn.sealer != nil else { return }
+        let sealed = outputPolicy.sealRequest(.camKeyframeRequest(reason), with: &conn.sealer!,
+                                              pendingBytes: conn.socket.pendingBytes, now: HostClock.nowUs())
+        switch sealed.decision {
         case .skip:
-            return  // the client is not reading: never queue behind unsent bytes
+            return  // the client is not reading: never queue behind unsent bytes (and no counter was used)
         case .close:
             logger.log(.warning, "camera_conn", sessionID: sessionID, generation: camID,
                        fields: "conn=\(id.raw) state=closed reason=write_stall")
@@ -433,6 +434,7 @@ final class CameraConnectionService: @unchecked Sendable {
         case .send:
             break
         }
+        guard let record = sealed.record else { return }
         keyframeRequests += 1
         conn.socket.write(record)
         logger.log(.debug, "camera_keyframe_request", sessionID: sessionID, generation: camID, fields: "reason=\(reason.rawValue)")
