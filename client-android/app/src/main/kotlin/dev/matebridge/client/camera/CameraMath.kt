@@ -111,3 +111,16 @@ object CameraMath {
         return ranges.minByOrNull { it.first } // all above: the lowest
     }
 }
+
+/**
+ * Tags camera open attempts (T-357, Codex): switching facing before the first `onOpened` arrives leaves two opens in
+ * flight; only the newest may become the device. Any thread.
+ */
+class OpenGeneration {
+    private val gen = java.util.concurrent.atomic.AtomicInteger()
+
+    /** Starts a new generation (or invalidates the running one) and returns its number. */
+    fun next(): Int = gen.incrementAndGet()
+
+    fun isCurrent(g: Int): Boolean = gen.get() == g
+}
