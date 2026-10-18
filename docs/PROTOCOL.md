@@ -368,7 +368,7 @@ Tablet kamerasının Mac'te webcam olarak kullanımı (karar 0040). İstemci yal
 | Alan | Tip | Açıklama |
 |---|---|---|
 | mode | u8 | `0` OFF, `1` AUTO. Başka değer: OFF sayılır. |
-| facing | u8 | `0` FRONT, `1` BACK. Başka değer: FRONT sayılır. |
+| facing | u8 | `0` FRONT, `1` BACK, `2` BACK_WIDE (arka geniş açı, T-358). Başka değer: FRONT sayılır. Bilgi amaçlıdır; host davranışı değişmez. |
 | release_seq | u16 | *Eski `reserved`.* Kullanıcı panelde "Kamerayı şimdi kapat"a her bastığında istemci 1 artırır (uygulama çalıştığı sürece artan sayaç, 65535'ten sonra 0'a sarar; oturum başında sıfırlanmaz). Host oturumda gelen **ilk** değeri taban alır; değişim sayılmaz. |
 
 - Uzak oturumda (STREAM_PREFS `link = 1`) istemci her zaman `mode = 0` yazar; host da `link = 1` iken `mode`'u OFF sayar.
