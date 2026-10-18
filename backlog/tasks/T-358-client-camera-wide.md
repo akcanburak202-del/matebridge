@@ -56,4 +56,6 @@ Saf secici `CameraTargets` (CamInfo listesi -> CameraTarget: openId/physicalId/c
 
 - Round 3 (task/T-358-client-r3): (1) the encoder drain thread no longer stops at `stopRequested`: it discards output until teardown has released GL/EGL (`renderDone`), with a 5 s upper bound, so a handler blocked in eglSwapBuffers on a full encoder can always finish teardown; codec stop/release happens after the drain is joined. (2) `failOrFallback` invalidates the open generation synchronously before posting the fallback, so a queued onError of the failed open is stale. Camera2 flows are not JVM-testable; tablet: start/stop and background the camera repeatedly (no leaked camera/handler after STOP), force a wide failure and confirm the fallback to BACK survives.
 
+- Round 4 (task/T-358-client-r4): the startup fallback no longer reopens a camera onto an unprepared pipeline. In `setup()` a wide camera whose `applyCharacteristics` throws falls back to BACK before the encoder/GL exist (BACK target and sizes picked there). `failOrFallback` fails cleanly when `camSurface` is still null (encoder/GL not ready) instead of posting a reopen. Camera2 flow, tablet only.
+
 ## Open questions
