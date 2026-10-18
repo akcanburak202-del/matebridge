@@ -2,7 +2,7 @@ import Foundation
 import IOKit
 import MateBridgeCore
 
-/// USB mode guard (T-039). While enabled it keeps `adb reverse tcp:47001/47002` alive: it makes sure the adb server
+/// USB mode guard (T-039). While enabled it keeps `adb reverse tcp:47001/47002/47004` alive: it makes sure the adb server
 /// runs (under launchd, like `scripts/usb-mode.sh`, so tunnels survive), and every ~2 s re-installs missing tunnels,
 /// which also restores them after the cable is unplugged and replugged. All work, including child processes
 /// with deadlines, runs on its own serial queue; decisions come from the pure `UsbTunnelPlanner`.

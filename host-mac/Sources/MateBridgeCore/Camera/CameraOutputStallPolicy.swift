@@ -29,6 +29,15 @@ public struct CameraOutputStallPolicy: Sendable {
         return now >= since + stallLimitUs ? .close : .skip
     }
 
+    /// Decides first, seals only when the request is sent: a skipped or dropped request must not consume a sealer
+    /// counter, or the next record would not be the one the peer's opener expects (T-357 r5).
+    public mutating func sealRequest(_ message: Message, with sealer: inout RecordSealer, pendingBytes: Int,
+                                     now: UInt64) -> (decision: Decision, record: [UInt8]?) {
+        let decision = request(pendingBytes: pendingBytes, now: now)
+        guard decision == .send, let record = try? message.sealed(using: &sealer) else { return (decision, nil) }
+        return (decision, record)
+    }
+
     /// A new connection starts clean.
     public mutating func reset() { stuckSince = nil }
 }

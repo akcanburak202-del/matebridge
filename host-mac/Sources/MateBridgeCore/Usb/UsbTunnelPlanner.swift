@@ -62,7 +62,7 @@ public struct UsbTunnelPlanner: Sendable {
     /// True while IOKit attach/detach notifications are registered; lets an empty bus be probed rarely.
     public var usbEventsAvailable = false
 
-    public init(ports: [UInt16] = [DefaultPorts.control, DefaultPorts.video]) { self.ports = ports }
+    public init(ports: [UInt16] = [DefaultPorts.control, DefaultPorts.video, DefaultPorts.camera]) { self.ports = ports }
 
     public mutating func decide(_ snapshot: UsbSnapshot) -> UsbDecision {
         let state: UsbTunnelState

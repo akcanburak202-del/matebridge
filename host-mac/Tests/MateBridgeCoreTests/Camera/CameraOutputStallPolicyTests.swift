@@ -31,4 +31,18 @@ private let sec: UInt64 = 1_000_000
         p.reset()
         #expect(p.request(pendingBytes: 30, now: 9 * sec) == .skip)
     }
+
+    @Test func aSkippedRequestDoesNotAdvanceTheSealerCounter() {
+        let key = SecretBytes([UInt8](repeating: 9, count: 32))
+        let msg = Message.camKeyframeRequest(.framesDropped)
+        var policy = CameraOutputStallPolicy()
+        var sealer = RecordSealer(key: key, maxPayload: ProtocolConstants.maxCameraPayload)
+        let skipped = policy.sealRequest(msg, with: &sealer, pendingBytes: 10, now: 0)
+        #expect(skipped.decision == .skip && skipped.record == nil)
+        let sent = policy.sealRequest(msg, with: &sealer, pendingBytes: 0, now: sec)
+        // The first record actually sent is the one a fresh sealer (counter 0) produces.
+        var fresh = RecordSealer(key: key, maxPayload: ProtocolConstants.maxCameraPayload)
+        #expect(sent.record == (try? msg.sealed(using: &fresh)))
+        #expect(sent.record != nil)
+    }
 }

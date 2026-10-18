@@ -84,3 +84,8 @@ Karar 0040 ek 2 ve PROTOCOL.md (dal `task/T-356-camera-integration`, commit 2e41
 
 - P2-1: new Core `CameraOutputStallPolicy`: a CAM_KEYFRAME_REQUEST is written only when the socket has no pending bytes; otherwise skipped; output stuck for 5 s closes the camera connection (`camera_conn state=closed reason=write_stall`, goes through the normal socketClosed path). Tests in CameraOutputStallPolicyTests.
 - P2-2: `runToken` (bumped per `open()`) travels with every frame work item; gate.finished/retire/decodeFailed from decode/output queues run only if the token still matches, so a previous run never touches the new gate. Closes the r3 residual. Host glue not unit tested; full check.sh ALL OK, camera-selftest passes.
+
+### Round 5 (Codex, branch task/T-359-host)
+
+- P2-1: keyframe request is now sealed only after the stall policy says send (`CameraOutputStallPolicy.sealRequest`), so a skipped request never consumes a sealer counter. Test: skipped then sent equals a fresh sealer first record.
+- P2-2: `ObsVirtualCamera` drains staging one frame per queue turn and re-dispatches, so pauseSink/stopSink/readRunning interleave. Not unit tested.

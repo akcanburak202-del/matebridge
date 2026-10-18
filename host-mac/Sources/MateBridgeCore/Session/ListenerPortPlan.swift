@@ -4,6 +4,8 @@ import Foundation
 public enum DefaultPorts {
     public static let control: UInt16 = 47001
     public static let video: UInt16 = 47002
+    /// Tablet camera connection (decision 0040, T-359): also reached over USB through `adb reverse`.
+    public static let camera: UInt16 = 47004
 }
 
 /// Port choice for one listener: the preferred port first, then a system-assigned port (0) when the
