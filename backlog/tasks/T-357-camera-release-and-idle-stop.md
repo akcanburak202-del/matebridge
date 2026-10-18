@@ -45,3 +45,11 @@ Karar 0040 ek 2 ve PROTOCOL.md (dal `task/T-356-camera-integration`, commit 2e41
 ## Handoff
 
 ## Open questions
+
+## Handoff (host)
+
+- Commits: fb69ab67 (release_seq, idle/sleep audit, tests, KNOBS/LOGGING), then the Codex P2 commit (see git log, branch task/T-357-host).
+- Files: CameraMessages.swift (releaseSeq codec), CameraController.swift (released state), CameraUsageTracker.swift (periodic probe removed, startProbe, early exit when the property falls, settle 0.5 s), new CameraIdleAudit.swift, CameraKnobs.swift (MATEBRIDGE_CAMERA_IDLE_S=600, probe knob removed), CameraBridge.swift (idle timer via CGEventSource, NSWorkspace willSleep/screensDidSleep observers only while the camera is watched), tests, docs/KNOBS.md row 49, docs/LOGGING.md.
+- Probe pause: 0.5 s maximum (was 0.6), ends at once when the raw property falls. NOT measured on hardware; a too-short value only causes a harmless resume and a retry 10 min later.
+- Codex P2 fixes: (1) ObsVirtualCamera.write stages one frame, newest wins, drops counted as queue_full; (2) CameraConnectionService .close of the active connection now voids work like socketClosed (shared voidActiveWork); (3) one pending CODEC_CONFIG, latest wins, skipped if the connection generation changed (own connection generation, not the gate epoch, so an overflow does not discard a still valid config); (4) startedStream keeps the started IDs, stop always clears local sink state. No unit tests for 1-4 (CMIO/VT glue); --camera-selftest passes.
+- Not tested on hardware: sleep observers, CGEventSource idle age, real OBS probe timing.
