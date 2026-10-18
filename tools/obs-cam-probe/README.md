@@ -17,3 +17,15 @@ Device UUID is read from the installed OBS plug-in Info.plist
 (`OBSCameraDeviceUUID`); fallback is matching the name "OBS Virtual Camera".
 Visual check: the user opens FaceTime/Photo Booth and selects
 "OBS Virtual Camera" while the probe runs; with OBS open and closed.
+
+## --watch (T-354, usage detection)
+
+```bash
+.build/release/obs-cam-probe --watch --seconds 300              # passive: no sink write
+.build/release/obs-cam-probe --watch --pattern --seconds 300    # while the probe feeds the sink
+```
+
+Prints timestamped changes of `DeviceIsRunningSomewhere` and related device/stream
+properties (wildcard property listeners plus a 250 ms poll). Open and close Photo Booth
+(selecting "OBS Virtual Camera") during the run, both with and without `--pattern`.
+Key question: does our own sink write keep `IsRunningSomewhere` at 1?

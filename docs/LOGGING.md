@@ -10,7 +10,7 @@ Loglar hem hata ayıklamanın hem de ajanların cihazdaki davranışı "görmesi
 
 - `mono_ms`: monoton saat (Mac: `ContinuousClock`/`mach_absolute_time`, Android: `SystemClock.elapsedRealtime`). Duvar saati ayrıca satır başına eklenebilir ama karşılaştırmalar monotonla yapılır.
 - `LEVEL`: `E` hata, `W` uyarı, `I` bilgi, `D` debug (varsayılan kapalı).
-- `component`: `capture`, `encoder`, `net`, `vdisplay`, `input`, `pen`, `kbd`, `decoder`, `render`, `session`, `cursor` (Mac, yerel imleç).
+- `component`: `capture`, `encoder`, `net`, `vdisplay`, `input`, `pen`, `kbd`, `decoder`, `render`, `session`, `cursor` (Mac, yerel imleç), `camera` (Mac, tablet kamerası).
 - `ev`: snake_case olay adı, ör. `ev=connect_ok`, `ev=frame_drop reason=stale`.
 
 ## Nereye yazılır
@@ -661,6 +661,17 @@ Gizlilik: yol, dosya adı, jeton, nonce, HTTP içeriği ve adres **asla** yazıl
 
 - **Mac (`component=files`):** `ev=files_net` (listening/open/close/stopped, portlar, `send=open|close`; `state=listening` ve `state=cap` satırlarında `cap_bps=` ve `remote=0|1` — uzak oturumda `cap_bps=500000`, `link` değişince `state=cap` yeniden yazılır), `ev=files_conn` (kabul/red nedeni: `not_open`, `peer`, `capacity`, `unproven_limit`, `hello_timeout`, `proof_timeout`, `auth_failed`; `proven`), `ev=files_stats` saniyede bir yalnız hareket varsa (bağlantı sayıları `idle/bound/unproven/closing`, `to_tablet_bytes`, `from_tablet_bytes`, `throttled_ms`, `cap_bps`), `socket_options_refused` (W, bir kez).
 - **Tablet (`MB/files`):** `files_net_recv state= port= pool= max=`, `files_net_repeat`, `files_tunnel_open pool= max=`, `files_tunnel_close reason= opened= proven= paired= failed= rejected= h2c_bytes= c2h_bytes=`, `files_conn_closed conn= reason= [h2c_bytes= c2h_bytes= ms=|idle=1]` (nedenler arasında `write_stall`, `dav_write_failed`, `scope_mismatch`), `files_conn_failed conn= reason= streak=` (W; ilk 3, sonra her 12.), `files_tunnel_no_keys` (W), `rate_cap cap_kbps= video_kbps= remote=` (T-347; `remote=1`: sabit 0,5 MB/s), `scope root=wifi ro=`, `scope_missing root=wifi` (W); `MB/session`: `files_net_ignored reason=` (W).
+
+## Tablet kamerası (Mac `camera`, T-354, karar 0040)
+
+Gizlilik: kare içeriği, kamera görüntüsü ve anahtar/nonce **asla** yazılmaz; yalnız durumlar ve sayaçlar. Kamera kapalıyken (`CAMERA_PREFS` OFF, bit15 yok, uzak oturum) bu bileşen **hiç** satır yazmaz: CMIO dinleyicisi, zamanlayıcı, dinleyici soket ve çözücü yoktur.
+
+- `ev=camera state=start|stop|unavailable cam_id= [port=] [reason=]`: karar satırları. `start` dinleyici açıldıktan sonra `CAMERA_CONTROL(START)` ile birlikte; `stop reason=usage_ended|no_device|off|remote|session` (START gittiyse); `unavailable reason=no_device` (değişince bir kez); `state=failed reason=listener` (E, dinleyici bağlanamadı). `state=usb_not_supported` (I, USB oturumu: kamera portu `adb reverse` kümesinde değil, tablet UNAVAILABLE görür).
+- `ev=camera_listen state=open|close|listening|stopped|failed cam_id= [port= fallback=0|1] [reason=]`: kamera dinleyicisi. `fallback=1`: 47004 doluydu, sistem portu alındı.
+- `ev=camera_conn conn= state=refused|rejected|timeout|proven|closed reason=` : bağlantı kabul/ret. Nedenler: `not_open`, `peer_mismatch`, `unproven_limit`, `version`/`session`/`cam_id` (rejected), `hello_timeout`, `proof_timeout`, `protocol_error`, `auth_failed`, `superseded` (kanıtlanmış yeni bağlantı eskisini kapattı), `peer_closed`, `session_ended`, `keys_unavailable`.
+- `ev=camera_stats frames_in= bytes_in= decoded= written= dropped= sink_full= sink_paused= decode_errors= keyframe_requests= fps=`: 10 sn'lik özet (yalnız bağlantı etkinken ya da kare geldiyse). `dropped`: çözücü kuyruğu taştığı ya da keyframe beklerken atılan kare; `sink_full`: OBS sink kuyruğu dolu olduğu için atılan; `sink_paused`: kullanım yoklaması için sink durdurulmuşken atılan.
+- `ev=camera_decode_error status=` (W): VideoToolbox bir kareyi çözemedi; `CAM_KEYFRAME_REQUEST(DECODE_ERROR)` gider (500 ms aralıkla). `ev=camera_keyframe_request reason=`, `ev=camera_frame_drop reason=queue_full` yalnız `D`.
+- `ev=camera_cmio state=sink_started|sink_stopped [status= written= queue_full=]|sink_missing|queue_failed|start_failed|hardware_listener_failed status=`: OBS sanal kamera sink akışı (CoreMediaIO).
 
 ## Yerel imleç (Mac `cursor`, T-275, karar 0036)
 

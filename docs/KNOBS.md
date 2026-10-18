@@ -36,7 +36,7 @@ Kısaltmalar:
 | Taraf | Sayı | Komut |
 |---|---|---|
 | İstemci açılış parametreleri | 21 farklı anahtar (+4 `net_bench` alt anahtarı, + `dev` kapısı) | `DevKnobs.SPECS` (`…/session/DevKnobs.kt`). `MainActivity` ekstraları yalnız `LaunchExtras` üzerinden okur: `grep -rnoE 'get(Int\|String\|Boolean)Extra\(' client-android/app/src/main` → MA'daki genel okuyucu + aşağıdaki iki yayın alanı |
-| Host ortam değişkenleri | 18 okunan `MATEBRIDGE_*` (+5 yalnız `RemovedKnobs.variables` listesinde) | `grep -rhoE '"MATEBRIDGE_[A-Z0-9_]+"' host-mac/Sources \| sort -u` → 23 |
+| Host ortam değişkenleri | 19 okunan `MATEBRIDGE_*` (+5 yalnız `RemovedKnobs.variables` listesinde; T-354 `MATEBRIDGE_CAMERA_PROBE_S` eklendi) | `grep -rhoE '"MATEBRIDGE_[A-Z0-9_]+"' host-mac/Sources \| sort -u` → 24 |
 | Host CLI kipleri | 6 | `host-mac/Sources/MateBridgeApp/main.swift` (`runIfRequested` çağrıları) + `FilesNetSelfTest.swift` (`--files-net-hold`) |
 
 Sınıf dağılımı (canlı anahtarlar):
@@ -94,7 +94,7 @@ Sayıma girmeyen okumalar (açılış parametresi değil ya da başka giriş nok
 | 23l | `--es dec_out_park off/on` | **`on`** (T-317, 2026-10-08) | `…/session/DevKnobs.kt` (`decOutPark`); `…/video/OutputPark.kt`; `VideoRenderer.outPark` | T-312, T-317 | yalnızca geliştirici; `off` bir döngü geri dönüş | `on`: codec boşken çıkış iş parçacığı 5 ms yoklama yerine en çok 20 ms park eder; her parktan sonra mutlaka bir dequeue denemesi yapılır (donma yok). Boşta ~40 uyanma/s (bugünkü `IdleWait` ile aynı); kazanç düşük fps akışta. Benimsenirse varsayılan değişir | T-312 |
 | 23m | `--ez cursor_predict false` | true | `…/session/DevKnobs.kt` (`cursorPredict`); MA (`predict = devKnobs.cursorPredict`); `…/cursor/CursorPredictor.kt` | T-278, karar 0036 v2 | yalnızca geliştirici | `false`: yerel imleç v1'deki gibi host konumunda çizilir | T-278 |
 
-## Host ortam değişkenleri (18 canlı; kaldırılanlar geçmiş için)
+## Host ortam değişkenleri (19 canlı; kaldırılanlar geçmiş için)
 
 Host'ta geliştirici kapısı yok. "Yalnızca geliştirici" burada: kalır, varsayılan dışı değeri `ev=profile` satırında görünür (T-204). İstisna: `MATEBRIDGE_REFINE*` `knobAllowList`'te yok (açık nokta 3).
 
@@ -125,12 +125,14 @@ Host'ta geliştirici kapısı yok. "Yalnızca geliştirici" burada: kalır, vars
 | 46 | `MATEBRIDGE_REFINE=0`, `MATEBRIDGE_REFINE_MS`, `_KB`, `_FRAMES` | açık; 200 ms (50–2000); USB 1024 KB, ağ 256 KB (16–8192); 16 kare (1–60). Geçersiz değer varsayılan | `host-mac/Sources/MateBridgeCore/Video/StillRefine.swift` (`StillRefineConfig.resolve`); `host-mac/Sources/MateBridgeHost/Session/StreamCoordinator.swift` (çağıran); HE (`refineTick`) | T-253 | yalnızca geliştirici | Durağan ekran iyileştirme treni (`video ev=refine`). `REFINE=0` kapatma anahtarı, diğer üçü ayar. `ev=profile knobs=`'ta görünmez (açık nokta 3) | T-253 |
 | 47 | `MATEBRIDGE_IP_TOS=off/ef/cs6/video=<v>,control=<v>` | `off` (soket başına TOS ayarlanmaz; geçersiz değer `off` + `ip_tos_invalid=`) | `host-mac/Sources/MateBridgeCore/Session/TransportKnobs.swift` (`IpTosKnob.parse`); `BsdTcpSocket.swift` (`BsdTcpConnection.adopt`); `host-mac/Sources/MateBridgeHost/Session/SessionServer.swift` | T-326; karar 0023 | yalnızca geliştirici (A/B) | Açık DSCP: `ef` = video AF41 `0x88` + kontrol/ses EF `0xB8`; `cs6` = video `0x88` + kontrol `0xC0`; `video=`/`control=` 0–255 (`0x..` ya da ondalık, düşük 2 bit ECN sıfırlanır, biri eksik olabilir). Mac Ethernet'teyken `qosmarking mode: none` servis türünden DSCP yazmaz. Çift yığınlı `AF_INET6` soketinde `IP_TOS` `EINVAL` verir; değer `IPV6_TCLASS` ile yazılır (ikisi de denenir). `SO_NET_SERVICE_TYPE` ile birlikte ayarlanır, birbirini bozmazlar. A/B sonrası varsayılan kararı orkestratörde. `ev=profile knobs=` listesinde yok | T-326 |
 | 48 | `MATEBRIDGE_WIFI_ADAPT=1` | kapalı (yalnız `1` açar) | `host-mac/Sources/MateBridgeCore/Session/TransportKnobs.swift` (`WifiAdaptKnob`); `MateBridgeCore/Session/WifiAdaptation.swift`, `CongestionController.swift`; `host-mac/Sources/MateBridgeHost/Video/WifiAdaptationDriver.swift`; `StreamCoordinator.swift` (`onVideoAttached`) | T-327, T-328; karar 0023 eki 2026-10-09 | yalnızca geliştirici (A/B sonrası varsayılan kararı) | Wi-Fi'de (`transport=network`) gönderim kapısı (uçuştaki bayt bütçesi) + canlı kodlayıcı bit hızı (yeniden başlatma/keyframe yok); hızlı in, yavaş çık, boşta tavana sıçrama. USB'de hiç kurulmaz. `video ev=adapt`, `adapt_start`, `adapt_step trigger=`. `ev=profile knobs=` listesinde yok | T-328 |
+| 49 | `MATEBRIDGE_CAMERA_PROBE_S` | 15 (3–300; geçersiz değer 15) | `host-mac/Sources/MateBridgeCore/Camera/CameraKnobs.swift` (`probeIntervalUs`); `CameraUsageTracker.swift`; `host-mac/Sources/MateBridgeHost/Camera/CameraBridge.swift` | T-354; karar 0040 | yalnızca geliştirici | Tablet kamerası Mac'e yazılırken kullanım yoklamasının aralığı (sn). Kendi sink yazımımız `DeviceIsRunningSomewhere`'i 1 tuttuğu için (ölçüldü, 2026-10-18) bitişi anlamak için sink her aralıkta ~0,6 sn durdurulup özellik okunur. Kamera kapalıyken hiçbir şey çalışmaz. `ev=profile knobs=` listesinde yok | T-354 sonrası orkestratör kararı |
 
-## Host CLI kipleri (6) ve derleme zamanı
+## Host CLI kipleri (7) ve derleme zamanı
 
 | # | Ayar | Nerede | Kart | Sınıf | Sonuç |
 |---|---|---|---|---|---|
 | C1 | `--dump-video`, `--encode-bench`, `--sharpness-bench`, `--inject-test` | `host-mac/Sources/MateBridgeApp/main.swift` (`DumpVideoCommand`, `EncodeBenchCommand`, `SharpnessBench`, `InjectTestCommand`) | T-011/T-047/T-086/T-023 | kalır (araç) | Bench'ler host'taki tek tekrarlanabilir ölçüm. Ayrı bir çalıştırılabilir hedefe taşımak isteğe bağlı, kartı yok |
+| C3 | `--camera-selftest` | `host-mac/Sources/MateBridgeHost/Camera/CameraSelfTest.swift`; `main.swift` | T-354 | kalır (araç) | Tablet kamerası yolunun loopback testi: sahte tablet gerçek protokolü konuşur, VideoToolbox kodlayıcıdan H.264, çıktı sayan bir sink'e gider. Pencere, kamera izni, OBS ve tablet gerekmez |
 | C2 | `--files-net-selftest`, `--files-net-hold <port> <sn>` | `host-mac/Sources/MateBridgeApp/FilesNetSelfTest.swift` (`FilesNetSelfTest.runIfRequested`) | T-268 | kalır (araç) | Wi-Fi dosya yolunun loopback testi: pencere, Finder ve bağlama yok. `hold`: kendi WebDAV sunucusuyla komut satırından `mount_webdav` denemesi |
 | — | `MATEBRIDGE_SIGN_IDENTITY` | `scripts/bundle-host.sh` (`identity=`) | T-006 | kalır (derleme zamanı) | Çalışma zamanı ayarı değil |
 | — | `bundle-host.sh --debug` / `--release` | `scripts/bundle-host.sh` (`config=`) | T-305; karar 0037 eki | kalır (derleme zamanı) | Varsayılan `release` (2026-10-08); `--debug` isteğe bağlı |

@@ -7,6 +7,10 @@ EncodeBenchCommand.runIfRequested()  // T-047: `--encode-bench` (synthetic frame
 SharpnessBench.runIfRequested()  // T-086: `--sharpness-bench` (synthetic text through the real encoder + decoder)
 InjectTestCommand.runIfRequested()  // T-023: `--inject-test` CLI mode (posts real input events), same
 FilesNetSelfTest.runIfRequested()  // T-268: `--files-net-selftest` (Wi-Fi file path on loopback, no GUI, no mount)
+if CommandLine.arguments.contains("--camera-selftest") {  // T-354: tablet camera path on loopback (no GUI, no camera, no OBS)
+    DispatchQueue.global().async { exit(CameraSelfTest.run()) }
+    dispatchMain()
+}
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemValidation {
@@ -26,6 +30,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private let tabletFilesEntry = NSMenuItem(title: "Tablet dosyalarını aç", action: #selector(openTabletFiles),
                                               keyEquivalent: "")
     private let tabletFiles = TabletFilesBridge()
+    /// Decision 0040 (T-354): the tablet camera as a webcam through the OBS Virtual Camera. Idle unless the tablet sets AUTO.
+    private let camera = CameraBridge()
+    /// Fallback if camera usage cannot be detected: holds "an app uses the camera" on. Shown only while the camera is AUTO.
+    private let cameraManualEntry = NSMenuItem(title: "Tablet kamerası: kullanımda say (elle)",
+                                               action: #selector(toggleCameraManual), keyEquivalent: "")
     private var tabletFilesEnabled = false
     private let accessibilityLine = NSMenuItem(title: "Erişilebilirlik izni gerekli", action: nil, keyEquivalent: "")
     private let accessibilitySettingsItem = NSMenuItem(title: "Sistem Ayarları'nı aç…",
@@ -108,6 +117,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         tabletFilesEntry.target = self
         tabletFilesEntry.isHidden = true
         menu.addItem(tabletFilesEntry)
+        cameraManualEntry.target = self
+        cameraManualEntry.isHidden = true
+        menu.addItem(cameraManualEntry)
         // Input needs the Accessibility permission: shown (with a way to grant it) until it is granted.
         accessibilityLine.isEnabled = false
         accessibilityLine.isHidden = true
@@ -175,6 +187,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         let clipboard = self.clipboard
         let audio = self.audio
         let tabletFiles = self.tabletFiles
+        let camera = self.camera
+        camera.onMenuChange = { [weak self] state in
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.showCameraManual(state) } }
+        }
         tabletFiles.onMenuChange = { [weak self] state in
             // FIFO onto the main queue, like the settings item: states never land out of order.
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.showTabletFiles(state) } }
@@ -186,6 +202,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             audio.sessionStarted(sessionID: sid, clientSupportsAudio: hello.capabilities.contains(.audioPCM),
                                  clientSupportsAAC: hello.capabilities.contains(.audioAAC))
             tabletFiles.sessionStarted(sessionID: sid, transport: transport, capabilities: hello.capabilities)
+            camera.sessionStarted(sessionID: sid, transport: transport, capabilities: hello.capabilities)
         }
         handlers.sessionEnded = {
             audio.sessionEnded()  // first: the Mac's own sound comes back at once (no video grace period)
@@ -193,6 +210,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             input.sessionEnded()
             clipboard.sessionEnded()
             tabletFiles.sessionEnded()  // unmount the tablet volume, remove the forward
+            camera.sessionEnded()  // listener, decoder, sink and the CMIO watcher go; nothing is sent
         }
         handlers.streamBitrate = { kbps in tabletFiles.streamBitrateChanged(kbps: kbps) }  // Wi-Fi file budget (T-268)
         handlers.audioPrefs = { sid, prefs in audio.prefs(sessionID: sid, enabled: prefs.enabled, codec: prefs.codec) }
@@ -209,6 +227,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             input.deliver(message)
             clipboard.deliver(message)
             tabletFiles.deliver(message)
+            camera.deliver(message)
         }
         handlers.releaseInput = { input.releaseInput($0) }
         // T-163: every record of the active session's control connection; pauses key repeat during a stall.
@@ -227,6 +246,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                                    makeStreamConfig: { coordinator.streamConfig(for: $0) })
         self.server = server
         tabletFiles.attach(link: server)  // Wi-Fi files (T-268): peer address, file keys, FILES_NET
+        camera.attach(link: server)  // tablet camera (T-354): peer address, camera keys, CAMERA_CONTROL
         coordinator.onOverflow = { [server] in server.endSessions() }
         // T-325: a stalled coordinator refuses new sessions; the last resort releases input first, then restarts.
         coordinator.onRefuseSessions = { [server, input] on in
@@ -301,6 +321,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     func applicationWillTerminate(_ notification: Notification) {
         server?.stop()  // release input (releaseInput), BYE(SHUTTING_DOWN) to peers
         tabletFiles.shutdown()  // unmount the tablet volume and remove the forward (bounded wait)
+        camera.shutdown()
         audio.shutdown()  // stop streaming; the tap teardown below gives the Mac its sound back
         audioTap.shutdown()
         input.shutdown()  // backstop: releases whatever is still held, even if no session was reported
@@ -388,6 +409,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     /// The server re-checks the session and its capability before sending (the item may be stale by a moment).
     @objc private func openTabletSettings() {
         server?.openSettingsPanel()
+    }
+
+    @objc private func toggleCameraManual() {
+        let on = cameraManualEntry.state != .on
+        cameraManualEntry.state = on ? .on : .off
+        camera.setManualUse(on)
+    }
+
+    private func showCameraManual(_ state: CameraBridge.MenuState) {
+        cameraManualEntry.isHidden = !state.visible
+        cameraManualEntry.state = state.manualOn ? .on : .off
     }
 
     /// The bridge re-checks its state (the item may be stale by a moment); already mounted only opens Finder.

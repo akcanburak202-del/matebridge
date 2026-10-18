@@ -1,7 +1,7 @@
 ---
 id: T-354
 title: Host — tablet kamerası: kamera bağlantısı, H.264 çözme, OBS sanal kameraya yazım, kullanım algılama
-status: todo
+status: review
 phase: 7
 owner: mac-host-dev
 depends_on: [T-351]
@@ -41,6 +41,25 @@ Karar 0040 (ek 2026-10-18) ve PROTOCOL.md'deki kamera bölümü (dal `task/T-353
 
 ## Plan
 
+1. `obs-cam-probe --watch` (önce, ayrı commit `cdb585f8`): özellik değişimlerini zaman damgasıyla yazar; `--watch --pattern` birlikte çalışır.
+2. Core: kodek (CameraMessages, Message/FrameDecoder `.camera`, bit15, `cameraKeys`), `CameraConnectionMachine` (kanıt/tek etkin bağlantı), `CameraController` (koşul tablosu, OFF'ta hiçbir kaynak yok), `CameraUsageTracker` (kullanım yoklaması), `CameraStreamGate` (kuyruk sınırı + keyframe isteği aralığı), `CameraKnobs`. Hepsi saf ve birim testli.
+3. Host: `ObsVirtualCamera` (CMIO, dinleyici + sink), `H264CameraDecoder` + `CameraFrameScaler` (VT), `CameraConnectionService` (dinleyici, kayıt katmanı, çözme yolu), `CameraBridge` (oturum yapıştırıcısı, tek zamanlayıcı), menü maddesi (elle yedek), `--camera-selftest`.
+
 ## Handoff
 
+- Commit'ler (dal `task/T-354-host-camera`, taban `76c877a8`): `cdb585f8` obs-cam-probe `--watch` (orkestratör kullanım algılama deneyini bununla erken yapabilir); `97107a21` Core (kodek, makineler, birim testleri); son commit: host katmanı + belgeler + bu kart.
+- Dosyalar: `host-mac/Sources/MateBridgeCore/{Protocol/CameraMessages.swift, Message.swift, ProtocolConstants.swift, FrameDecoder.swift, Messages.swift (bit15), Crypto/KeySchedule.swift, Session/SessionMachine.swift, Input/InputStateMachine.swift (yalnız switch), Camera/*}`, `host-mac/Sources/MateBridgeHost/{Camera/*, Session/SessionServer.swift (cameraKeys)}`, `host-mac/Sources/MateBridgeApp/main.swift`, `host-mac/Tests/MateBridgeCoreTests/{FixtureTests, Crypto/CryptoVectorTests, Camera/*}`, `tools/obs-cam-probe/*`, `docs/{LOGGING,KNOBS}.md`, bu kart. `Package.swift` değişmedi (CoreMediaIO/VideoToolbox sistem çerçeveleri, bağımlılık yok).
+- **Kullanım algılama sonucu (ölçüldü, bu makinede, 2026-10-18):** `obs-cam-probe --watch --pattern` ile: kendi sink yazımımız başlayınca OBS cihazının `DeviceIsRunningSomewhere` (`gone`) ve `IsRunning` (`goin`) **1 oluyor**, sink durunca 0'a düşüyor (gecikme ~5 ms, dinleyici bildirimleri geliyor). Yani host yazarken özellik "başka uygulama kullanıyor mu"yu söylemez. Kaynak akışın (dir 1) ve cihazın hiçbir başka özelliği yazım sırasında değişmedi (Direction/Latency/FrameRate sabit). Photo Booth ile hâlâ **denenmedi** (GUI yasak): orkestratör `--watch` ve `--watch --pattern` ile Photo Booth'u açıp kapatarak (a) yazmıyorken Photo Booth'un özelliği 1 yaptığını, (b) yazarken Photo Booth'un hiçbir özelliği değiştirmediğini doğrulamalı.
+- **Algılama yaklaşımı:** başlama: yazmıyorken `IsRunningSomewhere` 0→1 (CMIO özellik dinleyicisi, zamanlayıcı yok) → hemen START. Bitiş: yazarken kullanım "sürüyor" varsayılır; her `MATEBRIDGE_CAMERA_PROBE_S` (varsayılan 15 sn) sink ~0,6 sn durdurulur (`CMIODeviceStopStream`) ve özellik okunur: hâlâ 1 ise başka istemci var, sink yeniden açılır; 0 ise uygulama bitti, sink kapalı kalır, `CameraController` 3 sn süzgeçten sonra STOP gönderir. Bedel: uygulamada her 15 sn'de ~0,6 sn donma ve en kötü bitiş gecikmesi ~15+0,6+3 sn. Yedek: Mac menüsünde "Tablet kamerası: kullanımda say (elle)" (yalnız AUTO iken görünür; açıkken kullanım sabit, yoklama kapalı). Deney kaynak akışta temiz bir sinyal bulursa yalnız `CameraUsageTracker`/`ObsVirtualCamera.write` değişir.
+- Varsayımlar: OBS sink 1920x1080 BGRA 30 fps (T-351); farklı boyut/en-boy oranı `VTPixelTransferSession` ile ölçeklenir, oran farklıysa siyah şeritli (letterbox), esnetme yok; ön kamera aynası uygulanmaz; `facing` host'u ilgilendirmez; kamera portu 47004 (doluysa sistem portu), dual-stack, peer = kontrol peer'i; kayıt katmanı payload sınırı 4 MiB (`FrameDecoder.Connection.camera`); gizlilik: kare içeriği loglanmaz/yazılmaz, yalnız sayaçlar (`ev=camera_stats`).
+- Doğrulanan (bu makinede, tablet/OBS çıktısı/kamera izni olmadan): `swift build` temiz, kamera fixture/kripto/birim testleri geçti (+53 test), `--camera-selftest` loopback uçtan uca: yanlış cam_id → REJECTED, kanıt öncesi CAM_FRAME → yalnız o bağlantı kapanır, kanıt sonrası STARTUP keyframe isteği, VideoToolbox'ın kendi H.264 kodlayıcısından 60/60 kare 1280x720 → 1920x1080 BGRA çözüldü ve ölçeklendi (30 fps), taşma sonrası keyframe isteği, keyframe ile toparlanma, servis kapanınca bağlantı kapanır. `check.sh --only host`: bkz. aşağıdaki not.
+- **check.sh notu:** `BoundedWaitTests` (`timesOutWhenOperationNeverReturns`, `senderStopOnStuckTransportReturnsInTime`, kimi zaman `completesWhenOperationFinishes`) tam koşuda başarısız: bu makinede Android Studio/Gradle paralel çalışırken yükleyici; **dalın tabanında (`76c877a8`) kamera kodu olmadan da aynı testler aynı şekilde düşüyor**, tek başına koşunca geçiyor. Kameradan bağımsız, zamanlamaya duyarlı mevcut test. Yük yokken `./scripts/check.sh --only host` yeniden koşulmalı.
+- Doğrulanmadı (orkestratör): gerçek OBS sink'ine akış ve Photo Booth/Zoom görüntüsü, gerçek tabletten H.264 (T-355 ile birlikte), `IsRunningSomewhere` davranışı Photo Booth ile, yoklama donmasının kullanıcıya görünürlüğü, sürenin uzun (saatlik) çalışması, arka plan/ön plan geçişi.
+- Cihaz testi adımları: bkz. son rapor (orkestratöre) ve `obs-cam-probe/README.md` `--watch` bölümü.
+
 ## Open questions
+
+- USB oturumu (loopback eş): kamera portu (47004 ya da sistem portu) `adb reverse` kümesinde değil (`UsbTunnelWatcher` yalnız 47001/47002), tablet host'a ulaşamaz. Şimdilik USB oturumunda `AUTO` → `UNAVAILABLE` gönderilir ve `ev=camera state=usb_not_supported` yazılır. Çözüm: sabit 47004 için `adb reverse` + doluysa reddetme; ayrı kart.
+- PROTOCOL.md'de "START durumundayken 10 sn boyunca etkin kamera bağlantısı yoksa host STOP gönderebilir": uygulanmadı (STOP sonrası kullanım sürüyorsa hemen yeniden START olacağı için döngü riski). Tablet 3 denemeden sonra kamerayı kapatır; host dinleyicisi açık kalır ta ki kullanım biter.
+- Kullanım bitişi yoklaması geçici çözüm (yukarıda); temiz sinyal bulunursa değiştirilecek. Varsayılan aralığın (15 sn) kullanıcı için kabul edilebilir olup olmadığı karar bekliyor.
+- Menüdeki elle madde Türkçe metin ve yalnız AUTO iken görünür; kalıcı değil (oturum bitince tracker sıfırlanır, madde durumu korunur).

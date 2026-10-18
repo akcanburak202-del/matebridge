@@ -759,6 +759,14 @@ public final class SessionServer: @unchecked Sendable {
         }
     }
 
+    /// Keys of the tablet camera connection from the `prk` of the active session (decision 0040); nil once it is gone.
+    public func cameraKeys(sessionID: UInt32, clientNonce: [UInt8], hostNonce: [UInt8]) -> CameraKeys? {
+        onSessionQueue { [self] in
+            guard !stopped else { return nil }
+            return machine.cameraKeys(sessionID: sessionID, clientNonce: clientNonce, hostNonce: hostNonce)
+        }
+    }
+
     private func onSessionQueue<T>(_ body: () -> T) -> T {
         DispatchQueue.getSpecific(key: queueKey) == true ? body() : queue.sync(execute: body)
     }

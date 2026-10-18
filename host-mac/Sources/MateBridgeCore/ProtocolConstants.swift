@@ -19,6 +19,8 @@ public enum ProtocolConstants {
     public static let audioMaxFrames = 1024
     /// Largest `FILES_DATA.data`: the control/file payload limit minus the `size` field (docs/PROTOCOL.md 0x52).
     public static let filesDataMax = maxControlPayload - 2
+    /// Camera connection payload limit (docs/PROTOCOL.md section 2).
+    public static let maxCameraPayload = 4_194_304
 }
 
 public enum MessageType: UInt8, Sendable, CaseIterable {
@@ -35,6 +37,8 @@ public enum MessageType: UInt8, Sendable, CaseIterable {
     case cursorPrefs = 0x0B
     case cursorShape = 0x0C
     case cursorState = 0x0D
+    case cameraPrefs = 0x0E
+    case cameraControl = 0x0F
     case pen = 0x10
     case key = 0x11
     case pointerRel = 0x12
@@ -55,4 +59,8 @@ public enum MessageType: UInt8, Sendable, CaseIterable {
     case filesHello = 0x50
     case filesHelloAck = 0x51
     case filesData = 0x52
+    case camHello = 0x60
+    case camHelloAck = 0x61
+    case camFrame = 0x62
+    case camKeyframeRequest = 0x63
 }
