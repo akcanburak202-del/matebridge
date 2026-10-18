@@ -2,6 +2,7 @@ package dev.matebridge.client.camera
 
 import dev.matebridge.client.protocol.CameraPrefs
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -141,5 +142,16 @@ class CameraMathTest {
         val auto = CameraWish(CameraMode.AUTO, CameraFacing.BACK)
         assertEquals(CameraPrefs(CameraPrefs.MODE_AUTO, CameraPrefs.FACING_BACK, 3), CameraPrefsPolicy.wire(auto, true, false, 3))
         assertEquals(CameraPrefs(CameraPrefs.MODE_OFF, CameraPrefs.FACING_BACK, 3), CameraPrefsPolicy.wire(auto, true, true, 3))
+    }
+
+    @Test fun openGenerationMakesEarlierAttemptsStale() {
+        val g = OpenGeneration()
+        val first = g.next()
+        assertTrue(g.isCurrent(first))
+        val second = g.next() // a facing switch while the first open is in flight
+        assertFalse(g.isCurrent(first))
+        assertTrue(g.isCurrent(second))
+        g.next() // closeCameraOnly invalidates the pending open too
+        assertFalse(g.isCurrent(second))
     }
 }

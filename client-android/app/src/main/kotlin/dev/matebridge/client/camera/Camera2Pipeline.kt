@@ -148,6 +148,8 @@ class Camera2Pipeline(
 
     private class Enc(val codec: MediaCodec, val w: Int, val h: Int)
 
+    private val openGen = OpenGeneration()
+
     private fun createEncoder(reqW: Int, reqH: Int, kbps: Int): Enc {
         var last: Exception? = null
         for (profile in listOf(MediaCodecInfo.CodecProfileLevel.AVCProfileHigh, MediaCodecInfo.CodecProfileLevel.AVCProfileMain, 0)) {
@@ -204,21 +206,24 @@ class Camera2Pipeline(
     @SuppressLint("MissingPermission")
     private fun openCamera(mgr: CameraManager, id: String) {
         if (context.checkSelfPermission(android.Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) return fail("permission")
+        val gen = openGen.next() // T-357: every open attempt has its own generation
         mgr.openCamera(id, object : CameraDevice.StateCallback() {
             override fun onOpened(d: CameraDevice) {
-                if (stopRequested.get() || released) { d.close(); return }
+                if (stopRequested.get() || released || !openGen.isCurrent(gen)) { d.close(); return } // stale: a switch came first
                 device = d
                 createSession(d)
             }
 
             override fun onDisconnected(d: CameraDevice) {
                 d.close()
+                if (!openGen.isCurrent(gen)) return // a stale attempt says nothing about the current camera
                 if (device === d) device = null
                 if (!stopRequested.get()) fail("camera_disconnected")
             }
 
             override fun onError(d: CameraDevice, error: Int) {
                 d.close()
+                if (!openGen.isCurrent(gen)) return
                 if (device === d) device = null
                 if (!stopRequested.get()) fail("camera_error_$error")
             }
@@ -290,6 +295,7 @@ class Camera2Pipeline(
     }
 
     private fun closeCameraOnly() {
+        openGen.next() // an open still in flight is now stale; its device is closed when it arrives
         try { session?.close() } catch (_: RuntimeException) {}
         session = null
         try { device?.close() } catch (_: RuntimeException) {}
