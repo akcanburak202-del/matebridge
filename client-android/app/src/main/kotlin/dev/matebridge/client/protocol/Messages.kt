@@ -31,6 +31,8 @@ object MsgType {
     const val CURSOR_PREFS = 0x0B
     const val CURSOR_SHAPE = 0x0C
     const val CURSOR_STATE = 0x0D
+    const val CAMERA_PREFS = 0x0E
+    const val CAMERA_CONTROL = 0x0F
     const val PEN = 0x10
     const val KEY = 0x11
     const val POINTER_REL = 0x12
@@ -51,6 +53,10 @@ object MsgType {
     const val FILES_HELLO = 0x50
     const val FILES_HELLO_ACK = 0x51
     const val FILES_DATA = 0x52
+    const val CAM_HELLO = 0x60
+    const val CAM_HELLO_ACK = 0x61
+    const val CAM_FRAME = 0x62
+    const val CAM_KEYFRAME_REQUEST = 0x63
 }
 
 object Limits {
@@ -62,6 +68,12 @@ object Limits {
     const val NONCE_BYTES = 16
     const val EPH_PUB_BYTES = 65
     const val PROTOCOL_VERSION = 1
+
+    /** `CAM_FRAME.frame_size` upper bound (PROTOCOL.md 0x62). */
+    const val CAM_FRAME_MAX_BYTES = 4_194_280
+
+    /** Fixed part of a `CAM_FRAME` payload before `data`. */
+    const val CAM_FRAME_HEADER_BYTES = 20
 }
 
 /** Byte array wrapper with content equality, so messages holding raw bytes compare sensibly. */
@@ -105,6 +117,9 @@ object Capabilities {
      * here for the codec tests; NOT reported in HELLO until the AAC decoder lands (T-341).
      */
     const val AUDIO_AAC = 1 shl 14
+
+    /** Can send the tablet camera as H.264 (`CAMERA_PREFS`, `CAMERA_CONTROL`, camera connection; decision 0040, T-355). */
+    const val CAMERA = 1 shl 15
 }
 
 // ---- Session ----
@@ -364,6 +379,101 @@ data class FilesData(val data: Bytes) : Message {
     companion object {
         /** The u16 size of a record is at most the payload limit minus its own two bytes. */
         const val MAX_DATA_BYTES = Limits.CONTROL_MAX_PAYLOAD - 2
+    }
+}
+
+/**
+ * The tablet camera wish (C to H, PROTOCOL.md 0x0E, decision 0040): [mode] 0 OFF / 1 AUTO, [facing] 0 FRONT / 1 BACK.
+ * Unknown values decode as OFF / FRONT.
+ */
+data class CameraPrefs(val mode: Int, val facing: Int) : Message {
+    override val type get() = MsgType.CAMERA_PREFS
+
+    val auto: Boolean get() = mode == MODE_AUTO
+
+    companion object {
+        const val MODE_OFF = 0
+        const val MODE_AUTO = 1
+        const val FACING_FRONT = 0
+        const val FACING_BACK = 1
+        val OFF = CameraPrefs(MODE_OFF, FACING_FRONT)
+    }
+}
+
+/**
+ * The Mac starts or stops the tablet camera (H to C, PROTOCOL.md 0x0F). Unknown [state] values decode fine and count as
+ * STOP ([isStart] is true only for START). The size, fps and bit rate are only meaningful for START.
+ */
+data class CameraControl(
+    val state: Int,
+    val camId: Int,
+    val port: Int,
+    val width: Int,
+    val height: Int,
+    val fps: Int,
+    val bitrateKbps: Long,
+) : Message {
+    override val type get() = MsgType.CAMERA_CONTROL
+
+    val isStart: Boolean get() = state == STATE_START
+    val isUnavailable: Boolean get() = state == STATE_UNAVAILABLE
+
+    companion object {
+        const val STATE_STOP = 0
+        const val STATE_START = 1
+        const val STATE_UNAVAILABLE = 2
+        val STOP = CameraControl(STATE_STOP, 0, 0, 0, 0, 0, 0)
+    }
+}
+
+/** First message of the camera connection (C to H, plain; PROTOCOL.md 0x60). A fresh [clientCamNonce] per connection. */
+data class CamHello(
+    val protocolVersion: Int,
+    val sessionId: Long, // u32
+    val camId: Int,
+    val clientCamNonce: Bytes,
+) : Message {
+    override val type get() = MsgType.CAM_HELLO
+}
+
+/** The host's answer on the camera connection (H to C, plain; PROTOCOL.md 0x61). Any [status] other than [OK] counts as rejected. */
+data class CamHelloAck(val status: Int, val hostCamNonce: Bytes) : Message {
+    override val type get() = MsgType.CAM_HELLO_ACK
+
+    val ok: Boolean get() = status == OK
+
+    companion object {
+        const val OK = 0
+        const val REJECTED = 1
+    }
+}
+
+/**
+ * One H.264 access unit (or the SPS/PPS config) of the tablet camera (C to H, PROTOCOL.md 0x62). [data] is Annex-B,
+ * 1..[Limits.CAM_FRAME_MAX_BYTES] bytes. Never log [data]; [toString] leaves it out.
+ */
+data class CamFrame(val frameSeq: Long, val captureTimeUs: Long, val flags: Int, val data: Bytes) : Message {
+    override val type get() = MsgType.CAM_FRAME
+
+    val keyframe: Boolean get() = flags and KEYFRAME != 0
+    val codecConfig: Boolean get() = flags and CODEC_CONFIG != 0
+
+    override fun toString() = "CamFrame(seq=$frameSeq, flags=$flags, ${data.size} bytes)"
+
+    companion object {
+        const val KEYFRAME = 1
+        const val CODEC_CONFIG = 2
+    }
+}
+
+/** The host's decoder wants a keyframe (H to C, camera connection, PROTOCOL.md 0x63). [reason] is informational; unknown values are accepted. */
+data class CamKeyframeRequest(val reason: Int) : Message {
+    override val type get() = MsgType.CAM_KEYFRAME_REQUEST
+
+    companion object {
+        const val STARTUP = 0
+        const val DECODE_ERROR = 1
+        const val FRAMES_DROPPED = 2
     }
 }
 

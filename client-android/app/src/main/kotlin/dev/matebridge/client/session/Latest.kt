@@ -98,12 +98,13 @@ class EngineMailboxes {
     val remote = Latest<SessionMachine.Event>() // decision 0038: the newest remote profile wins
     val forget = Latest<SessionMachine.Event>() // T-269: the newest forgotten open request wins
     val files = Latest<SessionMachine.Event>() // T-135: the newest file server state wins
+    val camera = Latest<SessionMachine.Event>() // T-355: the newest camera wish wins
     val migrate = Latest<SessionMachine.Event>() // T-096: the newest migration request wins
     val videoBackoff = Latest<SessionMachine.Event>() // T-294: "Yeniden dene" resets the video reopen backoff (idempotent)
 
     /** The next pending command in priority order, or null. */
     fun take(): SessionMachine.Event? =
         trust.take() ?: intent.take() ?: expect.take() ?: promptVisible.take() ?: mode.take() ?:
-            rate.take() ?: audio.take() ?: remote.take() ?: forget.take() ?: files.take() ?: migrate.take() ?:
+            rate.take() ?: audio.take() ?: remote.take() ?: forget.take() ?: files.take() ?: camera.take() ?: migrate.take() ?:
             videoBackoff.take()
 }

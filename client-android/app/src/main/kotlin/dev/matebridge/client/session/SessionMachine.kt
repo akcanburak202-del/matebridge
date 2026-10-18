@@ -2,6 +2,8 @@ package dev.matebridge.client.session
 
 import dev.matebridge.client.audio.AacRules
 import dev.matebridge.client.protocol.AudioPrefs
+import dev.matebridge.client.protocol.CameraControl
+import dev.matebridge.client.protocol.CameraPrefs
 import dev.matebridge.client.protocol.CursorPrefs
 import dev.matebridge.client.protocol.Bye
 import dev.matebridge.client.protocol.Bytes
@@ -80,6 +82,8 @@ class SessionMachine(
     private val recordAuthenticated: (Int) -> Boolean = { false },
     /** T-276 (decision 0036): CURSOR_PREFS wish; null = this client does not draw the cursor (nothing is sent). */
     initialCursor: Boolean? = null,
+    /** T-355 (decision 0040): CAMERA_PREFS wish; null = this client has no camera (nothing is sent, CAMERA_CONTROL is ignored). */
+    initialCamera: CameraPrefs? = null,
     /**
      * Decision 0038 section 6: whether input is active at `nowUs` (something held, or an input event less than 2 s ago;
      * [RemoteTimings.inputActive]). Read by the engine thread on each tick of a remote session to pick the 500 ms or 2 s
@@ -169,6 +173,12 @@ class SessionMachine(
          */
         data class SetCursor(val enabled: Boolean) : Event
         /**
+         * T-355 (decision 0040): what the camera setting and the permission allow now (already combined by `CameraPrefsPolicy`,
+         * except that a remote session always sends OFF here). Remembered for later sessions; sent as CAMERA_PREFS when input
+         * is allowed and the wire value changed.
+         */
+        data class SetCamera(val prefs: CameraPrefs) : Event
+        /**
          * T-276: one ordered command for what the UI changes together on a mode switch ([EngineMailboxes.mode]): the cursor
          * wish first (PROTOCOL.md 0x0D: switching to Oyun sends CURSOR_PREFS(0) first), then the display mode. Either part
          * may be null (nothing to change). Handled exactly like [SetCursor] followed by [SetPrefs].
@@ -235,6 +245,12 @@ class SessionMachine(
          */
         data class FilesNetReceived(val msg: FilesNet, val gen: Int, val requestId: Int = 0) : Action
         /**
+         * T-355 (decision 0040): `CAMERA_CONTROL` of the accepted, trusted session on control connection [gen]; [host] is the
+         * Mac's address (the camera connection dials its `port`), [sessionId] the HELLO_ACK session id. Never in a remote
+         * session (a START there is ignored).
+         */
+        data class CameraControlReceived(val msg: CameraControl, val gen: Int, val host: String, val sessionId: Long) : Action
+        /**
          * T-269: the file tunnel the session wants now ([plan], null = none). Emitted only when it changes: it closes the
          * running tunnel (if any) and, for a non-null plan, opens a new one. Every session end (BYE, close, loss, stop,
          * migration switch, CLOSE, server OFF) yields a null plan, so no file connection outlives its session.
@@ -291,6 +307,7 @@ class SessionMachine(
     private var displayHz = 0 // 0 = not measured yet: nothing is sent
     private var audio: Boolean? = initialAudio
     private var cursor: Boolean? = initialCursor
+    private var camera: CameraPrefs? = initialCamera
     private var files: FilesInfo? = initialFiles
 
     /**
@@ -659,6 +676,15 @@ class SessionMachine(
                     if (inputAllowed) out += Action.Send(CursorPrefs(event.enabled))
                 }
             }
+            is Event.SetCamera -> {
+                // Only a client with a camera (non-null) ever sends CAMERA_PREFS. What the host should see (a remote session: OFF) is compared.
+                if (camera != null) {
+                    val before = effectiveCamera()
+                    camera = event.prefs
+                    val now = effectiveCamera()
+                    if (inputAllowed && now != before && now != null) out += Action.Send(now)
+                }
+            }
             is Event.SetFiles -> {
                 // Only a client with a file server (non-null) sends FILES_INFO (PROTOCOL.md 0x09): once per session, then on change.
                 if (files != null && (event.info != files || event.scope != filesScope)) {
@@ -724,6 +750,9 @@ class SessionMachine(
         filesNetId = 0
     }
 
+    /** The CAMERA_PREFS this session sends: a remote session never uses the camera (PROTOCOL.md 0x0E), whatever the setting. */
+    private fun effectiveCamera(): CameraPrefs? = camera?.let { if (remote != null) CameraPrefs(CameraPrefs.MODE_OFF, it.facing) else it }
+
     /** The FILES_INFO this session may announce: a READY of another session's server (or none) is OFF. */
     private fun effectiveFiles(): FilesInfo? {
         val f = files ?: return null
@@ -741,6 +770,20 @@ class SessionMachine(
         val ep = endpoint ?: return null
         if (ConnectMode.transportOf(ep) == Transport.USB) return null
         return FilesTunnelPlan(controlGen, ep.host, net.port, net.pool, net.max, info.port, sessionId, filesNetId)
+    }
+
+    /**
+     * T-355: `CAMERA_CONTROL` (PROTOCOL.md 0x0F) is for an accepted, trusted session of a client with a camera. A START in a
+     * remote session is a host bug (the wire says OFF there) and is ignored; a STOP always goes through so nothing stays on.
+     */
+    private fun onCameraControl(msg: CameraControl, out: MutableList<Action>) {
+        if (camera == null || !inputAllowed || oldGone) return
+        if (msg.isStart && remote != null) {
+            log('W', "camera_start_ignored", "reason=remote")
+            return
+        }
+        val ep = endpoint ?: return
+        out += Action.CameraControlReceived(msg, controlGen, ep.host, sessionId)
     }
 
     private fun onMessage(msg: Message, nowUs: Long, out: MutableList<Action>) {
@@ -766,6 +809,7 @@ class SessionMachine(
             // PROTOCOL.md 0x08: only an accepted session; whether the stream is visible is the UI's call.
             SettingsOpen -> if (inputAllowed) out += Action.OpenSettings
             is FilesNet -> onFilesNet(msg, out)
+            is CameraControl -> onCameraControl(msg, out)
             is Clipboard -> if (inputAllowed) out += Action.DeliverClipboard(msg, controlGen) // T-150: never before local trust
             is Bye -> {
                 if (msg.reason == Bye.SUPERSEDED && candAck != null) {
@@ -878,6 +922,7 @@ class SessionMachine(
         if (displayHz > 0) out += Action.Send(DisplayRate(displayHz)) // T-059: once, after STREAM_PREFS
         audio?.let { out += Action.Send(remote?.audioPrefs(aacCapable) ?: AudioPrefs(it)) } // T-095: after the display messages (0038: remote wish)
         cursor?.let { out += Action.Send(CursorPrefs(it)) } // T-276: the session starts without the local cursor (host default 0); tell it ours
+        effectiveCamera()?.let { out += Action.Send(it) } // T-355: the camera wish, once per session (a remote session says OFF)
         effectiveFiles()?.let { out += Action.Send(it) } // T-135: once per session, after AUDIO_PREFS (never an earlier session's READY)
         nextPingUs = nowUs + pingIntervalUs
         backoffUs = BACKOFF_START_US

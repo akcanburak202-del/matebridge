@@ -3,6 +3,10 @@
     xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- T-355 (decision 0040): the tablet camera as a Mac webcam; asked at runtime when "Kamera: Otomatik" is first chosen -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.front" android:required="false" />
     <!-- T-135 (decision 0015): the tablet-files WebDAV server serves the shared storage; "all files access" -->
     <uses-permission
         android:name="android.permission.MANAGE_EXTERNAL_STORAGE"

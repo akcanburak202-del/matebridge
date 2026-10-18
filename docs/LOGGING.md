@@ -10,7 +10,7 @@ Loglar hem hata ayıklamanın hem de ajanların cihazdaki davranışı "görmesi
 
 - `mono_ms`: monoton saat (Mac: `ContinuousClock`/`mach_absolute_time`, Android: `SystemClock.elapsedRealtime`). Duvar saati ayrıca satır başına eklenebilir ama karşılaştırmalar monotonla yapılır.
 - `LEVEL`: `E` hata, `W` uyarı, `I` bilgi, `D` debug (varsayılan kapalı).
-- `component`: `capture`, `encoder`, `net`, `vdisplay`, `input`, `pen`, `kbd`, `decoder`, `render`, `session`, `cursor` (Mac, yerel imleç), `camera` (Mac, tablet kamerası).
+- `component`: `capture`, `encoder`, `net`, `vdisplay`, `input`, `pen`, `kbd`, `decoder`, `render`, `session`, `cursor` (Mac, yerel imleç), `camera` (Mac ve tablet: tablet kamerası, T-354/T-355).
 - `ev`: snake_case olay adı, ör. `ev=connect_ok`, `ev=frame_drop reason=stale`.
 
 ## Nereye yazılır
@@ -698,3 +698,17 @@ Mac uyumadan önce (`kIOMessageSystemWillSleep`) oturumlar BYE(HOST_SLEEP) ile b
   - `wake`: `NSWorkspace.didWakeNotification`. `expired`: uyanık geçen 30 sn (uyanma bildirimi kaybolsa ya da uyku iptal olsa da tablet girdisi kilitli kalmasın). Yeni oturum kapıyı kaldırmaz.
 - `I audio ev=audio_capture_resume_after_sleep stream_id=<n> reason=wake|expired`: uyku penceresinde reddedilen son ses başlatma isteği uyanınca (ya da 30 sn sonra) geri yüklendi; ses, kullanıcı bir şeyi açıp kapatmadan başlar. Pencerede istek yoksa yazılmaz.
 - Tuş, karakter ya da koordinat yazılmaz; yalnız sayı, süre ve neden.
+
+## Tablet kamerası (tablet, `MB/camera`, T-355, karar 0040)
+
+Kamera görüntüsü hiçbir yerde loglanmaz ya da yazılmaz; yalnız sayaçlar (kare sayısı, bayt, düşen kare) ve durumlar. Kamera kapalıyken (Kapalı ayarı ya da `START` yok) bu bileşen **hiç satır yazmaz**.
+
+- `ev=camera_prefs_sent mode=0|1 facing=0|1`: `CAMERA_PREFS` gitti (oturum kabulünden sonra ve her değişiklikte; uzak oturumda hep `mode=0`).
+- `ev=camera_control_recv state=0|1|2 cam_id=<n> size=<w>x<h> fps=<n>`: Mac'ten `CAMERA_CONTROL`. `W ev=camera_no_keys`: anahtar ya da denetleyici yoktu, yok sayıldı. `W session ev=camera_start_ignored reason=remote`: uzak oturumda gelen `START`.
+- `ev=camera_permission granted=0|1`: çalışma zamanı izin isteminin sonucu (reddedilirse ayar Kapalı'ya döner).
+- `ev=camera state=start reason=control cam_id= size=<w>x<h> fps= facing=front|back`: akış başladı (istenen boyut).
+- `ev=camera state=encoder size=<kodlayıcı boyutu> src=<kamera boyutu> fps= facing=`: gerçek kodlayıcı ve kamera boyutu.
+- `ev=camera state=stop reason= cam_id=`: her şey kapandı (kamera, kodlayıcı, GL, soket, iş parçacıkları). `reason`: `stop`, `unavailable`, `new_cam_id`, `session_end`, `session_switch`, `background`, `mode_off`, `permission`, `not_wanted` (denetleyici); `link_lost` / `link_rejected` / `link_keys_gone` / `pipeline_<kod>` (akış kendi kendine bitti).
+- `ev=camera state=link_up|link_down|retry|keyframe_request|switch|switched cam_id= [reason=…] [up_ms=…] [n=…]`: kamera bağlantısı. `link_down reason`: `closed`, `io`, `host_eof`, `rejected`, `ack_timeout`, `protocol`, `write_stall`, `keys_gone`; `retry n=1..3` (1 sn arayla), sonra `stop`.
+- `W ev=camera state=error reason=no_camera|permission|camera_access|camera_disconnected|camera_error_<n>|session|encoder|gl_<sınıf>|setup_<sınıf>`: kamera ya da kodlayıcı hatası; akış kapanır, yeni `START` beklenir.
+- `ev=camera_stats cam_id= encoded=<n> sent=<n> dropped=<n> avg_bytes=<n>`: 10 sn özeti (kodlanan, gönderilen, atılan kare; ortalama kodlanmış kare boyutu). Kapanışta bir kez de `final=1 total_encoded= total_sent= total_dropped=` ile.

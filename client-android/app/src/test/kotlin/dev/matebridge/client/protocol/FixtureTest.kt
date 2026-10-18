@@ -98,6 +98,17 @@ class FixtureTest {
             "files_hello_ack" to FilesHelloAck(FilesHelloAck.OK, Bytes(hex("808182838485868788898a8b8c8d8e8f"))),
             "files_hello_ack_rejected" to FilesHelloAck(FilesHelloAck.REJECTED, zeros16),
             "files_data" to FilesData(Bytes("OPTIONS / HTTP/1.1".toByteArray(Charsets.US_ASCII))),
+            "camera_prefs_auto" to CameraPrefs(CameraPrefs.MODE_AUTO, CameraPrefs.FACING_BACK),
+            "camera_prefs_off" to CameraPrefs(CameraPrefs.MODE_OFF, CameraPrefs.FACING_FRONT),
+            "camera_control_start" to CameraControl(CameraControl.STATE_START, 1, 47004, 1920, 1080, 30, 6000),
+            "camera_control_stop" to CameraControl(CameraControl.STATE_STOP, 1, 0, 0, 0, 0, 0),
+            "camera_control_unavailable" to CameraControl(CameraControl.STATE_UNAVAILABLE, 0, 0, 0, 0, 0, 0),
+            "cam_hello" to CamHello(1, 2712847316L, 1, Bytes(hex("909192939495969798999a9b9c9d9e9f"))),
+            "cam_hello_ack" to CamHelloAck(CamHelloAck.OK, Bytes(hex("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"))),
+            "cam_hello_ack_rejected" to CamHelloAck(CamHelloAck.REJECTED, zeros16),
+            "cam_frame" to CamFrame(1, 51234000000L, CamFrame.KEYFRAME, Bytes(hex("0000000165888400"))),
+            "cam_frame_config" to CamFrame(0, 51233990000L, CamFrame.CODEC_CONFIG, Bytes(hex("00000001676400280000000168ee3cb0"))),
+            "cam_keyframe_request" to CamKeyframeRequest(CamKeyframeRequest.DECODE_ERROR),
             "clipboard_text" to Clipboard(3, Clipboard.KIND_TEXT_UTF8, Bytes("Merhaba ğüşıöç — kopyala".toByteArray())),
             "clipboard_empty" to Clipboard(4, Clipboard.KIND_EMPTY, Bytes(ByteArray(0))),
             "pen_hover_to_contact" to Pen(
@@ -163,7 +174,7 @@ class FixtureTest {
         val invalid = setOf(
             "invalid_key_short", "invalid_pen_count_zero", "invalid_audio_frame_short", "invalid_stream_prefs_partial",
             "invalid_stream_prefs_hdr_partial", "invalid_files_hello_short", "invalid_files_data_empty", "invalid_cursor_shape_short", "invalid_cursor_state_ack_partial",
-            "invalid_str8_utf8", "invalid_stream_prefs_link_partial", "invalid_audio_frame_count",
+            "invalid_str8_utf8", "invalid_cam_frame_short", "invalid_cam_hello_short", "invalid_stream_prefs_link_partial", "invalid_audio_frame_count",
         )
         val skipped = setOf("unknown_type")
 
