@@ -11,9 +11,9 @@ private let ms: UInt64 = 1_000
         _ = g.codecConfig()
         #expect(g.frame(keyframe: false, now: 0) == .dropAwaitingKeyframe)
         #expect(g.counters.dropped == 1 && g.pending == 0)
-        #expect(g.frame(keyframe: true, now: 0) == .submit(epoch: 0))
+        #expect(g.frame(keyframe: true, now: 0) == .submit(epoch: 1))
         #expect(!g.awaitingKeyframe)
-        #expect(g.frame(keyframe: false, now: 33 * ms) == .submit(epoch: 0))
+        #expect(g.frame(keyframe: false, now: 33 * ms) == .submit(epoch: 1))
     }
 
     @Test func atMostTwoFramesWaitAndTheOverflowDropsEverythingAndAsksForAKeyframe() {
@@ -73,8 +73,8 @@ private let ms: UInt64 = 1_000
         _ = g.frame(keyframe: true, now: 0)
         g.finished(epoch: 0, decoded: true)
         #expect(!g.awaitingKeyframe)
-        #expect(g.codecConfig() == .submit(epoch: 0))
-        #expect(g.awaitingKeyframe)
+        #expect(g.codecConfig() == .submit(epoch: 1))  // frames queued before the config are void
+        #expect(g.awaitingKeyframe && g.pending == 0)
     }
 
     @Test func resetStartsAFreshConnection() {
@@ -92,6 +92,27 @@ private let ms: UInt64 = 1_000
         let c = g.takeCounters()
         #expect(c.received == 1 && c.decoded == 1)
         #expect(g.takeCounters() == CameraStreamGate.Counters())
+    }
+
+    @Test func aCodecConfigVoidsFramesQueuedBeforeIt() {
+        var g = CameraStreamGate()
+        _ = g.frame(keyframe: true, now: 0)
+        _ = g.frame(keyframe: false, now: 1)
+        #expect(g.pending == 2)
+        #expect(g.codecConfig() == .submit(epoch: 1))
+        g.finished(epoch: 0, decoded: true)  // old work finishing changes nothing
+        #expect(g.pending == 0)
+    }
+
+    @Test func camFramePayloadBoundary() throws {
+        #expect(CamFrame.maxDataBytes == 4_194_284)  // 4 194 304 - 20 (PROTOCOL.md 0x60)
+        var sealer = RecordSealer(key: SecretBytes([UInt8](repeating: 7, count: 32)), maxPayload: ProtocolConstants.maxCameraPayload)
+        _ = try Message.camFrame(CamFrame(frameSeq: 0, captureTimeUs: 0, flags: .keyframe,
+                                          data: [UInt8](repeating: 0, count: CamFrame.maxDataBytes))).sealed(using: &sealer)
+        #expect(throws: ProtocolError.invalidField("frame_size")) {
+            try Message.camFrame(CamFrame(frameSeq: 0, captureTimeUs: 0, flags: [],
+                                          data: [UInt8](repeating: 0, count: CamFrame.maxDataBytes + 1))).sealed(using: &sealer)
+        }
     }
 }
 

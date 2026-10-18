@@ -41,6 +41,9 @@ final class ObsVirtualCamera: @unchecked Sendable {
     private var sinkQueue: CMSimpleQueue?
     private var sinkStarted = false
     private var sinkPaused = false
+    /// False until `enableWrites()`, false again after `stopSink()`: an in-flight frame that finishes after STOP must not
+    /// restart the sink (T-357 r2). A probe pause keeps it true.
+    private var writesEnabled = false
     private var formatDescription: CMFormatDescription?
     private var enqueued = 0
     private var queueFull = 0
@@ -189,6 +192,7 @@ final class ObsVirtualCamera: @unchecked Sendable {
     private func writeLocked(_ frame: CameraPixelBuffer, onStarted: @Sendable () -> Void) {
         do {
             let pixelBuffer = frame.value
+            guard writesEnabled else { return }
             guard !sinkPaused else { pausedDrops += 1; return }
             if !sinkStarted {
                 guard startSinkLocked() else { return }
@@ -227,9 +231,15 @@ final class ObsVirtualCamera: @unchecked Sendable {
         queue.async { [self] in sinkPaused = false }
     }
 
+    /// An explicit start: a camera connection is (about to be) active, frames may start the sink stream.
+    func enableWrites() {
+        queue.async { [self] in writesEnabled = true }
+    }
+
     /// Stops the sink stream for good (STOP, the connection ended). Idempotent.
     func stopSink() {
         queue.async { [self] in
+            writesEnabled = false
             sinkPaused = false
             stopSinkLocked()
         }
