@@ -363,3 +363,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-349](tasks/T-349-client-pad-scroll-pinch-bias.md) | İstemci — trackpad'de iki parmak kaydırma bazen pinch sanılıyor (kaydırma lehine sınıflandırma) | 7 | android-client-dev | [] |
 | [T-350](tasks/T-350-client-perf-boost-toggle.md) | İstemci — panelde "Performans artışı" anahtarı (T-319 fling boost, varsayılan kapalı) | 7 | android-client-dev | [T-319] |
 | [T-351](tasks/T-351-host-obs-camera-probe.md) | Host deneme — OBS sanal kamera sink akışına dışarıdan kare yazılabiliyor mu? | 7 | mac-host-dev | [] |
+| [T-352](tasks/T-352-client-minimal-ui.md) | İstemci — giriş ekranı ve ayar paneli için sade (minimalist) yeniden tasarım | 7 | android-client-dev | [] |

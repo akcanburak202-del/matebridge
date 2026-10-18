@@ -1,7 +1,7 @@
 ---
 id: T-352
 title: İstemci — giriş ekranı ve ayar paneli için sade (minimalist) yeniden tasarım
-status: review
+status: done
 phase: 7
 owner: android-client-dev
 depends_on: []
