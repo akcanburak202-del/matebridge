@@ -369,11 +369,12 @@ Tablet kamerasının Mac'te webcam olarak kullanımı (karar 0040). İstemci yal
 |---|---|---|
 | mode | u8 | `0` OFF, `1` AUTO. Başka değer: OFF sayılır. |
 | facing | u8 | `0` FRONT, `1` BACK. Başka değer: FRONT sayılır. |
-| reserved | u16 | |
+| release_seq | u16 | *Eski `reserved`.* Kullanıcı panelde "Kamerayı şimdi kapat"a her bastığında istemci 1 artırır (oturumlar arasında saklanmaz; oturum başında 0). |
 
 - Uzak oturumda (STREAM_PREFS `link = 1`) istemci her zaman `mode = 0` yazar; host da `link = 1` iken `mode`'u OFF sayar.
 - `facing` değişimi akış sürerken uygulanır: istemci kamerayı değiştirir, aynı kamera bağlantısında yeni `CODEC_CONFIG` + keyframe ile devam eder. Host bir şey yapmaz.
 - Varsayılan (mesaj hiç gelmediyse): OFF.
+- **`release_seq` değişimi** (oturumdaki bir önceki değerden farklı): host o anda START durumundaysa `STOP` gönderir ve **bırakılmış** duruma geçer: Mac'teki uygulama kamerayı bırakıp yeniden kullanmaya başlayana kadar (host yazmıyorken kullanım 1→0→1) START göndermez. START değilken değişim yalnız kaydedilir. `mode` OFF'a geçişi de bırakılmış durumu temizler.
 
 ### 0x0F CAMERA_CONTROL (H→C, kontrol)
 
@@ -390,7 +391,8 @@ Host yalnızca etkin `ACCEPTED` oturumda ve `HELLO.capabilities` bit15 varsa gö
 | reserved | u8 | |
 | bitrate_kbps | u32 | START: hedef bit hızı (öneri 6000). |
 
-- **START** yalnız şu koşulların hepsi tutunca gider: son `CAMERA_PREFS.mode = AUTO`, oturum uzak değil, Mac'te sanal kamera hedefi var ve Mac'te bir uygulama o kamerayı kullanıyor. Kullanım bitince (host'un kendi süzgeciyle, öneri 3 sn) ya da koşullardan biri düşünce **STOP** gider ve host dinleyiciyi ve kamera bağlantısını kapatır.
+- **START** yalnız şu koşulların hepsi tutunca gider: son `CAMERA_PREFS.mode = AUTO`, oturum uzak değil, bırakılmış durumda değil (`release_seq`), Mac'te sanal kamera hedefi var ve Mac'te bir uygulama o kamerayı kullanıyor. Kullanım bitince ya da koşullardan biri düşünce **STOP** gider ve host dinleyiciyi ve kamera bağlantısını kapatır.
+- **Kullanım bitişi (karar 0040 eki 2026-10-18):** host yazarken kullanım bitişini doğrudan göremez (kendi yazımı da "kullanımda" sayılır). Host yalnız Mac'te kullanıcı girdisi 10 dk yokken (ve boşta kaldıkça her 10 dk'da bir) ya da Mac uykuya ya da ekran uykusuna giderken yazımı kısa süre durdurup kullanımı okur; kullanım yoksa STOP. Görüşme sırasında periyodik denetim yapılmaz.
 - İstemci START'ta: `facing` kamerasını açar, H.264 donanım kodlayıcısını `width × height` (desteklenen en yakın 16:9 boyut; gerçek boyut SPS'tedir), `fps`, `bitrate_kbps` ile kurar, kamera bağlantısını açar. Kare **dik ve yatay** gider (tablet yönüne göre döndürülmüş); ön kamerada ayna **uygulanmaz** (Mac uygulamaları önizlemeyi kendisi aynalar).
 - İstemci STOP'ta (ya da UNAVAILABLE'da, oturum sonunda, uygulama arka plana düşünce, `CAMERA_PREFS` OFF'a dönünce) kamerayı, kodlayıcıyı ve kamera bağlantısını **hemen** kapatır. Arka plana düşen istemci ön plana dönünce host hâlâ START durumundaysa kamera bağlantısını yeniden açar (aynı `cam_id`).
 - Aynı `cam_id` ile tekrar gelen START bir şey değiştirmez; yeni `cam_id` ile gelen START, varsa eski kamera bağlantısını kapatıp yenisini açtırır.

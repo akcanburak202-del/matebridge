@@ -4,4 +4,4 @@
 04 00 00 00  # header u32 length = 4
 00           # u8 mode = 0 (OFF)
 00           # u8 facing = 0 (FRONT)
-00 00        # u16 reserved = 0
+00 00        # u16 release_seq = 0

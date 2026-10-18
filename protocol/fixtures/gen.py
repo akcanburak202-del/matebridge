@@ -613,12 +613,12 @@ FIXTURES = {
     "camera_prefs_auto": ("CAMERA_PREFS: tablet camera in AUTO mode, back camera", frame("CAMERA_PREFS", [
         field("u8", "mode", 1, "AUTO"),
         field("u8", "facing", 1, "BACK"),
-        field("u16", "reserved", 0),
+        field("u16", "release_seq", 2, "user tapped 'Kamerayı şimdi kapat' twice this session"),
     ])),
     "camera_prefs_off": ("CAMERA_PREFS: tablet camera off (default), front camera", frame("CAMERA_PREFS", [
         field("u8", "mode", 0, "OFF"),
         field("u8", "facing", 0, "FRONT"),
-        field("u16", "reserved", 0),
+        field("u16", "release_seq", 0),
     ])),
     "camera_control_start": ("CAMERA_CONTROL: a Mac app uses the virtual camera, start 1080p30 on port 47004", frame("CAMERA_CONTROL", [
         field("u8", "state", 1, "START"),

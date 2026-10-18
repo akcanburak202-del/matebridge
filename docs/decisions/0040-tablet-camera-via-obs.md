@@ -32,3 +32,9 @@ Araştırma (2026-10-17): imzalı ve ücretsiz OBS Studio'nun kamera uzantısı 
 - **Mac:** VideoToolbox çözme → OBS sanal kamera sink akışı (`kCMIOStreamPropertyDirection = 0` olan akış, T-351). Kullanım algılama host'un işi.
 - Kapalıyken iki tarafta da sıfır iş.
 - **Yeniden düşünme:** OBS sink yolu bir sürümde bozulursa; ya da kullanıcı ücretli hesap alırsa kendi CMIO uzantımız.
+
+## Ek 2 (2026-10-18): kullanım bitişi ve "Kamerayı şimdi kapat" (kullanıcı kararı C)
+
+- Ölçüm (T-354 `--watch`): host yazmıyorken OBS cihazının `IsRunningSomewhere` özelliği uygulamanın açışını ve kapanışını anında gösteriyor. Host yazarken kendi yazımı özelliği 1 tutuyor; uygulamanın kapanışında hiçbir özellik ya da dinleyici değişmiyor.
+- Seçenekler: A) dakikada bir ~0,1 sn yazımı durdurup bakmak (görüşmede görünür takılma), B) hiç bakmamak (elle kapatma), C) B + boşta denetim. **Kullanıcı C'yi seçti:** görüşme sırasında periyodik denetim yok; Mac'te 10 dk girdi yoksa (boşta kaldıkça her 10 dk) ya da uyku/ekran uykusu öncesi kısa denetim; kullanım yoksa STOP.
+- Panelde kamera açıkken **"Kamerayı şimdi kapat"**: `CAMERA_PREFS.release_seq` artar, host STOP gönderir ve uygulama kamerayı bırakıp yeniden açana kadar başlatmaz. "Kapalı" seçeneği de durur.
