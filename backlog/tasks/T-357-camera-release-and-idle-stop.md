@@ -53,6 +53,8 @@ Karar 0040 ek 2 ve PROTOCOL.md (dal `task/T-356-camera-integration`, commit 2e41
 - check.sh --only android: OK.
 - Tablette bak: kamera akarken Kamera bolumunde "Kamerayi simdi kapat" gorunuyor mu (bolumde, altta degil); basinca Mac kamerayi kapatiyor ve uygulama kullanmaya devam etse de yeniden acmiyor mu; kamera akmazken eylem gizli mi.
 
+- Round 2 (branch task/T-357-client-r2, base b149f52e): (1) Camera2Pipeline: `OpenGeneration` tags each openCamera; closeCameraOnly invalidates; stale onOpened closes its device, stale onDisconnected/onError only close it (no state change). Pure part unit-tested; the Camera2 callbacks themselves need the tablet (switch facing quickly right after start: no orphaned camera, camera light goes off on stop). (2) `Limits.CAM_FRAME_MAX_BYTES` = 4_194_304 - 20 = 4_194_284; boundary test (max ok, max+1 rejected on encode and decode).
+
 ## Open questions
 
 ## Handoff (host)
