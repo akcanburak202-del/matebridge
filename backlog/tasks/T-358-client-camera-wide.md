@@ -1,7 +1,7 @@
 ---
 id: T-358
 title: İstemci — tablet kamerasında "Arka geniş açı" seçeneği
-status: todo
+status: review
 phase: 7
 owner: android-client-dev
 depends_on: [T-355]
@@ -41,6 +41,15 @@ Kullanıcı (2026-10-18): arka geniş açı kamerası bir özellik olarak buluns
 
 ## Plan
 
+Saf secici `CameraTargets` (CamInfo listesi -> CameraTarget: openId/physicalId/charId); Camera2 tarafi `AndroidCameraTargets` yalniz CameraCharacteristics okur (kamera acmaz), destek bir kez belirlenip onbellege alinir. `CameraFacing.BACK_WIDE` (tel 2). Pipeline hedefi cozer, yol (b) icin `OutputConfiguration.setPhysicalCameraId`. Geniş açı hata verirse (cozulemedi/disconnect/error/session) `reason=wide_unavailable` loglanir, BACK'e dusulur, ayar degismez.
+
 ## Handoff
+
+- Commit: branch task/T-358-client-camera-wide son commit (taban 19d83165).
+- Dosyalar: camera/CameraTargets.kt (saf), camera/AndroidCameraTargets.kt, Camera2Pipeline.kt, CameraWish.kt (BACK_WIDE), protocol Messages/Codec (FACING_BACK_WIDE = 2, bilinmeyen = FRONT), SettingsCatalog (cameraWideAvailable; yoksa secenek gizli), MainActivity (kayitli Geniş açı destek yoksa BACK sayilir, ayar degismez), testler (CameraTargetsTest, SettingsCatalogTest).
+- Beklenen acilma yolu bu cihazda: **(b)**. Kamera 4 id listesinde degil (normal kameralar 0, 1/3); 0 mantiksal, fiziksel "2" (6,98 mm) ve "4" (1,95 mm) -> mantiksal 0 acilir, `setPhysicalCameraId("4")`, boyut/fps/sensor yonu "4"un ozelliklerinden. Yol (a) yalniz listede ayri kisa odakli arka kamera varsa.
+- Dondurme: T-355 25f80cd4 kurali degismedi. Fiziksel akista SurfaceTexture matrisinin ayni davrandigi cihazda dogrulanmali.
+- Cihazda bak: logcat `camera_wide_probe wide=supported path=b_physical open=0 char=4`; panelde Ön / Arka / Geniş açı; Geniş açı'da Photo Booth'ta belirgin genis gorus (~83 derece), dik, aynasiz, ekran donunce dik; akis surerken Arka<->Geniş açı gecisi ayni baglantida yeni config+keyframe; fiziksel oturum hatasi olursa `reason=wide_unavailable` ve BACK'e dusus.
+- Test edilmedi: Camera2 cagrilari (cihaz gerekli).
 
 ## Open questions

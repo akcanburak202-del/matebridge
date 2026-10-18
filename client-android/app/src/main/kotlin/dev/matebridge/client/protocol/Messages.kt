@@ -400,6 +400,7 @@ data class CameraPrefs(val mode: Int, val facing: Int, val releaseSeq: Int = 0) 
         const val MODE_AUTO = 1
         const val FACING_FRONT = 0
         const val FACING_BACK = 1
+        const val FACING_BACK_WIDE = 2
         val OFF = CameraPrefs(MODE_OFF, FACING_FRONT)
     }
 }

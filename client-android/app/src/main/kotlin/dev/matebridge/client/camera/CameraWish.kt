@@ -13,10 +13,11 @@ enum class CameraMode(val id: String, val wire: Int, val label: String) {
     }
 }
 
-/** "Kamera yönü" setting: Ön (default) or Arka. */
+/** "Kamera yönü" setting: Ön (default), Arka or Arka geniş açı (T-358, only where the device has one). */
 enum class CameraFacing(val id: String, val wire: Int, val label: String) {
     FRONT("front", CameraPrefs.FACING_FRONT, "Ön"),
-    BACK("back", CameraPrefs.FACING_BACK, "Arka");
+    BACK("back", CameraPrefs.FACING_BACK, "Arka"),
+    BACK_WIDE("back_wide", CameraPrefs.FACING_BACK_WIDE, "Geniş açı");
 
     companion object {
         /** Default (also for an unknown stored value): [FRONT]. */

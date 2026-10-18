@@ -413,7 +413,7 @@ object Codec {
                 val mode = r.u8(); val facing = r.u8(); val releaseSeq = r.u16()
                 CameraPrefs(
                     if (mode == CameraPrefs.MODE_AUTO) CameraPrefs.MODE_AUTO else CameraPrefs.MODE_OFF, // unknown mode = OFF
-                    if (facing == CameraPrefs.FACING_BACK) CameraPrefs.FACING_BACK else CameraPrefs.FACING_FRONT, // unknown facing = FRONT
+                    when (facing) { CameraPrefs.FACING_BACK -> CameraPrefs.FACING_BACK; CameraPrefs.FACING_BACK_WIDE -> CameraPrefs.FACING_BACK_WIDE; else -> CameraPrefs.FACING_FRONT }, // unknown facing = FRONT
                     releaseSeq,
                 )
             }

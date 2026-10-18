@@ -92,6 +92,7 @@ import dev.matebridge.client.stream.StreamMode
 import dev.matebridge.client.overlay.PenOverlayView
 import dev.matebridge.client.cursor.CursorOverlayView
 import dev.matebridge.client.camera.AndroidCameraRunFactory
+import dev.matebridge.client.camera.AndroidCameraTargets
 import dev.matebridge.client.camera.CameraController
 import dev.matebridge.client.camera.CameraFacing
 import dev.matebridge.client.camera.CameraMath
@@ -1168,6 +1169,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }
         override val cameraStreaming get() = cameraController?.uiState == CameraUiState.ACTIVE // T-357
         override fun releaseCamera() = releaseCameraNow()
+        override val cameraWideAvailable get() = wideCameraSupported() // T-358
         override val cameraStatus get() = cameraStatusText()
 
         override val cursorLocal get() = settings.cursorLocal()
@@ -1376,7 +1378,16 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun cameraDisplayDegrees(): Int =
         CameraMath.degreesOfSurfaceRotation(try { windowManager.defaultDisplay.rotation } catch (_: RuntimeException) { Surface.ROTATION_90 })
 
-    private fun cameraWish() = CameraWish(settings.cameraMode(), settings.cameraFacing())
+    /** T-358: a rear wide-angle camera exists (decided once from CameraCharacteristics, cached; no camera is opened). */
+    private fun wideCameraSupported(): Boolean = cameraController != null && try {
+        AndroidCameraTargets.wideSupported(getSystemService(CAMERA_SERVICE) as android.hardware.camera2.CameraManager) { MbLog.i("camera_wide_probe", it, "camera") }
+    } catch (_: Exception) { false }
+
+    /** The stored "Geniş açı" without a wide camera counts as Arka (the setting itself is not changed). */
+    private fun cameraWish(): CameraWish {
+        val f = settings.cameraFacing()
+        return CameraWish(settings.cameraMode(), if (f == CameraFacing.BACK_WIDE && !wideCameraSupported()) CameraFacing.BACK else f)
+    }
 
     /** The CAMERA_PREFS the host should see: Otomatik only with the permission and outside a remote session. */
     private fun cameraPrefsNow() =

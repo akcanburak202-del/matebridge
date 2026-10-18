@@ -107,6 +107,8 @@ interface SettingsHost {
     /** Persists the choice and tells the Mac (CAMERA_PREFS); the first Otomatik asks for the camera permission. */
     fun selectCameraMode(m: CameraMode) {}
     val cameraFacing: CameraFacing get() = CameraFacing.FRONT
+    /** T-358: the device has a rear wide-angle camera; false hides the "Geniş açı" option. */
+    val cameraWideAvailable: Boolean get() = false
     fun selectCameraFacing(f: CameraFacing) {}
     /** True while the camera streams to the Mac (T-357): shows "Kamerayı şimdi kapat". */
     val cameraStreaming: Boolean get() = false
@@ -471,7 +473,7 @@ object SettingsCatalog {
                     ) { id -> h.selectCameraMode(CameraMode.parse(id)) },
                     SettingItem.Choice(
                         "camera_facing", "Kamera yönü",
-                        CameraFacing.entries.map { SettingItem.Option(it.id, it.label) },
+                        CameraFacing.entries.filter { it != CameraFacing.BACK_WIDE || h.cameraWideAvailable }.map { SettingItem.Option(it.id, it.label) },
                         { h.cameraFacing.id },
                         hidden = { h.remoteSession },
                     ) { id -> h.selectCameraFacing(CameraFacing.parse(id)) },
