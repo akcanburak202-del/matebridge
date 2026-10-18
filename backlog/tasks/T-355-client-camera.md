@@ -1,7 +1,7 @@
 ---
 id: T-355
 title: İstemci — tablet kamerası: panel ayarı, Camera2 → H.264, kamera bağlantısı
-status: review
+status: done
 phase: 7
 owner: android-client-dev
 depends_on: []

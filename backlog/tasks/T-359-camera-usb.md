@@ -1,7 +1,7 @@
 ---
 id: T-359
 title: Kamera — USB oturumunda da çalışsın (adb reverse 47004)
-status: todo
+status: done
 phase: 7
 owner: mac-host-dev
 depends_on: [T-354, T-357]

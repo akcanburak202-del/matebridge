@@ -1,7 +1,7 @@
 ---
 id: T-354
 title: Host — tablet kamerası: kamera bağlantısı, H.264 çözme, OBS sanal kameraya yazım, kullanım algılama
-status: review
+status: done
 phase: 7
 owner: mac-host-dev
 depends_on: [T-351]

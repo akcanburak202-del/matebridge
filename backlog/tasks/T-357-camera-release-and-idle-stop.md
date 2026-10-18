@@ -1,7 +1,7 @@
 ---
 id: T-357
 title: Kamera — "Kamerayı şimdi kapat" (release_seq) ve boşta kullanım denetimi (karar 0040 ek 2, politika C)
-status: review
+status: done
 phase: 7
 owner: mac-host-dev + android-client-dev
 depends_on: [T-354, T-355]

@@ -1,7 +1,7 @@
 ---
 id: T-358
 title: İstemci — tablet kamerasında "Arka geniş açı" seçeneği
-status: review
+status: done
 phase: 7
 owner: android-client-dev
 depends_on: [T-355]
