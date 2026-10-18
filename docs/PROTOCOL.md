@@ -780,7 +780,7 @@ Tablet kamerasının görüntüsü ayrı bir şifreli TCP bağlantısında Mac'e
 | flags | u8 | bit0 `KEYFRAME`, bit1 `CODEC_CONFIG` (yalnızca H.264 SPS/PPS) |
 | reserved | u8 | |
 | reserved2 | u16 | |
-| frame_size | u32 | `data` uzunluğu, `1…4 194 280` |
+| frame_size | u32 | `data` uzunluğu, `1…4 194 284` (kamera bağlantısı payload sınırı − 20) |
 | data | bytes[frame_size] | H.264 Annex-B NAL birimleri (`00 00 00 01` başlangıç kodlarıyla) |
 
 - Payload `20 + frame_size`'dan kısaysa ya da `frame_size = 0` ise **protokol hatasıdır** (fixture `invalid_cam_frame_short`; yalnız kamera bağlantısı kapanır).
