@@ -45,6 +45,9 @@ object CameraTargets {
         return null
     }
 
+    /** The facing to continue with after a camera/session failure on [facing]: wide falls back to BACK, others do not (T-358). */
+    fun fallbackOnFailure(facing: CameraFacing): CameraFacing? = if (facing == CameraFacing.BACK_WIDE) CameraFacing.BACK else null
+
     fun resolve(cams: List<CamInfo>, facing: CameraFacing): CameraTarget? = when (facing) {
         CameraFacing.FRONT -> plain(cams, front = true)
         CameraFacing.BACK -> plain(cams, front = false)
