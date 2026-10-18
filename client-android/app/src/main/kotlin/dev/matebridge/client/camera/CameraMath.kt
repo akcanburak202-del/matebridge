@@ -8,16 +8,10 @@ import kotlin.math.sin
 /** Pure geometry and size picking of the camera pipeline (T-355); no Android types so it is JVM-tested. */
 object CameraMath {
     /**
-     * Clockwise rotation (0/90/180/270) the sensor image needs to be upright for a display rotated [displayDegrees]
-     * (`Surface.ROTATION_*` as degrees, i.e. the rotation of the drawn content from the natural orientation). The same
-     * relation CameraX uses: back = sensor - display, front = sensor + display. The front image is NOT mirrored
-     * (PROTOCOL.md 0x0F: the Mac apps mirror their own preview).
+     * Clockwise rotation ([mvp] convention) that turns an image upright for the natural orientation into one upright for
+     * a display rotated [displayDegrees] from it (device test 2026-10-18, MatePad portrait-natural, ROTATION_90).
      */
-    fun rotationDegrees(sensorOrientation: Int, displayDegrees: Int, front: Boolean): Int {
-        val s = norm(sensorOrientation)
-        val d = norm(displayDegrees)
-        return if (front) (s + d) % 360 else (s - d + 360) % 360
-    }
+    fun naturalToDisplayDegrees(displayDegrees: Int): Int = (360 - norm(displayDegrees)) % 360
 
     /** `Surface.ROTATION_0..3` to degrees. */
     fun degreesOfSurfaceRotation(rotation: Int): Int = when (rotation) {
@@ -56,6 +50,11 @@ object CameraMath {
             0f, 0f, 1f, 0f,
             0f, 0f, 0f, 1f,
         )
+    }
+
+    /** Mirrors an [mvp] horizontally in output space (negates the clip-space x row), in place. */
+    fun flipOutputX(m: FloatArray) {
+        m[0] = -m[0]; m[4] = -m[4]; m[8] = -m[8]; m[12] = -m[12]
     }
 
     /** Applies a [mvp] to the quad corner ([x], [y]) (tests). */

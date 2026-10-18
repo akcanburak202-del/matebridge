@@ -313,12 +313,20 @@ class Camera2Pipeline(
         if (stopRequested.get() || released) return
         try {
             t.updateTexImage()
+            // The camera service sets the buffer transform to the sensor orientation, so the SurfaceTexture matrix
+            // already turns the image upright for the display's natural orientation (device test 2026-10-18: applying
+            // the sensor rotation again gave a 90-degree, squeezed image). Only the display rotation is left.
+            val natural = sensorOrientation % 180 == 90
+            val nw = if (natural) srcH else srcW
+            val nh = if (natural) srcW else srcH
+            val rot = CameraMath.naturalToDisplayDegrees(safeDisplayDegrees())
+            // The camera service also mirrors the front camera's buffers (selfie preview); un-mirror so the Mac gets the
+            // true image and its apps mirror their own preview (PROTOCOL.md 0x0F; device test 2026-10-18).
             val front = facing == CameraFacing.FRONT
-            val rot = CameraMath.rotationDegrees(sensorOrientation, safeDisplayDegrees(), front)
-            val key = (rot.toLong() shl 40) or (srcW.toLong() shl 20) or srcH.toLong()
+            val key = (rot.toLong() shl 40) or (nw.toLong() shl 20) or nh.toLong() or (if (front) 1L shl 60 else 0L)
             if (key != mvpKey) {
                 mvpKey = key
-                mvp = CameraMath.mvp(srcW, srcH, rot, outW, outH)
+                mvp = CameraMath.mvp(nw, nh, rot, outW, outH).also { if (front) CameraMath.flipOutputX(it) }
             }
             g.drawFrame(t, mvp, outW, outH, t.timestamp)
         } catch (e: RuntimeException) {

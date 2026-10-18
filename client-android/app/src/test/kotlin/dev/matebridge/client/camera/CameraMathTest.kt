@@ -8,28 +8,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CameraMathTest {
-    @Test fun backCameraRotationFollowsTheDisplay() {
-        // sensor mounted at 90 (typical): portrait needs 90, a landscape display needs none or a half turn
-        assertEquals(90, CameraMath.rotationDegrees(90, 0, front = false))
-        assertEquals(0, CameraMath.rotationDegrees(90, 90, front = false))
-        assertEquals(270, CameraMath.rotationDegrees(90, 180, front = false))
-        assertEquals(180, CameraMath.rotationDegrees(90, 270, front = false))
-    }
-
-    @Test fun frontCameraRotationRunsTheOtherWayAndIsNotMirrored() {
-        assertEquals(270, CameraMath.rotationDegrees(270, 0, front = true))
-        assertEquals(0, CameraMath.rotationDegrees(270, 90, front = true))
-        assertEquals(90, CameraMath.rotationDegrees(270, 180, front = true))
-        assertEquals(180, CameraMath.rotationDegrees(270, 270, front = true))
-    }
-
     @Test fun surfaceRotationMapsToDegrees() {
         assertEquals(listOf(0, 90, 180, 270, 0), listOf(0, 1, 2, 3, 7).map { CameraMath.degreesOfSurfaceRotation(it) })
-    }
-
-    @Test fun rotationNormalisesOddInputs() {
-        assertEquals(90, CameraMath.rotationDegrees(450, 360, front = false))
-        assertEquals(270, CameraMath.rotationDegrees(-90, 0, front = false))
     }
 
     private fun corner(m: FloatArray, x: Float, y: Float) = CameraMath.apply(m, x, y).let { (a, b) -> Pair(Math.round(a * 1000) / 1000f, Math.round(b * 1000) / 1000f) }
@@ -153,5 +133,24 @@ class CameraMathTest {
         assertTrue(g.isCurrent(second))
         g.next() // closeCameraOnly invalidates the pending open too
         assertFalse(g.isCurrent(second))
+    }
+
+    @Test
+    fun naturalToDisplayRotatesAgainstTheDisplay() {
+        // Device test 2026-10-18 (MatePad, portrait-natural, ROTATION_90): 270 in the mvp convention is upright.
+        assertEquals(0, CameraMath.naturalToDisplayDegrees(0))
+        assertEquals(270, CameraMath.naturalToDisplayDegrees(90))
+        assertEquals(180, CameraMath.naturalToDisplayDegrees(180))
+        assertEquals(90, CameraMath.naturalToDisplayDegrees(270))
+    }
+
+    @Test
+    fun flipOutputXMirrorsCorners() {
+        val m = CameraMath.mvp(1080, 1920, 270, 1920, 1080)
+        val (x0, y0) = CameraMath.apply(m, 1f, 1f)
+        CameraMath.flipOutputX(m)
+        val (x1, y1) = CameraMath.apply(m, 1f, 1f)
+        assertEquals(-x0, x1, 1e-5f)
+        assertEquals(y0, y1, 1e-5f)
     }
 }
