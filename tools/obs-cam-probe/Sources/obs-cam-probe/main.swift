@@ -66,7 +66,7 @@ func devices() -> [Device] {
     }
 }
 
-/// kCMIOStreamPropertyDirection: 0 = source (device -> client), 1 = sink (client -> device).
+/// kCMIOStreamPropertyDirection, device-relative: 0 = output (client -> device, sink), 1 = input (device -> client, source).
 func direction(_ s: CMIOStreamID) -> UInt32? { uint32(s, kCMIOStreamPropertyDirection) }
 
 func obsUUID() -> String? {
@@ -87,7 +87,7 @@ func listDevices() {
     for d in devs {
         print("- \(d.name)  uid=\(d.uid)  id=\(d.id)  streams=\(d.streams.count)")
         for (i, s) in d.streams.enumerated() {
-            let dir = direction(s).map { $0 == 1 ? "sink(1)" : "source(\($0))" } ?? "dir=?"
+            let dir = direction(s).map { $0 == 0 ? "sink(0)" : "source(\($0))" } ?? "dir=?"
             print("    [\(i)] stream \(s) \(dir)")
         }
     }
@@ -145,7 +145,9 @@ func runPattern(seconds: Double, width: Int, height: Int, fps: Int) {
         fail("OBS Virtual Camera device not found. Is OBS installed, the camera extension approved, and the virtual camera started once? (run --list)", 2)
     }
     var sink: CMIOStreamID?
-    for s in dev.streams where direction(s) == 1 { sink = s }
+    // Device-relative directions (CoreAudio convention): 0 = output = data into the device (sink), 1 = input (source).
+    // Verified 2026-10-18: writing to the direction-1 stream fills its queue and nothing consumes it.
+    for s in dev.streams where direction(s) == 0 { sink = s }
     if sink == nil, dev.streams.count >= 2 { sink = dev.streams[1] } // OBS plugin uses index 1
     guard let sinkID = sink else {
         fail("No sink stream on '\(dev.name)' (\(dev.streams.count) stream(s)). Has the extension been started (virtual camera started once in OBS)?", 3)

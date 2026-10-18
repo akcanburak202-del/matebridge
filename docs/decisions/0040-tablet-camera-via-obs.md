@@ -1,6 +1,6 @@
 # 0040 — Tablet kamerasını Mac'te webcam yapmak: OBS sanal kamerası (deneme)
 
-- **Durum:** önerildi (2026-10-17; deneme T-351 sonucuna bağlı)
+- **Durum:** önerildi (2026-10-17); T-351 denemesi başarılı (2026-10-18), tasarım kararı bekliyor
 - **Tarih:** 2026-10-17
 
 ## Bağlam

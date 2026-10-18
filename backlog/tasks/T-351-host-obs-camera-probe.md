@@ -1,7 +1,7 @@
 ---
 id: T-351
 title: Host deneme — OBS sanal kamera sink akışına dışarıdan kare yazılabiliyor mu?
-status: review
+status: done
 phase: 7
 owner: mac-host-dev
 depends_on: []
