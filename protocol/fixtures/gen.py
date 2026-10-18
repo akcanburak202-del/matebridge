@@ -26,6 +26,8 @@ T = {
     "AUDIO_PREFS": 0x30, "AUDIO_CONFIG": 0x31, "AUDIO_FRAME": 0x32,
     "VIDEO_HELLO": 0x40, "VIDEO_FRAME": 0x41,
     "FILES_HELLO": 0x50, "FILES_HELLO_ACK": 0x51, "FILES_DATA": 0x52,
+    "CAMERA_PREFS": 0x0E, "CAMERA_CONTROL": 0x0F,
+    "CAM_HELLO": 0x60, "CAM_HELLO_ACK": 0x61, "CAM_FRAME": 0x62, "CAM_KEYFRAME_REQUEST": 0x63,
 }
 
 
@@ -39,6 +41,9 @@ VIDEO_NONCE = bytes.fromhex("0f0e0d0c0b0a09080706050403020100")
 # Section 9 file connection nonces (decision 0035); also inputs of crypto_vectors.swift.
 CLIENT_FILES_NONCE = bytes(range(0x70, 0x80))
 HOST_FILES_NONCE = bytes(range(0x80, 0x90))
+# Section 9 camera connection nonces (decision 0040); also inputs of crypto_vectors.swift.
+CLIENT_CAM_NONCE = bytes(range(0x90, 0xA0))
+HOST_CAM_NONCE = bytes(range(0xA0, 0xB0))
 
 def tiny_png(w, h):
     """A complete, valid RGBA PNG (deterministic): transparent with a 2 px black vertical bar in the middle."""
@@ -604,6 +609,96 @@ FIXTURES = {
         field("u16", "port", 0),
         field("u8", "pool", 0),
         field("u8", "max", 0),
+    ])),
+    "camera_prefs_auto": ("CAMERA_PREFS: tablet camera in AUTO mode, back camera", frame("CAMERA_PREFS", [
+        field("u8", "mode", 1, "AUTO"),
+        field("u8", "facing", 1, "BACK"),
+        field("u16", "reserved", 0),
+    ])),
+    "camera_prefs_off": ("CAMERA_PREFS: tablet camera off (default), front camera", frame("CAMERA_PREFS", [
+        field("u8", "mode", 0, "OFF"),
+        field("u8", "facing", 0, "FRONT"),
+        field("u16", "reserved", 0),
+    ])),
+    "camera_control_start": ("CAMERA_CONTROL: a Mac app uses the virtual camera, start 1080p30 on port 47004", frame("CAMERA_CONTROL", [
+        field("u8", "state", 1, "START"),
+        field("u16", "cam_id", 1),
+        field("u16", "port", 47004),
+        field("u16", "width", 1920),
+        field("u16", "height", 1080),
+        field("u8", "fps", 30),
+        field("u8", "reserved", 0),
+        field("u32", "bitrate_kbps", 6000),
+    ])),
+    "camera_control_stop": ("CAMERA_CONTROL: no Mac app uses the camera any more", frame("CAMERA_CONTROL", [
+        field("u8", "state", 0, "STOP"),
+        field("u16", "cam_id", 1),
+        field("u16", "port", 0),
+        field("u16", "width", 0),
+        field("u16", "height", 0),
+        field("u8", "fps", 0),
+        field("u8", "reserved", 0),
+        field("u32", "bitrate_kbps", 0),
+    ])),
+    "camera_control_unavailable": ("CAMERA_CONTROL: AUTO requested but the Mac has no virtual camera target", frame("CAMERA_CONTROL", [
+        field("u8", "state", 2, "UNAVAILABLE"),
+        field("u16", "cam_id", 0),
+        field("u16", "port", 0),
+        field("u16", "width", 0),
+        field("u16", "height", 0),
+        field("u8", "fps", 0),
+        field("u8", "reserved", 0),
+        field("u32", "bitrate_kbps", 0),
+    ])),
+    "cam_hello": ("CAM_HELLO: first message on a camera connection (plain)", frame("CAM_HELLO", [
+        field("u16", "protocol_version", 1),
+        field("u32", "session_id", 0xA1B2C3D4),
+        field("u16", "cam_id", 1),
+        field("bytes", "client_cam_nonce", CLIENT_CAM_NONCE),
+    ])),
+    "invalid_cam_hello_short": ("MUST BE REJECTED (PROTOCOL_ERROR): CAM_HELLO payload shorter than 24 bytes", frame("CAM_HELLO", [
+        field("u16", "protocol_version", 1),
+        field("u32", "session_id", 0xA1B2C3D4),
+        field("u16", "cam_id", 1),
+        field("bytes", "client_cam_nonce", CLIENT_CAM_NONCE[:8], "only 8 of 16 bytes"),
+    ])),
+    "cam_hello_ack": ("CAM_HELLO_ACK: host accepts the camera connection (plain)", frame("CAM_HELLO_ACK", [
+        field("u8", "status", 0, "OK"),
+        field("bytes", "host_cam_nonce", HOST_CAM_NONCE),
+    ])),
+    "cam_hello_ack_rejected": ("CAM_HELLO_ACK: host rejects the camera connection (plain, zero nonce)", frame("CAM_HELLO_ACK", [
+        field("u8", "status", 1, "REJECTED"),
+        field("bytes", "host_cam_nonce", bytes(16)),
+    ])),
+    "cam_frame": ("CAM_FRAME: H.264 keyframe from the tablet camera (payload shortened)", frame("CAM_FRAME", [
+        field("u32", "frame_seq", 1),
+        field("u64", "capture_time_us", 51234000000),
+        field("u8", "flags", 0x01, "KEYFRAME"),
+        field("u8", "reserved", 0),
+        field("u16", "reserved2", 0),
+        field("u32", "frame_size", 8),
+        field("bytes", "data", bytes.fromhex("0000000165888400"), "Annex-B, IDR NAL start"),
+    ])),
+    "cam_frame_config": ("CAM_FRAME: H.264 SPS/PPS only (shortened)", frame("CAM_FRAME", [
+        field("u32", "frame_seq", 0),
+        field("u64", "capture_time_us", 51233990000),
+        field("u8", "flags", 0x02, "CODEC_CONFIG"),
+        field("u8", "reserved", 0),
+        field("u16", "reserved2", 0),
+        field("u32", "frame_size", 16),
+        field("bytes", "data", bytes.fromhex("00000001676400280000000168ee3cb0"), "Annex-B, SPS + PPS NAL starts"),
+    ])),
+    "invalid_cam_frame_short": ("MUST BE REJECTED (PROTOCOL_ERROR): CAM_FRAME data shorter than frame_size", frame("CAM_FRAME", [
+        field("u32", "frame_seq", 2),
+        field("u64", "capture_time_us", 51234033000),
+        field("u8", "flags", 0x00),
+        field("u8", "reserved", 0),
+        field("u16", "reserved2", 0),
+        field("u32", "frame_size", 16, "claims 16"),
+        field("bytes", "data", bytes.fromhex("0000000141"), "only 5 bytes"),
+    ])),
+    "cam_keyframe_request": ("CAM_KEYFRAME_REQUEST: host decoder lost reference", frame("CAM_KEYFRAME_REQUEST", [
+        field("u8", "reason", 1, "DECODE_ERROR"),
     ])),
     "files_hello": ("FILES_HELLO: first message on a file connection (plain)", frame("FILES_HELLO", [
         field("u16", "protocol_version", 1),

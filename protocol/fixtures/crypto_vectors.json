@@ -57,15 +57,33 @@
       "nonce" : "000000000100000000000000",
       "payload" : "0f00485454502f312e3120323030204f4b",
       "type" : "0x52"
+    },
+    {
+      "counter" : "0",
+      "frame" : "1d0000008f3569432c6f691e2c59c7d408dcc3078a53d83b88571541f5a1884d8f",
+      "key" : "3f5f5c42cd8310d790d5fd1e602e11aa74de130274d83cfca0d50ab54aa7fa1a",
+      "nonce" : "000000000000000000000000",
+      "payload" : "0100000040b83f8406010000",
+      "type" : "0x20"
+    },
+    {
+      "counter" : "0",
+      "frame" : "120000002a02e23460ecd428b384c91d230590fac3f0",
+      "key" : "989d96b7d2efaee3716b91504a693faf2c6cc630f336fc27073fb1a119929501",
+      "nonce" : "000000000000000000000000",
+      "payload" : "02",
+      "type" : "0x63"
     }
   ],
   "inputs" : {
+    "client_cam_nonce" : "909192939495969798999a9b9c9d9e9f",
     "client_eph_priv" : "c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c101",
     "client_eph_pub" : "043b2e3be924f7393ba036956d4f154be45d37e6c02baecfc991a3c6ae4213629e7ab47261459f5823e7e72769597493bc607eb317d9ef1ca4ddb85f3cc2a35538",
     "client_files_nonce" : "707172737475767778797a7b7c7d7e7f",
     "hello_ack_paired_payload" : "01000000d4c3b2a199b7084d6163206d696e6901303132333435363738393a3b3c3d3e3fe0e1e2e3e4e5e6e7e8e9eaebecedeeef04a417215b2ffac23f26ff2b85372f155fc16a7aa6b79ffbf4a37e5bb82cd72453761d437b3fe609bf5d0cefdfd95463724938ae81a3f04c8dbc2af6be0cac5efb",
     "hello_ack_pairing_payload" : "01000100000000000000084d6163206d696e6902303132333435363738393a3b3c3d3e3fe0e1e2e3e4e5e6e7e8e9eaebecedeeef04a417215b2ffac23f26ff2b85372f155fc16a7aa6b79ffbf4a37e5bb82cd72453761d437b3fe609bf5d0cefdfd95463724938ae81a3f04c8dbc2af6be0cac5efb",
     "hello_payload" : "01000123456789abcdef0123456789abcdeff00a300768019000ff0000000b4d6174655061642050726fc0c1c2c3c4c5c6c7c8c9cacbcccdcecf043b2e3be924f7393ba036956d4f154be45d37e6c02baecfc991a3c6ae4213629e7ab47261459f5823e7e72769597493bc607eb317d9ef1ca4ddb85f3cc2a35538",
+    "host_cam_nonce" : "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
     "host_eph_priv" : "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a202",
     "host_eph_pub" : "04a417215b2ffac23f26ff2b85372f155fc16a7aa6b79ffbf4a37e5bb82cd72453761d437b3fe609bf5d0cefdfd95463724938ae81a3f04c8dbc2af6be0cac5efb",
     "host_files_nonce" : "808182838485868788898a8b8c8d8e8f",
@@ -74,6 +92,8 @@
   },
   "paired" : {
     "ikm" : "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5ad2ee64290e6806047c31314211b7b0d75c37acc3a088716f39fbf301f2517029",
+    "key_camera_c2h" : "3f5f5c42cd8310d790d5fd1e602e11aa74de130274d83cfca0d50ab54aa7fa1a",
+    "key_camera_h2c" : "989d96b7d2efaee3716b91504a693faf2c6cc630f336fc27073fb1a119929501",
     "key_control_c2h" : "21b67cae0f94b0a80590d0fce87793bd06e733e68384a432c3e08a1a3a4c1ab9",
     "key_control_h2c" : "044822d46dfbeb4c91290e2919dbe55346ee9b12f65446ad626599d51b244981",
     "key_files_c2h" : "0bb9884733d98551ea0ca847b9d6449bedf73e8668e8b55356819b7a5a1cadcb",
@@ -85,6 +105,8 @@
   },
   "pairing" : {
     "ikm" : "d2ee64290e6806047c31314211b7b0d75c37acc3a088716f39fbf301f2517029",
+    "key_camera_c2h" : "7b2d42e997dcf5f967ec1bf16a1349383c4d5fbec67405b57d1c2261471ef74d",
+    "key_camera_h2c" : "e130dc2914f0844d844bacbfe687bc403a2b312ca06cae246bae0eda3997478b",
     "key_control_c2h" : "5f0d7dbc9094d551045181b91070bbdea553508afc7e23fc2d3e2739017c1d4e",
     "key_control_h2c" : "eb39ef2362f2285f80219fac66f04576e7a1d32b692e8befa7ed629871cc1cdb",
     "key_files_c2h" : "41f27b239811c0b764892bc54f060aacaff718b8d00485e5c14f94e006ca1466",

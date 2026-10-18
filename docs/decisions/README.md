@@ -57,4 +57,4 @@ Kazanılan, kaybedilen, neyi tetikler. Hangi koşulda tekrar düşünülür.
 | 0033 | Keskin renk kenarları (host luma ayarlı 4:2:0) panelden isteğe bağlı, varsayılan kapalı; STREAM_PREFS chroma baytı | kabul |
 | 0038 | Uzaktan bağlantı: "Uzaktan bağlan" düğmesi, en az veri profili, AAC ses, uzaktan eşleşme yok | kabul |
 | 0039 | "Performans artışı" panel anahtarı (fling boost), varsayılan kapalı | kabul |
-| 0040 | Tablet kamerası Mac'te webcam: OBS sanal kamerası (deneme) | önerildi |
+| 0040 | Tablet kamerası Mac'te webcam: OBS sanal kamerası (Kapalı/Otomatik) | kabul |
