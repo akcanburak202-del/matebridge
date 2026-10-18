@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- T-352: 8 dp grid and a three-step type scale (title / label / secondary). -->
+<resources>
+    <dimen name="mb_space_1">8dp</dimen>
+    <dimen name="mb_space_2">16dp</dimen>
+    <dimen name="mb_space_3">24dp</dimen>
+    <dimen name="mb_space_4">32dp</dimen>
+    <dimen name="mb_radius">8dp</dimen>
+    <dimen name="mb_control_height">48dp</dimen>
+    <dimen name="mb_settings_width">460dp</dimen>
+    <dimen name="mb_text_title">24sp</dimen>
+    <dimen name="mb_text_label">16sp</dimen>
+    <dimen name="mb_text_secondary">13sp</dimen>
+</resources>

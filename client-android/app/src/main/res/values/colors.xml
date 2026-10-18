@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- T-352: the whole visual language of the connect screen and both settings panels. One accent, quiet greys. -->
+<resources>
+    <color name="mb_surface">#FF121212</color>
+    <color name="mb_outline">#FF3A3A42</color>
+    <color name="mb_pressed">#FF2A2A30</color>
+    <color name="mb_accent">#FF2E7DFF</color>
+    <color name="mb_accent_pressed">#FF1F5FCC</color>
+    <color name="mb_on_accent">#FFFFFFFF</color>
+    <color name="mb_text">#FFEDEDED</color>
+    <color name="mb_text_secondary">#FF8E8E96</color>
+    <color name="mb_disabled">#FF5A5A60</color>
+    <color name="mb_danger">#FFE5736B</color>
+    <color name="mb_focus">#FFFFFFFF</color>
+</resources>

@@ -1009,6 +1009,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     private fun setupSettingsPanels() {
         connectSettings = SettingsViews(this, findViewById(R.id.panel_settings), SettingsCatalog.sections(settingsHost, inStream = false)) { refreshSettings() }
+        findViewById<Button>(R.id.settings_toggle).setOnClickListener { // T-352: settings are collapsed on the connect screen
+            val box = findViewById<View>(R.id.panel_settings)
+            box.visibility = if (box.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+        }
         sidePanel = SettingsSidePanel(this) { via -> closeSettingsPanel(via) }
         sideSettings = SettingsViews(this, sidePanel.content, SettingsCatalog.sections(settingsHost, inStream = true)) { refreshSettings() }
         root.addView(sidePanel.layer, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
