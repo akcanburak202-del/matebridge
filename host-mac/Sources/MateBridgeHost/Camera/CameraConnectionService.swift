@@ -310,6 +310,7 @@ final class CameraConnectionService: @unchecked Sendable {
         epochBox.withLock { $0 = gate.epoch }
         connectionGeneration.withLock { $0 &+= 1 }
         store.withLock { $0.clear() }
+        retireDropped()
     }
 
     // MARK: - Frames (on queue)
@@ -325,6 +326,7 @@ final class CameraConnectionService: @unchecked Sendable {
             epochBox.withLock { $0 = gate.epoch }
             let work = ConfigWork(data: frame.data, generation: generation, decoder: decoder)
             if store.withLock({ $0.push(config: work) }) { scheduleDrain() }
+            retireDropped()
             return
         }
         switch gate.frame(keyframe: frame.isKeyframe, now: now) {
@@ -332,14 +334,22 @@ final class CameraConnectionService: @unchecked Sendable {
             let work = FrameWork(data: frame.data, captureTimeUs: frame.captureTimeUs, epoch: epoch,
                                  generation: generation, decoder: decoder)
             if store.withLock({ $0.push(frame: work) }) { scheduleDrain() }
+            retireDropped()
         case .dropAwaitingKeyframe:
             break
         case .overflow(let request):
             epochBox.withLock { $0 = gate.epoch }
             store.withLock { $0.clearFrames() }  // the gate voided them; free their data now
+            retireDropped()
             logger.log(.debug, "camera_frame_drop", sessionID: sessionID, generation: camID, fields: "reason=queue_full")
             if let request { sendKeyframeRequest(request) }
         }
+    }
+
+    /// Frames the store removed without decoding them no longer occupy gate capacity.
+    private func retireDropped() {
+        let n = store.withLock { $0.takeDropped() }
+        if n > 0 { gate.retire(n) }
     }
 
     private func scheduleDrain() {
@@ -355,7 +365,10 @@ final class CameraConnectionService: @unchecked Sendable {
                 guard generations.withLock({ $0 }) == c.generation else { continue }
                 _ = c.decoder.configure(annexB: c.data)
             case .frame(let f):
-                guard box.withLock({ $0 }) == f.epoch, generations.withLock({ $0 }) == f.generation else { continue }
+                guard box.withLock({ $0 }) == f.epoch, generations.withLock({ $0 }) == f.generation else {
+                    queue.async { [weak self] in self?.gate.retire(1) }  // void: never reaches the decoder
+                    continue
+                }
                 let epoch = f.epoch, generation = f.generation
                 f.decoder.decode(annexB: f.data, captureTimeUs: f.captureTimeUs) { [weak self] result in
                     out.async { self?.decoded(result, epoch: epoch, generation: generation) }
@@ -380,9 +393,13 @@ final class CameraConnectionService: @unchecked Sendable {
             queue.async { [weak self] in
                 guard let self, running else { return }
                 logger.log(.warning, "camera_decode_error", sessionID: sessionID, generation: camID, fields: "status=\(status)")
+                // The failed frame is done either way; only a failure of the live chain touches the store (T-357 r3).
+                gate.finished(epoch: epoch, decoded: false)
+                guard gate.isCurrent(epoch: epoch), connectionGeneration.withLock({ $0 }) == generation else { return }
                 let reason = gate.decodeFailed(epoch: epoch, now: HostClock.nowUs())
                 epochBox.withLock { $0 = gate.epoch }
                 store.withLock { $0.clearFrames() }
+                retireDropped()
                 if let reason { sendKeyframeRequest(reason) }
             }
         }
