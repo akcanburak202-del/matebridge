@@ -100,7 +100,7 @@ final class H264CameraDecoder: @unchecked Sendable {
                                           dataLength: avcc.count)
         }
         guard status == 0 else { return completion(.failed(status: status)) }
-        var timing = CMSampleTimingInfo(duration: .invalid, presentationTimeStamp: CMTime(value: CMTimeValue(captureTimeUs), timescale: 1_000_000),
+        var timing = CMSampleTimingInfo(duration: .invalid, presentationTimeStamp: CMTime(value: CMTimeValue(clamping: captureTimeUs), timescale: 1_000_000), // wire u64; never trap (Codex r7)
                                         decodeTimeStamp: .invalid)
         var size = avcc.count
         var sample: CMSampleBuffer?
