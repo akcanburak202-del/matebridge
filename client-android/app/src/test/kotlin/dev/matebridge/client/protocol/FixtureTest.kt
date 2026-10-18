@@ -279,4 +279,19 @@ class FixtureTest {
         assertTrue(a.isCodecConfig && !a.isKeyframe)
         assertTrue(b.isKeyframe && !b.isCodecConfig)
     }
+
+    /** T-357 (Codex P3): CAM_FRAME frame_size max is 4 194 284 = camera payload limit - 20 header bytes. */
+    @Test fun camFrameSizeBoundary() {
+        assertEquals(4_194_284, Limits.CAM_FRAME_MAX_BYTES)
+        val max = CamFrame(1, 2L, 0, Bytes(ByteArray(Limits.CAM_FRAME_MAX_BYTES)))
+        val payload = Codec.encodePayload(max)
+        assertEquals(Limits.CAMERA_MAX_PAYLOAD, payload.size)
+        assertEquals(max, Codec.decodePayload(MsgType.CAM_FRAME, payload))
+        try { Codec.encodePayload(CamFrame(1, 2L, 0, Bytes(ByteArray(Limits.CAM_FRAME_MAX_BYTES + 1)))); org.junit.Assert.fail() } catch (_: IllegalArgumentException) {}
+        val over = ByteArray(Limits.CAMERA_MAX_PAYLOAD + 1)
+        over[16] = 0xED.toByte(); over[17] = 0xFF.toByte(); over[18] = 0x3F; over[19] = 0x00 // u32 LE 4 194 285
+        try { Codec.decodePayload(MsgType.CAM_FRAME, over); org.junit.Assert.fail() } catch (e: ProtocolException) {
+            assertEquals(ProtocolException.Kind.INVALID_VALUE, e.kind)
+        }
+    }
 }

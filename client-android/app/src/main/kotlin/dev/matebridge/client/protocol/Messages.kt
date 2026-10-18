@@ -69,8 +69,11 @@ object Limits {
     const val EPH_PUB_BYTES = 65
     const val PROTOCOL_VERSION = 1
 
-    /** `CAM_FRAME.frame_size` upper bound (PROTOCOL.md 0x62). */
-    const val CAM_FRAME_MAX_BYTES = 4_194_280
+    /** Camera connection payload limit (PROTOCOL.md "Kamera bağlantısı"). */
+    const val CAMERA_MAX_PAYLOAD = 4_194_304
+
+    /** `CAM_FRAME.frame_size` upper bound (PROTOCOL.md 0x62): the payload limit minus the 20 fixed header bytes. */
+    const val CAM_FRAME_MAX_BYTES = CAMERA_MAX_PAYLOAD - 20
 
     /** Fixed part of a `CAM_FRAME` payload before `data`. */
     const val CAM_FRAME_HEADER_BYTES = 20
