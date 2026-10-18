@@ -46,6 +46,23 @@ private func drain(_ s: inout CameraDecodeStore<Int, String>) -> [String] {
         #expect(drain(&s) == ["c:b", "f:2"])
     }
 
+    @Test func removedFramesAreReportedOnceForTheGateToRetire() {
+        var s = CameraDecodeStore<Int, String>()
+        _ = s.push(frame: 1)
+        _ = s.push(frame: 2)
+        _ = s.push(frame: 3)  // evicts 1
+        #expect(s.takeDropped() == 1)
+        _ = s.push(config: "a")  // replaces 2 and 3
+        #expect(s.takeDropped() == 2)
+        _ = s.push(frame: 4)
+        s.clearFrames()
+        #expect(s.takeDropped() == 1)
+        #expect(s.takeDropped() == 0)
+        _ = s.pop()
+        _ = s.pop()  // popped items are not "dropped": the decoder owns them
+        #expect(s.takeDropped() == 0)
+    }
+
     @Test func clearFramesKeepsTheConfigClearDropsAll() {
         var s = CameraDecodeStore<Int, String>()
         _ = s.push(config: "a")

@@ -15,6 +15,7 @@ public struct CameraDecodeStore<Frame, Config> {
     private var config: Config?
     private var frames: [Frame] = []
     private var drainScheduled = false
+    private var dropped = 0
 
     public init(capacity: Int = CameraStreamGate.defaultMaxPending) { self.capacity = max(1, capacity) }
 
@@ -24,6 +25,7 @@ public struct CameraDecodeStore<Frame, Config> {
     /// Stores a config (newest wins) and drops waiting frames. Returns true when the caller must schedule a drain.
     public mutating func push(config newConfig: Config) -> Bool {
         config = newConfig
+        dropped += frames.count
         frames.removeAll()
         return scheduleIfNeeded()
     }
@@ -31,7 +33,10 @@ public struct CameraDecodeStore<Frame, Config> {
     /// Stores a frame. When `capacity` frames already wait the oldest goes (the gate normally prevents this).
     /// Returns true when the caller must schedule a drain.
     public mutating func push(frame: Frame) -> Bool {
-        if frames.count >= capacity { frames.removeFirst(frames.count - capacity + 1) }
+        if frames.count >= capacity {
+            dropped += frames.count - capacity + 1
+            frames.removeFirst(frames.count - capacity + 1)
+        }
         frames.append(frame)
         return scheduleIfNeeded()
     }
@@ -50,11 +55,21 @@ public struct CameraDecodeStore<Frame, Config> {
     /// Drops everything waiting (connection gone, overflow). A running drain just finds nothing.
     public mutating func clear() {
         config = nil
+        dropped += frames.count
         frames.removeAll()
     }
 
     /// Drops waiting frames only; a waiting config stays valid (overflow, decode error).
-    public mutating func clearFrames() { frames.removeAll() }
+    public mutating func clearFrames() {
+        dropped += frames.count
+        frames.removeAll()
+    }
+
+    /// Frames removed without being popped (replaced, evicted, cleared) since the last call: the owner retires them.
+    public mutating func takeDropped() -> Int {
+        defer { dropped = 0 }
+        return dropped
+    }
 
     private mutating func scheduleIfNeeded() -> Bool {
         guard !drainScheduled else { return false }

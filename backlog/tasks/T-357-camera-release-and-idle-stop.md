@@ -71,3 +71,9 @@ Karar 0040 ek 2 ve PROTOCOL.md (dal `task/T-356-camera-integration`, commit 2e41
 - P2-2: generation checked again right before the sink in `decoded`; `ObsVirtualCamera.writesEnabled` is false until `enableWrites()` (listener opened, or a camera connection became active) and false again after `stopSink()`.
 - P2-3: every store item carries its decoder and the connection generation; the drain no longer captures a decoder.
 - Boundary test: CamFrame.maxDataBytes == 4194284, max sealed ok, max+1 rejected. Tests: CameraDecodeStoreTests, gate tests. Full check.sh ALL OK, --camera-selftest passes. Single commit for all three (they share code).
+
+### Round 3 (Codex, branch task/T-357-host-r3)
+
+- P2-1: a decode failure now first finishes its own frame in the gate, then touches the store/gate only if its epoch is current and its connection generation matches; stale failures change nothing.
+- P2-2: `CameraStreamGate.pending` is now the real count of outstanding submissions across epochs (overflow, config, error, reset no longer zero it). Capacity frees only on `finished` (any epoch; only the current epoch counts as decoded) or `retire(n)` (frames the store dropped/replaced/evicted, frames the drain skips as void). A stalled VT therefore cannot admit more than 2. `CameraDecodeStore.takeDropped()` reports removals.
+- Residual: a new `open()` gets a fresh gate (count 0) while a late completion of the old run may decrement it (clamped at 0). Tests: gate and store tests updated/added; full check.sh ALL OK, camera-selftest passes. Host glue not unit tested.

@@ -41,9 +41,10 @@ public struct CameraStreamGate: Sendable {
     public init(maxPending: Int = defaultMaxPending) { self.maxPending = max(1, maxPending) }
 
     /// A new camera connection became active: nothing is decodable until `CODEC_CONFIG` + a keyframe arrive.
+    /// `pending` is NOT reset: it counts real outstanding submissions across epochs (T-357 r3), and frees only when the
+    /// owner reports each one done (`finished`) or cancelled (`retire`).
     public mutating func reset() {
         epoch &+= 1
-        pending = 0
         awaitingKeyframe = true
         lastRequestUs = nil
     }
@@ -57,7 +58,6 @@ public struct CameraStreamGate: Sendable {
     /// A new config means the next picture must be a keyframe, and frames queued before it are void (new epoch).
     public mutating func codecConfig() -> Decision {
         epoch &+= 1
-        pending = 0
         awaitingKeyframe = true
         return .submit(epoch: epoch)
     }
@@ -71,7 +71,6 @@ public struct CameraStreamGate: Sendable {
         }
         if pending >= maxPending {
             epoch &+= 1
-            pending = 0
             awaitingKeyframe = true
             counters.dropped += 1
             return .overflow(request: request(.framesDropped, now: now))
@@ -81,19 +80,26 @@ public struct CameraStreamGate: Sendable {
         return .submit(epoch: epoch)
     }
 
-    /// The decoder finished a submitted frame (output or error). Work of an older epoch was already voided.
+    /// The decoder finished a submitted frame (output or error), whatever its epoch: the capacity is free again.
+    /// Only a frame of the current epoch counts as decoded.
     public mutating func finished(epoch finishedEpoch: UInt64, decoded: Bool) {
-        guard finishedEpoch == epoch else { return }
         pending = max(0, pending - 1)
-        if decoded { counters.decoded += 1 }
+        if decoded, finishedEpoch == epoch { counters.decoded += 1 }
     }
+
+    /// `count` submitted frames will never reach the decoder (dropped from storage, skipped as void).
+    public mutating func retire(_ count: Int) {
+        pending = max(0, pending - max(0, count))
+    }
+
+    /// Whether work of `workEpoch` is still the live chain (not voided by an overflow, a config or an error).
+    public func isCurrent(epoch workEpoch: UInt64) -> Bool { workEpoch == epoch }
 
     /// The decoder failed on a frame of the current epoch: the reference chain is broken.
     public mutating func decodeFailed(epoch failedEpoch: UInt64, now: UInt64) -> CamKeyframeReason? {
         guard failedEpoch == epoch else { return nil }
         counters.decodeErrors += 1
         epoch &+= 1
-        pending = 0
         awaitingKeyframe = true
         return request(.decodeError, now: now)
     }
