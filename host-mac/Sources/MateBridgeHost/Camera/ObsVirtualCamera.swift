@@ -45,6 +45,14 @@ final class ObsVirtualCamera: @unchecked Sendable {
     private var enqueued = 0
     private var queueFull = 0
     private var pausedDrops = 0
+    /// IDs of the stream `CMIODeviceStartStream` was called for; `refresh()` may replace `deviceID`/`sinkID` later.
+    private var startedStream: (device: CMIOObjectID, sink: CMIOStreamID)?
+
+    // Staging between the camera coordinator and the CMIO queue: one frame, newest wins (own lock, any thread).
+    private let stagingLock = NSLock()
+    private var staged: (CameraPixelBuffer, @Sendable () -> Void)?
+    private var drainScheduled = false
+    private var stagingDrops = 0
 
     // MARK: - Watching
 
@@ -132,9 +140,13 @@ final class ObsVirtualCamera: @unchecked Sendable {
 
     /// Frames this process wrote, dropped for a full queue, and dropped while paused (since the last call).
     func takeSinkCounters() -> (written: Int, queueFull: Int, paused: Int) {
-        queue.sync {
+        let staged = stagingLock.withLock { () -> Int in
+            defer { stagingDrops = 0 }
+            return stagingDrops
+        }
+        return queue.sync {
             defer { enqueued = 0; queueFull = 0; pausedDrops = 0 }
-            return (enqueued, queueFull, pausedDrops)
+            return (enqueued, queueFull + staged, pausedDrops)
         }
     }
 
@@ -149,8 +161,33 @@ final class ObsVirtualCamera: @unchecked Sendable {
 
     /// Hands a decoded BGRA frame (already at the sink size) to the OBS extension. The first call starts the sink stream
     /// and runs `onStarted`. A frame is dropped (and counted) when paused or when the sink queue is full: nothing waits.
+    ///
+    /// Staging is bounded (T-357, Codex P2): at most one frame waits for the CMIO queue, and a newer frame replaces it (the
+    /// replaced one counts as `queue_full`), so a CMIO queue slower than the decoder cannot pile up retained buffers.
     func write(_ frame: CameraPixelBuffer, onStarted: @escaping @Sendable () -> Void) {
+        let schedule = stagingLock.withLock { () -> Bool in
+            if staged != nil { stagingDrops += 1 }
+            staged = (frame, onStarted)
+            let start = !drainScheduled
+            drainScheduled = true
+            return start
+        }
+        guard schedule else { return }
         queue.async { [self] in
+            while true {
+                let next = stagingLock.withLock { () -> (CameraPixelBuffer, @Sendable () -> Void)? in
+                    guard let item = staged else { drainScheduled = false; return nil }
+                    staged = nil
+                    return item
+                }
+                guard let (frame, onStarted) = next else { return }
+                writeLocked(frame, onStarted: onStarted)
+            }
+        }
+    }
+
+    private func writeLocked(_ frame: CameraPixelBuffer, onStarted: @Sendable () -> Void) {
+        do {
             let pixelBuffer = frame.value
             guard !sinkPaused else { pausedDrops += 1; return }
             if !sinkStarted {
@@ -217,15 +254,21 @@ final class ObsVirtualCamera: @unchecked Sendable {
             return false
         }
         sinkQueue = q
+        startedStream = (device, sink)
         sinkStarted = true
         logger.log(.info, "camera_cmio", sessionID: 0, generation: 0, fields: "state=sink_started")
         return true
     }
 
     private func stopSinkLocked() {
-        guard sinkStarted, let device = deviceID, let sink = sinkID else { return }
+        // The IDs of the stream that was started, not the current lookup: `refresh()` may have lost the device meanwhile.
+        // Local state is cleared whatever the stop returns, so the next start begins clean.
+        guard sinkStarted else { return }
+        let stream = startedStream
         sinkStarted = false
         sinkQueue = nil
+        startedStream = nil
+        guard let (device, sink) = stream else { return }
         let status = CMIODeviceStopStream(device, sink)
         logger.log(.info, "camera_cmio", sessionID: 0, generation: 0,
                    fields: "state=sink_stopped status=\(status) written=\(enqueued) queue_full=\(queueFull)")
