@@ -215,6 +215,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         handlers.streamBitrate = { kbps in tabletFiles.streamBitrateChanged(kbps: kbps) }  // Wi-Fi file budget (T-268)
         handlers.audioPrefs = { sid, prefs in audio.prefs(sessionID: sid, enabled: prefs.enabled, codec: prefs.codec) }
         handlers.networkProfileChanged = { [weak self] applied, pending in
+            camera.setUsbOnlyProfile(applied == .usbOnly)
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.showNetworkProfile(applied, pending) } }
         }
         handlers.settingsPanelAvailable = { [weak self] available in
@@ -242,6 +243,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         // Ask for the permission under MateBridge's own identity, once per launch (a no-op when already granted).
         if !SystemAccessibility().isTrusted() { SystemAccessibility.requestPrompt() }
         appliedProfile = networkProfile
+        camera.setUsbOnlyProfile(networkProfile == .usbOnly)
         let server = SessionServer(handlers: handlers, networkProfile: networkProfile,
                                    makeStreamConfig: { coordinator.streamConfig(for: $0) })
         self.server = server

@@ -41,6 +41,8 @@ public final class CameraBridge: @unchecked Sendable {
     private var tracker: CameraUsageTracker
     private var sessionID: UInt32 = 0
     private var usbSession = false
+    /// Network profile "Yalnız USB" (decision 0027): the camera listener binds IPv4 loopback only.
+    private var usbOnlyProfile = false
     private var manual = false
     private var lastPushedUsage: Bool?
     private var timer: DispatchSourceTimer?
@@ -83,13 +85,14 @@ public final class CameraBridge: @unchecked Sendable {
         queue.async { [self] in
             self.sessionID = sessionID
             usbSession = transport == .usb
-            if usbSession, capabilities.contains(.camera) {
-                // The camera port is not part of the `adb reverse` set: the tablet could not reach it (T-354 open question).
-                logger.log(.info, "camera", sessionID: sessionID, generation: 0, fields: "state=usb_not_supported")
-            }
             resetTracker()
             apply(controller.sessionStarted(clientHasCamera: capabilities.contains(.camera), now: HostClock.nowUs()))
         }
+    }
+
+    /// The server's applied network profile changed (`USB-only` binds the camera listener on loopback only).
+    public func setUsbOnlyProfile(_ on: Bool) {
+        queue.async { [self] in usbOnlyProfile = on }
     }
 
     /// The session ended (BYE, HOST_SLEEP, takeover, connection loss): nothing is sent, everything closes.
@@ -173,13 +176,20 @@ public final class CameraBridge: @unchecked Sendable {
             apply(controller.listenerFailed(now: HostClock.nowUs()))
             return
         }
-        let port = service.open(sessionID: sessionID, camID: camID, controlPeer: peer) { [weak link] sid, client, host in
+        // USB: only the fixed 47004 is reachable through `adb reverse`, so no fallback port there (T-359).
+        let port = service.open(sessionID: sessionID, camID: camID, controlPeer: peer, loopbackOnly: usbOnlyProfile,
+                                fixedPortOnly: usbSession) { [weak link] sid, client, host in
             link?.cameraKeys(sessionID: sid, clientNonce: client, hostNonce: host)
         }
         if let port {
             obs.enableWrites()
             apply(controller.listenerOpened(port: port, now: HostClock.nowUs()))
         } else {
+            if usbSession {
+                logger.log(.warning, "camera", sessionID: sessionID, generation: camID,
+                           fields: "state=unavailable reason=usb_port_busy")
+                link.sendToSession(sessionID: sessionID, .cameraControl(.unavailable))
+            }
             apply(controller.listenerFailed(now: HostClock.nowUs()))
         }
     }
@@ -187,8 +197,7 @@ public final class CameraBridge: @unchecked Sendable {
     /// The watcher's view of the virtual camera: device presence and `IsRunningSomewhere`.
     private func environment(_ env: ObsVirtualCamera.Environment) {
         guard controller.isWatching else { return }
-        // A USB session cannot reach the camera port: report the target as missing so the tablet shows UNAVAILABLE.
-        apply(controller.deviceAvailable(env.deviceAvailable && !usbSession, now: HostClock.nowUs()))
+        apply(controller.deviceAvailable(env.deviceAvailable, now: HostClock.nowUs()))
         handle(tracker.running(env.running, now: HostClock.nowUs()))
         pushUsage()
         reschedule()

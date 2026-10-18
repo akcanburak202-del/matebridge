@@ -17,7 +17,7 @@ final class CameraConnectionService: @unchecked Sendable {
     /// `CameraKeys` of a connection from the active session `sessionID` and the two nonces, nil when that session is gone.
     typealias KeyProvider = @Sendable (_ sessionID: UInt32, _ clientNonce: [UInt8], _ hostNonce: [UInt8]) -> CameraKeys?
 
-    static let preferredPort: UInt16 = 47004
+    static let preferredPort: UInt16 = DefaultPorts.camera
     /// The 10 s summary of the PROTOCOL / LOGGING contract.
     static let summaryTicks = 50  // 50 x 200 ms
     static let closeFlushSeconds: TimeInterval = 2
@@ -102,19 +102,27 @@ final class CameraConnectionService: @unchecked Sendable {
 
     /// Opens the listener for `camID` of the active session `sessionID` whose control connection came from `controlPeer`.
     /// Replaces a previous run. Returns the listener's port, nil when it could not be bound (nothing stays open).
-    func open(sessionID: UInt32, camID: UInt16, controlPeer: String, keys: @escaping KeyProvider) -> UInt16? {
+    /// `loopbackOnly`: listen on IPv4 loopback only (USB-only network profile, decision 0027). `fixedPortOnly`: no system-port
+    /// fallback (USB: `adb reverse` reaches 47004 only); a busy port returns nil.
+    func open(sessionID: UInt32, camID: UInt16, controlPeer: String, loopbackOnly: Bool = false, fixedPortOnly: Bool = false,
+              keys: @escaping KeyProvider) -> UInt16? {
         queue.sync {
             if running { stopLocked(reason: "restart") }
             let bound: FilesListener
             var fallback = false
             do {
-                bound = try FilesListener(port: Self.preferredPort, loopbackOnly: false, queue: queue) { [weak self] fd in
+                bound = try FilesListener(port: Self.preferredPort, loopbackOnly: loopbackOnly, queue: queue) { [weak self] fd in
                     if let self { accepted(fd) } else { Darwin.close(fd) }
                 }
             } catch {
+                if fixedPortOnly {
+                    logger.log(.warning, "camera_listen", sessionID: sessionID, generation: camID,
+                               fields: "state=failed reason=port_busy port=\(Self.preferredPort)")
+                    return nil
+                }
                 fallback = true
                 do {
-                    bound = try FilesListener(port: 0, loopbackOnly: false, queue: queue) { [weak self] fd in
+                    bound = try FilesListener(port: 0, loopbackOnly: loopbackOnly, queue: queue) { [weak self] fd in
                         if let self { accepted(fd) } else { Darwin.close(fd) }
                     }
                 } catch {

@@ -63,6 +63,20 @@ private func has(_ actions: [CameraAction], _ wanted: CameraAction) -> Bool { ac
         #expect(m.accepted(C(2), peer: "::ffff:192.168.1.20", now: 0).isEmpty)  // same host, mapped form
     }
 
+    @Test func usbSessionLoopbackPeerMatchesInEveryForm() {
+        // USB (T-359): the control connection and the camera connection both come from the adb reverse target.
+        for control in ["127.0.0.1", "::ffff:127.0.0.1"] {
+            for cam in ["127.0.0.1", "::ffff:127.0.0.1"] {
+                var m = CameraConnectionMachine()
+                _ = m.open(sessionID: 7, camID: 3, controlPeer: control)
+                #expect(m.accepted(C(1), peer: cam, now: 0).isEmpty)
+            }
+            var m = CameraConnectionMachine()
+            _ = m.open(sessionID: 7, camID: 3, controlPeer: control)
+            #expect(closes(m.accepted(C(2), peer: "192.168.1.20", now: 0)).map(\.1) == [.peerMismatch])
+        }
+    }
+
     @Test func atMostOneConnectionThatHasNotProvenItself() {
         var m = makeMachine()
         #expect(m.accepted(C(1), peer: peer, now: 0).isEmpty)

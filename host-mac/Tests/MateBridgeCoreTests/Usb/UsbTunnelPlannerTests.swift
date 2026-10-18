@@ -33,21 +33,21 @@ final class UsbTunnelPlannerTests: XCTestCase {
         var p = UsbTunnelPlanner()
         let d = p.decide(UsbSnapshot(adbFound: true, serverUp: true, devices: [ready], presentTunnels: [47001]))
         XCTAssertEqual(d.state, .down)
-        XCTAssertEqual(d.action, .installTunnels([47002]))
+        XCTAssertEqual(d.action, .installTunnels([47002, 47004]))
         let all = p.decide(UsbSnapshot(adbFound: true, serverUp: true, devices: [ready]))
-        XCTAssertEqual(all.action, .installTunnels([47001, 47002]))
+        XCTAssertEqual(all.action, .installTunnels([47001, 47002, 47004]))
     }
 
     func testAllTunnelsPresentIsUpWithNoAction() {
         var p = UsbTunnelPlanner()
-        let d = p.decide(UsbSnapshot(adbFound: true, serverUp: true, devices: [ready], presentTunnels: [47001, 47002, 9]))
+        let d = p.decide(UsbSnapshot(adbFound: true, serverUp: true, devices: [ready], presentTunnels: [47001, 47002, 47004, 9]))
         XCTAssertEqual(d.state, .up)
         XCTAssertNil(d.action)
     }
 
     func testStateChangeReportedOnlyOnTransition() {
         var p = UsbTunnelPlanner()
-        let up = UsbSnapshot(adbFound: true, serverUp: true, devices: [ready], presentTunnels: [47001, 47002])
+        let up = UsbSnapshot(adbFound: true, serverUp: true, devices: [ready], presentTunnels: [47001, 47002, 47004])
         XCTAssertEqual(p.decide(up).stateChange, .up)
         XCTAssertNil(p.decide(up).stateChange)
         XCTAssertEqual(p.decide(UsbSnapshot(adbFound: true, serverUp: true)).stateChange, .noDevice)  // cable pulled
@@ -105,7 +105,7 @@ final class UsbTunnelPlannerTests: XCTestCase {
         var p = UsbTunnelPlanner()
         p.usbEventsAvailable = true
         let up = UsbSnapshot(adbFound: true, serverUp: true, devices: [AdbDevice(serial: "ABC", state: "device")],
-                             presentTunnels: [DefaultPorts.control, DefaultPorts.video])
+                             presentTunnels: [DefaultPorts.control, DefaultPorts.video, DefaultPorts.camera])
         _ = p.decide(up)
         XCTAssertEqual(p.nextDelay, UsbTunnelPlanner.baseDelay)
     }
