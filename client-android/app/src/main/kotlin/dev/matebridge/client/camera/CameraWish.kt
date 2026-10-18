@@ -33,10 +33,22 @@ object CameraPrefsPolicy {
      * AUTO only when the user wants it AND the runtime permission is held AND the session is not remote (decision 0038:
      * the remote profile never uses the camera). Anything else is OFF; the facing is always the user's choice.
      */
-    fun wire(wish: CameraWish, permissionGranted: Boolean, remote: Boolean): CameraPrefs {
+    fun wire(wish: CameraWish, permissionGranted: Boolean, remote: Boolean, releaseSeq: Int = 0): CameraPrefs {
         val auto = wish.mode == CameraMode.AUTO && permissionGranted && !remote
-        return CameraPrefs(if (auto) CameraPrefs.MODE_AUTO else CameraPrefs.MODE_OFF, wish.facing.wire)
+        return CameraPrefs(if (auto) CameraPrefs.MODE_AUTO else CameraPrefs.MODE_OFF, wish.facing.wire, releaseSeq)
     }
+}
+
+/**
+ * The "Kamerayı şimdi kapat" counter (T-357, decision 0040 addendum 2). It only grows (u16, wraps) for the whole app run:
+ * the host takes the first value of a session as its baseline, so it never has to restart at 0. Thread-safe.
+ */
+class CameraReleaseCounter {
+    @Volatile var value: Int = 0
+        private set
+
+    /** One more tap; returns the new value. */
+    @Synchronized fun bump(): Int { value = (value + 1) and 0xFFFF; return value }
 }
 
 /** What the camera is doing right now, for the status line under the settings. */

@@ -82,6 +82,8 @@ class SettingsCatalogTest {
         override fun selectCameraMode(m: CameraMode) { calls += "camera ${m.id}"; cameraMode = m }
         override var cameraFacing = CameraFacing.FRONT
         override fun selectCameraFacing(f: CameraFacing) { calls += "camera_facing ${f.id}"; cameraFacing = f }
+        override var cameraStreaming = false
+        override fun releaseCamera() { calls += "camera_release" }
         override var cameraStatus = "Mac kamerayı kullanmıyor"
         override val cursorLocal get() = v["cursor"] ?: true
         override fun setCursorLocal(on: Boolean) { calls += "cursor $on"; v["cursor"] = on }
@@ -133,6 +135,25 @@ class SettingsCatalogTest {
         assertTrue(audio.text().startsWith("Ses (uzak oturum)"))
         h.remoteSession = false
         assertTrue(audio.text().startsWith("Ses:"))
+    }
+
+    /** T-357: "Kamerayı şimdi kapat" stays in the Kamera section, shows only while the camera streams. */
+    @Test fun cameraReleaseActionIsInlineAndOnlyVisibleWhileStreaming() {
+        h.cameraAvailable = true
+        val s = SettingsCatalog.sections(h, inStream = true)
+        val a = item(s, "camera_release") as SettingItem.Action
+        assertTrue(a.inline)
+        assertEquals("Kamerayı şimdi kapat", a.title)
+        assertTrue(s.first { it.title == "Kamera" }.items.contains(a))
+        assertTrue(a.hidden())
+        h.cameraStreaming = true
+        assertFalse(a.hidden())
+        h.remoteSession = true
+        assertTrue(a.hidden())
+        h.remoteSession = false
+        a.run()
+        assertEquals("camera_release", h.calls.last())
+        assertTrue((item(SettingsCatalog.sections(h, inStream = false), "camera_release") as SettingItem.Action).hidden())
     }
 
     /** T-355 (decision 0040): the "Kamera" section exists only on a device with a camera and is quiet in a remote session. */

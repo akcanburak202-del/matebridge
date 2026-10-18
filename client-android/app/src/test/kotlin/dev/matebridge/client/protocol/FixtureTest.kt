@@ -98,7 +98,7 @@ class FixtureTest {
             "files_hello_ack" to FilesHelloAck(FilesHelloAck.OK, Bytes(hex("808182838485868788898a8b8c8d8e8f"))),
             "files_hello_ack_rejected" to FilesHelloAck(FilesHelloAck.REJECTED, zeros16),
             "files_data" to FilesData(Bytes("OPTIONS / HTTP/1.1".toByteArray(Charsets.US_ASCII))),
-            "camera_prefs_auto" to CameraPrefs(CameraPrefs.MODE_AUTO, CameraPrefs.FACING_BACK),
+            "camera_prefs_auto" to CameraPrefs(CameraPrefs.MODE_AUTO, CameraPrefs.FACING_BACK, releaseSeq = 2),
             "camera_prefs_off" to CameraPrefs(CameraPrefs.MODE_OFF, CameraPrefs.FACING_FRONT),
             "camera_control_start" to CameraControl(CameraControl.STATE_START, 1, 47004, 1920, 1080, 30, 6000),
             "camera_control_stop" to CameraControl(CameraControl.STATE_STOP, 1, 0, 0, 0, 0, 0),

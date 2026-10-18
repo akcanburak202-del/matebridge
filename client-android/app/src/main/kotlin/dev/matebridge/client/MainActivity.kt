@@ -97,6 +97,7 @@ import dev.matebridge.client.camera.CameraFacing
 import dev.matebridge.client.camera.CameraMath
 import dev.matebridge.client.camera.CameraMode
 import dev.matebridge.client.camera.CameraPrefsPolicy
+import dev.matebridge.client.camera.CameraReleaseCounter
 import dev.matebridge.client.camera.CameraStatusText
 import dev.matebridge.client.camera.CameraUiState
 import dev.matebridge.client.camera.CameraWish
@@ -236,6 +237,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     // T-355 (decision 0040): the tablet camera as a Mac webcam. Null when the device has no camera or no H.264 encoder.
     private var cameraController: CameraController? = null
     private var cameraPermissionDenied = false
+    private val cameraRelease = CameraReleaseCounter() // T-357
     private var cursorStatsMs = 0L
     private lateinit var statsView: TextView
     private val ui = Handler(Looper.getMainLooper())
@@ -1164,6 +1166,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             applyCameraWish()
             refreshSettings()
         }
+        override val cameraStreaming get() = cameraController?.uiState == CameraUiState.ACTIVE // T-357
+        override fun releaseCamera() = releaseCameraNow()
         override val cameraStatus get() = cameraStatusText()
 
         override val cursorLocal get() = settings.cursorLocal()
@@ -1376,7 +1380,15 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     /** The CAMERA_PREFS the host should see: Otomatik only with the permission and outside a remote session. */
     private fun cameraPrefsNow() =
-        CameraPrefsPolicy.wire(cameraWish(), AndroidCameraRunFactory.hasPermission(this), remoteSession)
+        CameraPrefsPolicy.wire(cameraWish(), AndroidCameraRunFactory.hasPermission(this), remoteSession, cameraRelease.value)
+
+    /** T-357 (decision 0040 addendum 2): "Kamerayı şimdi kapat" bumps release_seq and sends CAMERA_PREFS at once. */
+    private fun releaseCameraNow() {
+        if (cameraController == null) return
+        cameraRelease.bump()
+        MbLog.i("camera_release_tap", "seq=${cameraRelease.value}", "camera")
+        controller.setCameraPrefs(cameraPrefsNow())
+    }
 
     /** The setting, the permission or the session kind changed: tell the camera state machine and the host. */
     private fun applyCameraWish() {
