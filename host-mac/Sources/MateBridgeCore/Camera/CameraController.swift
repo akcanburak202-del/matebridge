@@ -52,12 +52,18 @@ public struct CameraController: Sendable {
     private var unavailableReported = false
     /// The listener failed for the current usage: no retry until the usage ends or the prefs change.
     private var openFailed = false
+    /// `CAMERA_PREFS.release_seq` of the first prefs of the session (a baseline, not a change); nil before it.
+    private var releaseBaseline: UInt16?
+    /// The user released the camera ("Kamerayı şimdi kapat"): no START until the usage went to 0 and came back, or the
+    /// mode went OFF.
+    private var released = false
 
     public init(configuration: Configuration = Configuration()) { self.configuration = configuration }
 
     /// Everything the camera may be doing is derived from this.
     public var isEnabled: Bool { sessionActive && clientHasCamera && mode == .auto && !remote }
     public var isWatching: Bool { watching }
+    public var isReleased: Bool { released }
     public var isStarted: Bool { if case .started = run { true } else { false } }
     public var currentCamID: UInt16? {
         switch run {
@@ -94,7 +100,19 @@ public struct CameraController: Sendable {
         let before = mode
         mode = prefs.isAuto ? .auto : .off
         if mode != before { openFailed = false }
-        return reconcile(now: now)
+        var out: [Action] = []
+        let baseline = releaseBaseline
+        releaseBaseline = prefs.releaseSeq
+        if mode == .off {
+            released = false
+        } else if let baseline, baseline != prefs.releaseSeq, isEnabled {
+            // Only a camera that is being written is released; a tap with START not sent changes nothing.
+            if run != .idle {
+                released = true
+                out += stopRun(reason: "released")
+            }
+        }
+        return out + reconcile(now: now)
     }
 
     /// `STREAM_PREFS.link`: a remote session counts as OFF.
@@ -115,7 +133,9 @@ public struct CameraController: Sendable {
     /// An app uses (or no longer uses) the virtual camera.
     public mutating func usage(_ inUse: Bool, now: UInt64) -> [Action] {
         guard watching else { return [] }
+        let was = usageRaw
         usageRaw = inUse
+        if inUse, !was { released = false }  // 0 then 1 again: a new use, the normal rule applies
         if inUse {
             stopAt = nil
             usageFiltered = true
@@ -177,7 +197,7 @@ public struct CameraController: Sendable {
         }
         unavailableReported = false
         if usageFiltered {
-            if run == .idle, !openFailed {
+            if run == .idle, !openFailed, !released {
                 let camID = nextCamID
                 nextCamID = nextCamID == UInt16.max ? 1 : nextCamID + 1
                 run = .opening(camID: camID)
@@ -223,6 +243,7 @@ public struct CameraController: Sendable {
         usageFiltered = false
         stopAt = nil
         openFailed = false
+        released = false
         return out
     }
 
@@ -232,6 +253,7 @@ public struct CameraController: Sendable {
         mode = .off
         remote = false
         nextCamID = 1
+        releaseBaseline = nil
         unavailableReported = false
     }
 }

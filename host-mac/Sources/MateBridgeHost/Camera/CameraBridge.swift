@@ -1,3 +1,5 @@
+import AppKit
+import CoreGraphics
 import Dispatch
 import Foundation
 import MateBridgeCore
@@ -31,7 +33,7 @@ public final class CameraBridge: @unchecked Sendable {
     private let logger = SessionLogger(component: "camera")
     private let obs = ObsVirtualCamera()
     private let service = CameraConnectionService()
-    private let probeIntervalUs: UInt64
+    private let idleUs: UInt64
 
     // Everything below is confined to `queue`.
     private weak var link: (any CameraLink)?
@@ -42,16 +44,17 @@ public final class CameraBridge: @unchecked Sendable {
     private var manual = false
     private var lastPushedUsage: Bool?
     private var timer: DispatchSourceTimer?
+    private var audit: CameraIdleAudit
+    private var sleepObservers: [NSObjectProtocol] = []
     private var reportedMenu = MenuState(visible: false, manualOn: false)
 
     /// Called on the camera queue whenever the menu state changes.
     public var onMenuChange: (@Sendable (MenuState) -> Void)?
 
     public init() {
-        probeIntervalUs = CameraKnobs.probeIntervalUs(ProcessInfo.processInfo.environment[CameraKnobs.probeIntervalVariable])
-        var config = CameraUsageTracker.Configuration()
-        config.probeIntervalUs = probeIntervalUs
-        tracker = CameraUsageTracker(configuration: config)
+        idleUs = CameraKnobs.idleUs(ProcessInfo.processInfo.environment[CameraKnobs.idleVariable])
+        tracker = CameraUsageTracker()
+        audit = CameraIdleAudit(idleUs: idleUs)
         wire()
     }
 
@@ -144,14 +147,17 @@ public final class CameraBridge: @unchecked Sendable {
                 service.close()
                 obs.stopSink()
                 handle(tracker.sinkWriting(false, now: HostClock.nowUs()))
+                audit.reset()
             case .send(let control):
                 if sessionID != 0 { link?.sendToSession(sessionID: sessionID, .cameraControl(control)) }
             case .watchEnvironment(let on):
                 if on {
                     lastPushedUsage = nil
                     obs.startMonitoring(handlerQueue: queue) { [weak self] env in self?.environment(env) }
+                    observeSleep()
                 } else {
                     obs.stopMonitoring()
+                    stopObservingSleep()
                     lastPushedUsage = nil
                 }
             case .log(let level, let ev, let fields):
@@ -218,30 +224,66 @@ public final class CameraBridge: @unchecked Sendable {
         // No frames any more: stop writing so the raw property shows other clients only.
         obs.stopSink()
         handle(tracker.sinkWriting(false, now: HostClock.nowUs()))
+        audit.reset()
         pushUsage()
         reschedule()
     }
 
     private func resetTracker() {
         obs.stopSink()
-        var config = CameraUsageTracker.Configuration()
-        config.probeIntervalUs = probeIntervalUs
-        tracker = CameraUsageTracker(configuration: config)
+        tracker = CameraUsageTracker()
+        audit.reset()
         _ = tracker.setManual(manual, now: HostClock.nowUs())
         lastPushedUsage = nil
     }
 
     // MARK: - Time (on queue)
 
-    /// One one-shot timer for the earliest deadline of the controller (usage filter) and the tracker (probe). No deadline,
-    /// no timer: with the camera off nothing wakes up.
+    /// Seconds since the last user input of any kind on the Mac (combined session).
+    private func inputIdleUs() -> UInt64 {
+        let anyInput = CGEventType(rawValue: ~0)!
+        let seconds = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyInput)
+        return seconds.isFinite && seconds > 0 ? UInt64(seconds * 1_000_000) : 0
+    }
+
+    /// Sleep and display sleep are the moments to ask whether the camera is still used (only while the camera is on).
+    private func observeSleep() {
+        guard sleepObservers.isEmpty else { return }
+        let center = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.willSleepNotification, NSWorkspace.screensDidSleepNotification] {
+            sleepObservers.append(center.addObserver(forName: name, object: nil, queue: nil) { [weak self] _ in
+                guard let self else { return }
+                self.queue.async { self.macSleeping() }
+            })
+        }
+    }
+
+    private func stopObservingSleep() {
+        let center = NSWorkspace.shared.notificationCenter
+        for o in sleepObservers { center.removeObserver(o) }
+        sleepObservers = []
+    }
+
+    private func macSleeping() {
+        guard controller.isWatching else { return }
+        if audit.sleeping(now: HostClock.nowUs(), canProbe: tracker.canProbe) {
+            logger.log(.info, "camera", sessionID: sessionID, generation: controller.currentCamID ?? 0,
+                       fields: "state=probe reason=sleep")
+            handle(tracker.startProbe(now: HostClock.nowUs()))
+            reschedule()
+        }
+    }
+
+    /// One one-shot timer for the earliest deadline of the controller (usage filter), the tracker (probe settle) and the
+    /// idle audit. No deadline, no timer: with the camera off nothing wakes up.
     private func reschedule() {
         timer?.cancel()
         timer = nil
         guard controller.isWatching else { return }
-        let deadlines = [controller.nextDeadline, tracker.nextDeadline].compactMap { $0 }
-        guard let next = deadlines.min() else { return }
         let now = HostClock.nowUs()
+        let idleAt = audit.nextDeadline(now: now, canProbe: tracker.canProbe, inputIdleUs: inputIdleUs())
+        let deadlines = [controller.nextDeadline, tracker.nextDeadline, idleAt].compactMap { $0 }
+        guard let next = deadlines.min() else { return }
         let delay = next > now ? Int(min(next - now, 600_000_000)) : 0
         let t = DispatchSource.makeTimerSource(queue: queue)
         t.schedule(deadline: .now() + .microseconds(delay))
@@ -258,6 +300,11 @@ public final class CameraBridge: @unchecked Sendable {
             _ = tracker.running(obs.readRunning(), now: now)
         }
         handle(tracker.tick(now: now))
+        if controller.isWatching, audit.due(now: now, canProbe: tracker.canProbe, inputIdleUs: inputIdleUs()) {
+            logger.log(.info, "camera", sessionID: sessionID, generation: controller.currentCamID ?? 0,
+                       fields: "state=probe reason=idle")
+            handle(tracker.startProbe(now: now))
+        }
         pushUsage()
         apply(controller.tick(now: now))
     }

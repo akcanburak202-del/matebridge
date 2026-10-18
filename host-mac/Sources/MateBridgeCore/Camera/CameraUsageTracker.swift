@@ -7,9 +7,10 @@
 //
 // The tracker therefore works in two regimes:
 // - Not writing: usage is the raw property.
-// - Writing: usage is assumed to continue, and every `probeIntervalUs` the sink is paused for `settleUs` (the host
-//   stops the sink stream) and the raw property is read: still 1 means another client runs, resume writing; 0 means
-//   the app is gone, the sink stays stopped and the usage ends.
+// - Writing: usage is assumed to continue. The host asks for a probe (`startProbe`) only when it makes sense (the Mac
+//   was idle for a long time, or goes to sleep; `CameraIdleAudit`): the sink is paused (the host stops the sink stream)
+//   and the raw property is read. It falling to 0 ends the probe at once; still 1 after `settleUs` means another
+//   client runs, resume writing. 0 means the app is gone, the sink stays stopped and the usage ends.
 //
 // A manual override (menu item) holds usage on and disables the probes: the fallback if the probe cannot be used.
 // Pure and clock-free; the host feeds the raw property and the sink state and performs the returned actions.
@@ -23,10 +24,9 @@ public struct CameraUsageTracker: Sendable {
     }
 
     public struct Configuration: Sendable {
-        /// Between two probes while writing. A probe interrupts the picture for `settleUs`.
-        public var probeIntervalUs: UInt64 = 15_000_000
-        /// Sink stopped this long before the raw property is read.
-        public var settleUs: UInt64 = 600_000
+        /// Sink stopped at most this long before the raw property is read as "still used". The property falling ends the
+        /// wait early (it fell within ~5 ms in the T-354 loopback test; 0.6 s was the first, cautious value).
+        public var settleUs: UInt64 = 500_000
         public init() {}
     }
 
@@ -44,7 +44,6 @@ public struct CameraUsageTracker: Sendable {
     private var writing = false
     private var manual = false
     private var phase = Phase.normal
-    private var nextProbe: UInt64?
 
     public init(configuration: Configuration = Configuration()) { self.configuration = configuration }
 
@@ -58,6 +57,8 @@ public struct CameraUsageTracker: Sendable {
         }
     }
 
+    /// Whether a probe could start now: writing, not manual, no probe running or parked.
+    public var canProbe: Bool { writing && !manual && phase == .normal }
     public var isManual: Bool { manual }
     public var isProbing: Bool { if case .probing = phase { true } else { false } }
     public var isParked: Bool { phase == .parked }
@@ -67,7 +68,7 @@ public struct CameraUsageTracker: Sendable {
         switch phase {
         case .probing(let deadline): return deadline
         case .parked: return nil
-        case .normal: return manual ? nil : nextProbe
+        case .normal: return nil
         }
     }
 
@@ -76,8 +77,10 @@ public struct CameraUsageTracker: Sendable {
         raw = value
         if phase == .parked, value {  // an app is back before the filter ended: write again
             phase = .normal
-            nextProbe = writing ? now + configuration.probeIntervalUs : nil
             return writing ? [.resumeSink] : []
+        }
+        if case .probing = phase, !value {  // it fell because we stopped: nobody else reads
+            phase = .parked
         }
         return []
     }
@@ -87,8 +90,15 @@ public struct CameraUsageTracker: Sendable {
         guard writing != value else { return [] }
         writing = value
         phase = .normal
-        nextProbe = value ? now + configuration.probeIntervalUs : nil
         return []
+    }
+
+    /// Pause the sink and read the property after the settle time (or when it falls). Nothing when not writing, manual,
+    /// or a probe is already under way.
+    public mutating func startProbe(now: UInt64) -> [Action] {
+        guard canProbe else { return [] }
+        phase = .probing(deadline: now + configuration.settleUs)
+        return [.pauseSink]
     }
 
     /// The manual "camera is in use" override. Turning it on while parked resumes the sink.
@@ -98,38 +108,23 @@ public struct CameraUsageTracker: Sendable {
         if on {
             if phase == .parked, writing {
                 phase = .normal
-                nextProbe = nil
                 return [.resumeSink]
             }
             if case .probing = phase {
                 phase = .normal
-                nextProbe = nil
                 return [.resumeSink]
             }
-            return []
         }
-        if writing, phase == .normal { nextProbe = now + configuration.probeIntervalUs }
         return []
     }
 
     public mutating func tick(now: UInt64) -> [Action] {
-        switch phase {
-        case .probing(let deadline):
-            guard now >= deadline else { return [] }
-            if raw {
-                phase = .normal
-                nextProbe = now + configuration.probeIntervalUs
-                return [.resumeSink]
-            }
-            phase = .parked
-            return []
-        case .normal:
-            guard writing, !manual, let at = nextProbe, now >= at else { return [] }
-            phase = .probing(deadline: now + configuration.settleUs)
-            nextProbe = nil
-            return [.pauseSink]
-        case .parked:
-            return []
+        guard case .probing(let deadline) = phase, now >= deadline else { return [] }
+        if raw {
+            phase = .normal
+            return [.resumeSink]
         }
+        phase = .parked
+        return []
     }
 }

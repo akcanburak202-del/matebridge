@@ -64,6 +64,12 @@ final class CameraConnectionService: @unchecked Sendable {
 
     /// Newest-epoch readable from the decode and output queues without hopping onto `queue`.
     private let epochBox = OSAllocatedUnfairLock<UInt64>(initialState: 0)
+    /// Advances whenever the active connection changes or goes (T-357, Codex P2): work queued for an older connection,
+    /// such as a pending `CODEC_CONFIG`, is skipped. Not the gate's epoch: an overflow voids frames but a config stays valid.
+    private let connectionGeneration = OSAllocatedUnfairLock<UInt64>(initialState: 0)
+    /// At most one `CODEC_CONFIG` waits for the decode queue; a newer one replaces it.
+    private let configSlot = OSAllocatedUnfairLock<(data: [UInt8], generation: UInt64, scheduled: Bool)>(
+        initialState: (data: [], generation: 0, scheduled: false))
     private let scaler = CameraFrameScaler(width: ObsVirtualCamera.sinkWidth, height: ObsVirtualCamera.sinkHeight)
 
     /// Called on `queue`: a camera connection became the active one (true) or the active one ended (false).
@@ -107,6 +113,7 @@ final class CameraConnectionService: @unchecked Sendable {
             machine = CameraConnectionMachine()
             gate = CameraStreamGate()
             epochBox.withLock { $0 = gate.epoch }
+            connectionGeneration.withLock { $0 &+= 1 }
             decoder = H264CameraDecoder()
             activeID = nil
             running = true
@@ -148,8 +155,7 @@ final class CameraConnectionService: @unchecked Sendable {
             activeID = nil
             onActive?(false)
         }
-        gate.reset()  // voids queued decode work
-        epochBox.withLock { $0 = gate.epoch }
+        voidActiveWork()  // voids queued decode work
         let old = decoder
         decoder = nil
         decodeQueue.async { old?.invalidate() }
@@ -281,10 +287,16 @@ final class CameraConnectionService: @unchecked Sendable {
         run(machine.connectionClosed(id))
         if id == activeID {
             activeID = nil
-            gate.reset()
-            epochBox.withLock { $0 = gate.epoch }
+            voidActiveWork()
             onActive?(false)
         }
+    }
+
+    /// The active connection is gone or a new one starts: nothing queued for the old one may reach the decoder or the sink.
+    private func voidActiveWork() {
+        gate.reset()
+        epochBox.withLock { $0 = gate.epoch }
+        connectionGeneration.withLock { $0 &+= 1 }
     }
 
     // MARK: - Frames (on queue)
@@ -296,8 +308,27 @@ final class CameraConnectionService: @unchecked Sendable {
         let now = HostClock.nowUs()
         if frame.isCodecConfig {
             _ = gate.codecConfig()
-            let data = frame.data
-            decodeQueue.async { decoder.configure(annexB: data) }
+            let generation = connectionGeneration.withLock { $0 }
+            let schedule = configSlot.withLock { slot -> Bool in
+                slot.data = frame.data  // newest wins
+                slot.generation = generation
+                let start = !slot.scheduled
+                slot.scheduled = true
+                return start
+            }
+            guard schedule else { return }
+            let slot = configSlot, current = connectionGeneration
+            decodeQueue.async {
+                while true {
+                    let next = slot.withLock { s -> (data: [UInt8], generation: UInt64)? in
+                        if s.data.isEmpty { s.scheduled = false; return nil }
+                        defer { s.data = [] }
+                        return (s.data, s.generation)
+                    }
+                    guard let next else { return }
+                    if current.withLock({ $0 }) == next.generation { decoder.configure(annexB: next.data) }
+                }
+            }
             return
         }
         switch gate.frame(keyframe: frame.isKeyframe, now: now) {
@@ -374,6 +405,7 @@ final class CameraConnectionService: @unchecked Sendable {
                 closing[id] = conn
                 if id == activeID {
                     activeID = nil
+                    voidActiveWork()  // same as socketClosed: no pending frame may restart the sink afterwards
                     if !activatedInBatch { onActive?(false) }
                 }
                 if reason == .rejected {  // the REJECTED ACK still goes out first
@@ -383,8 +415,7 @@ final class CameraConnectionService: @unchecked Sendable {
                 }
             case .activated(let id):
                 activeID = id
-                gate.reset()
-                epochBox.withLock { $0 = gate.epoch }
+                voidActiveWork()
                 onActive?(true)
                 if let reason = gate.startupRequest(now: HostClock.nowUs()) { sendKeyframeRequest(reason) }
             case .frame:
