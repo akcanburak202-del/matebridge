@@ -74,6 +74,7 @@ class Camera2Pipeline(
     // Encoder thread / shared.
     @Volatile private var drain: Thread? = null
     @Volatile private var lastConfig: ByteArray? = null
+    @Volatile private var renderDone = false
 
     override fun start(facing: CameraFacing, width: Int, height: Int, fps: Int, bitrateKbps: Int, sink: CameraPipeline.Sink) {
         check(started.compareAndSet(false, true)) { "started twice" }
@@ -205,6 +206,7 @@ class Camera2Pipeline(
     /** A camera/session failure: a wide-angle one reopens the plain rear camera, anything else ends the stream. */
     private fun failOrFallback(reason: String) {
         if (fallBackToBack(reason) == null) return fail(reason)
+        openGen.next() // T-358 r3: the failed open's queued callbacks (onError after a thrown open) are stale from now on
         val h = handler ?: return
         h.post {
             if (stopRequested.get() || released) return@post
@@ -379,11 +381,6 @@ class Camera2Pipeline(
         released = true
         try {
             closeCameraOnly()
-            drain?.let { d ->
-                d.interrupt()
-                try { d.join(DRAIN_JOIN_MS) } catch (_: InterruptedException) {}
-            }
-            drain = null
             try { st?.setOnFrameAvailableListener(null) } catch (_: RuntimeException) {}
             try { camSurface?.release() } catch (_: RuntimeException) {}
             try { st?.release() } catch (_: RuntimeException) {}
@@ -393,6 +390,11 @@ class Camera2Pipeline(
             gl = null
             try { encSurface?.release() } catch (_: RuntimeException) {} // after the EGL surface on it is gone
             encSurface = null
+            // No more rendering: only now may the drain stop (T-358 r3: until here it keeps emptying the encoder, so a
+            // blocked eglSwapBuffers on this thread always gets free output buffers).
+            renderDone = true
+            drain?.let { d -> try { d.join(DRAIN_JOIN_MS) } catch (_: InterruptedException) {} }
+            drain = null
             codec?.let { c ->
                 try { c.stop() } catch (_: RuntimeException) {}
                 try { c.release() } catch (_: RuntimeException) {}
@@ -416,7 +418,12 @@ class Camera2Pipeline(
     private fun drainLoop(c: MediaCodec) {
         val info = MediaCodec.BufferInfo()
         try {
-            while (!stopRequested.get()) {
+            var stopSeenAt = 0L
+            while (!renderDone) {
+                if (stopRequested.get()) { // discard output until teardown has stopped rendering, but never wait forever
+                    val now = System.nanoTime() / 1_000_000
+                    if (stopSeenAt == 0L) stopSeenAt = now else if (now - stopSeenAt > DRAIN_STOP_MAX_MS) break
+                }
                 val idx = c.dequeueOutputBuffer(info, DEQUEUE_TIMEOUT_US)
                 when {
                     idx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
@@ -430,7 +437,7 @@ class Camera2Pipeline(
                     idx >= 0 -> {
                         try {
                             val buf = c.getOutputBuffer(idx)
-                            if (buf != null && info.size > 0) {
+                            if (buf != null && info.size > 0 && !stopRequested.get()) {
                                 buf.position(info.offset)
                                 buf.limit(info.offset + info.size)
                                 val bytes = ByteArray(info.size)
@@ -468,6 +475,7 @@ class Camera2Pipeline(
         const val I_FRAME_INTERVAL_S = 2
         const val DEQUEUE_TIMEOUT_US = 100_000L
         const val DRAIN_JOIN_MS = 500L
+        const val DRAIN_STOP_MAX_MS = 5_000L
         const val PREVIOUS_CLOSE_WAIT_MS = 2_000L
 
         /** The previous run's "everything released" latch (guarded by the companion): the next run waits for it. */
