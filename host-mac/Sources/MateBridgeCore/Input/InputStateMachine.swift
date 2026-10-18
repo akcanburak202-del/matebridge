@@ -213,7 +213,8 @@ public struct InputStateMachine: Sendable {
             out += handleKey(k, now: now)
         case .hello, .helloAck, .streamConfig, .streamPrefs, .clipboard, .displayRate, .settingsOpen, .filesInfo, .ping, .pong, .stats, .keyframeRequest,
              .audioPrefs, .audioConfig, .audioFrame, .videoHello, .videoFrame, .filesNet, .filesHello, .filesHelloAck,
-             .filesData, .cursorPrefs, .cursorShape, .cursorState:
+             .filesData, .cursorPrefs, .cursorShape, .cursorState, .cameraPrefs, .cameraControl, .camHello, .camHelloAck,
+             .camFrame, .camKeyframeRequest:
             break
         }
         return out

@@ -13,6 +13,8 @@ public enum Message: Equatable, Sendable {
     case cursorPrefs(CursorPrefs)
     case cursorShape(CursorShape)
     case cursorState(CursorState)
+    case cameraPrefs(CameraPrefs)
+    case cameraControl(CameraControl)
     case pen(PenBatch)
     case key(KeyEvent)
     case pointerRel(PointerRel)
@@ -34,6 +36,10 @@ public enum Message: Equatable, Sendable {
     case filesHello(FilesHello)
     case filesHelloAck(FilesHelloAck)
     case filesData(FilesData)
+    case camHello(CamHello)
+    case camHelloAck(CamHelloAck)
+    case camFrame(CamFrame)
+    case camKeyframeRequest(CamKeyframeReason)
 
     public var type: MessageType {
         switch self {
@@ -50,6 +56,8 @@ public enum Message: Equatable, Sendable {
         case .cursorPrefs: .cursorPrefs
         case .cursorShape: .cursorShape
         case .cursorState: .cursorState
+        case .cameraPrefs: .cameraPrefs
+        case .cameraControl: .cameraControl
         case .pen: .pen
         case .key: .key
         case .pointerRel: .pointerRel
@@ -70,6 +78,10 @@ public enum Message: Equatable, Sendable {
         case .filesHello: .filesHello
         case .filesHelloAck: .filesHelloAck
         case .filesData: .filesData
+        case .camHello: .camHello
+        case .camHelloAck: .camHelloAck
+        case .camFrame: .camFrame
+        case .camKeyframeRequest: .camKeyframeRequest
         }
     }
 
@@ -90,6 +102,8 @@ public enum Message: Equatable, Sendable {
         case .cursorPrefs(let m): m.write(&w)
         case .cursorShape(let m): m.write(&w)
         case .cursorState(let m): m.write(&w)
+        case .cameraPrefs(let m): m.write(&w)
+        case .cameraControl(let m): m.write(&w)
         case .pen(let m): m.write(&w)
         case .key(let m): m.write(&w)
         case .pointerRel(let m): m.write(&w)
@@ -112,6 +126,10 @@ public enum Message: Equatable, Sendable {
         case .filesHello(let m): m.write(&w)
         case .filesHelloAck(let m): m.write(&w)
         case .filesData(let m): m.write(&w)
+        case .camHello(let m): m.write(&w)
+        case .camHelloAck(let m): m.write(&w)
+        case .camFrame(let m): m.write(&w)
+        case .camKeyframeRequest(let r): w.u8(r.rawValue)
         }
         return w.bytes
     }
@@ -121,6 +139,7 @@ public enum Message: Equatable, Sendable {
         switch self {
         case .videoHello, .videoFrame: .video
         case .filesHello, .filesHelloAck, .filesData: .files
+        case .camHello, .camHelloAck, .camFrame, .camKeyframeRequest: .camera
         default: .control
         }
     }
@@ -129,7 +148,8 @@ public enum Message: Equatable, Sendable {
     /// Throws instead of producing a frame the peer would reject: payload over the connection limit,
     /// PEN count outside 1...64, AUDIO_FRAME frame_count outside 1...960 or data over 65535 bytes,
     /// a VIDEO_FRAME that is not a single whole fragment, or a FILES_DATA with 0 or more than 65 534 bytes,
-    /// or a CURSOR_SHAPE with 0 or more than 61 440 bytes of image.
+    /// a CURSOR_SHAPE with 0 or more than 61 440 bytes of image,
+    /// or a CAM_FRAME with 0 or more than 4 194 280 bytes.
     public func encode() throws -> [UInt8] {
         let payload = try checkedPayload()
         var w = ByteWriter()
@@ -163,6 +183,10 @@ public enum Message: Equatable, Sendable {
         case .filesData(let m):
             guard (1...ProtocolConstants.filesDataMax).contains(m.data.count) else {
                 throw ProtocolError.invalidField("size")
+            }
+        case .camFrame(let m):
+            guard (1...CamFrame.maxDataBytes).contains(m.data.count) else {
+                throw ProtocolError.invalidField("frame_size")
             }
         case .cursorShape(let m):
             guard (1...CursorShape.maxDataBytes).contains(m.data.count) else {
@@ -200,6 +224,8 @@ public enum Message: Equatable, Sendable {
         case .cursorPrefs: return .cursorPrefs(try CursorPrefs.read(&r))
         case .cursorShape: return .cursorShape(try CursorShape.read(&r))
         case .cursorState: return .cursorState(try CursorState.read(&r))
+        case .cameraPrefs: return .cameraPrefs(try CameraPrefs.read(&r))
+        case .cameraControl: return .cameraControl(try CameraControl.read(&r))
         case .pen: return .pen(try PenBatch.read(&r))
         case .key: return .key(try KeyEvent.read(&r))
         case .pointerRel: return .pointerRel(try PointerRel.read(&r))
@@ -223,6 +249,10 @@ public enum Message: Equatable, Sendable {
         case .filesHello: return .filesHello(try FilesHello.read(&r))
         case .filesHelloAck: return .filesHelloAck(try FilesHelloAck.read(&r))
         case .filesData: return .filesData(try FilesData.read(&r))
+        case .camHello: return .camHello(try CamHello.read(&r))
+        case .camHelloAck: return .camHelloAck(try CamHelloAck.read(&r))
+        case .camFrame: return .camFrame(try CamFrame.read(&r))
+        case .camKeyframeRequest: return .camKeyframeRequest(CamKeyframeReason(rawValue: try r.u8()))
         }
     }
 }

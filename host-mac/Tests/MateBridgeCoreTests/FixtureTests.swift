@@ -89,6 +89,19 @@ private let validFixtures: [String: Message] = [
     "files_hello_ack": .filesHelloAck(FilesHelloAck(status: .ok, hostNonce: Array(0x80...0x8f))),
     "files_hello_ack_rejected": .filesHelloAck(.rejected),
     "files_data": .filesData(FilesData(data: Array("OPTIONS / HTTP/1.1".utf8))),
+    "camera_prefs_auto": .cameraPrefs(CameraPrefs(mode: .auto, facing: .back)),
+    "camera_prefs_off": .cameraPrefs(CameraPrefs(mode: .off, facing: .front)),
+    "camera_control_start": .cameraControl(.start(camID: 1, port: 47004)),
+    "camera_control_stop": .cameraControl(.stop(camID: 1)),
+    "camera_control_unavailable": .cameraControl(.unavailable),
+    "cam_hello": .camHello(CamHello(sessionID: 2_712_847_316, camID: 1, clientNonce: Array(0x90...0x9f))),
+    "cam_hello_ack": .camHelloAck(CamHelloAck(status: .ok, hostNonce: Array(0xa0...0xaf))),
+    "cam_hello_ack_rejected": .camHelloAck(.rejected),
+    "cam_frame": .camFrame(CamFrame(frameSeq: 1, captureTimeUs: 51_234_000_000, flags: .keyframe,
+                                    data: [0, 0, 0, 1, 0x65, 0x88, 0x84, 0x00])),
+    "cam_frame_config": .camFrame(CamFrame(frameSeq: 0, captureTimeUs: 51_233_990_000, flags: .codecConfig,
+                                           data: [0, 0, 0, 1, 0x67, 0x64, 0x00, 0x28, 0, 0, 0, 1, 0x68, 0xee, 0x3c, 0xb0])),
+    "cam_keyframe_request": .camKeyframeRequest(.decodeError),
     "clipboard_text": .clipboard(Clipboard.text(seq: 3, "Merhaba ğüşıöç — kopyala")),
     "clipboard_empty": .clipboard(Clipboard.empty(seq: 4)),
     "pen_hover_to_contact": .pen(PenBatch(tool: .pen, baseTimeUs: 1_127_411_618_000, samples: [
@@ -163,6 +176,8 @@ private let invalidFixtures: [String: ProtocolError] = [
     "invalid_cursor_state_ack_partial": .payloadTooShort(type: 0x0d),
     "invalid_files_hello_short": .payloadTooShort(type: 0x50),
     "invalid_files_data_empty": .invalidField("size"),
+    "invalid_cam_hello_short": .payloadTooShort(type: 0x60),
+    "invalid_cam_frame_short": .payloadTooShort(type: 0x62),
     "invalid_str8_utf8": .invalidField("str8 utf8"),
 ]
 
@@ -194,7 +209,7 @@ private func connection(for message: Message) -> FrameDecoder.Connection { messa
 
     @Test(arguments: invalidFixtures.keys.sorted())
     func invalidFixturesAreRejected(name: String) {
-        var decoder = FrameDecoder(connection: name.hasPrefix("invalid_files_") ? .files : .control)
+        var decoder = FrameDecoder(connection: name.hasPrefix("invalid_files_") ? .files : (name.hasPrefix("invalid_cam_") ? .camera : .control))
         decoder.append(Fixtures.bytes(name))
         #expect(throws: invalidFixtures[name]!) { try decoder.nextMessage() }
         // The decoder stays failed.
