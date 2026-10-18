@@ -384,9 +384,10 @@ data class FilesData(val data: Bytes) : Message {
 
 /**
  * The tablet camera wish (C to H, PROTOCOL.md 0x0E, decision 0040): [mode] 0 OFF / 1 AUTO, [facing] 0 FRONT / 1 BACK.
- * Unknown values decode as OFF / FRONT.
+ * Unknown values decode as OFF / FRONT. [releaseSeq] (u16, T-357) counts the user's "Kamerayı şimdi kapat" taps; a change
+ * while the camera streams makes the host stop it and not restart it until the apps' use ends.
  */
-data class CameraPrefs(val mode: Int, val facing: Int) : Message {
+data class CameraPrefs(val mode: Int, val facing: Int, val releaseSeq: Int = 0) : Message {
     override val type get() = MsgType.CAMERA_PREFS
 
     val auto: Boolean get() = mode == MODE_AUTO

@@ -221,7 +221,7 @@ object Codec {
                 require(msg.data.size in 1..FilesData.MAX_DATA_BYTES) { "FILES_DATA size must be 1..${FilesData.MAX_DATA_BYTES}" }
                 w.u16(msg.data.size); w.bytes(msg.data.value)
             }
-            is CameraPrefs -> { w.u8(msg.mode); w.u8(msg.facing); w.u16(0) }
+            is CameraPrefs -> { w.u8(msg.mode); w.u8(msg.facing); w.u16(msg.releaseSeq and 0xFFFF) }
             is CameraControl -> {
                 w.u8(msg.state); w.u16(msg.camId); w.u16(msg.port); w.u16(msg.width); w.u16(msg.height)
                 w.u8(msg.fps); w.u8(0); w.u32(msg.bitrateKbps)
@@ -410,10 +410,11 @@ object Codec {
                 FilesData(Bytes(r.bytes(size))) // shorter than size: SHORT_PAYLOAD from the reader; trailing bytes ignored
             }
             MsgType.CAMERA_PREFS -> {
-                val mode = r.u8(); val facing = r.u8(); r.skip(2)
+                val mode = r.u8(); val facing = r.u8(); val releaseSeq = r.u16()
                 CameraPrefs(
                     if (mode == CameraPrefs.MODE_AUTO) CameraPrefs.MODE_AUTO else CameraPrefs.MODE_OFF, // unknown mode = OFF
                     if (facing == CameraPrefs.FACING_BACK) CameraPrefs.FACING_BACK else CameraPrefs.FACING_FRONT, // unknown facing = FRONT
+                    releaseSeq,
                 )
             }
             MsgType.CAMERA_CONTROL -> {

@@ -311,4 +311,43 @@ class CameraStreamerTest {
     }
 
     private fun cameraThreads() = Thread.getAllStackTraces().keys.filter { it.isAlive && it.name.startsWith("mb-cam") }
+
+    private fun bareStreamer(pipe: CameraPipeline) = CameraStreamer(
+        CameraPlan(1, 1, 640, 480, 30, 1000), CameraSessionCtx(1, "127.0.0.1", 1L, secrets), CameraFacing.FRONT, pipe, { _, _ -> },
+        statsIntervalMs = 3_600_000L,
+    )
+
+    /** T-357 (Codex P2): a stream closed before start() finishes allocates no scheduler and no pipeline. */
+    @Test fun startAfterCloseCreatesNothing() {
+        val pipe = FakePipeline().also { it.config = config }
+        val st = bareStreamer(pipe)
+        st.close("early_giveup")
+        st.start()
+        assertEquals(0, pipe.starts.get())
+        assertEquals(1, pipe.stops.get()) // close() still stopped the (never started) pipeline once; stop is idempotent there
+    }
+
+    /** T-357 (Codex P2): a close that arrives while pipeline.start() runs waits and then stops that pipeline. */
+    @Test fun closeDuringStartStopsThePipelineAfterwards() {
+        val inStart = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val order = CopyOnWriteArrayList<String>()
+        val pipe = object : CameraPipeline {
+            override fun start(facing: CameraFacing, width: Int, height: Int, fps: Int, bitrateKbps: Int, sink: CameraPipeline.Sink) {
+                inStart.countDown(); release.await(5, TimeUnit.SECONDS); order += "start"
+            }
+            override fun switchFacing(facing: CameraFacing) {}
+            override fun requestKeyframe() {}
+            override fun stop() { order += "stop" }
+        }
+        val st = bareStreamer(pipe)
+        val starter = Thread { st.start() }.also { it.start() }
+        assertTrue(inStart.await(5, TimeUnit.SECONDS))
+        val closer = Thread { st.close("giveup") }.also { it.start() }
+        Thread.sleep(100)
+        assertEquals(emptyList<String>(), order) // close is parked behind the startup
+        release.countDown()
+        starter.join(5_000); closer.join(5_000)
+        assertEquals(listOf("start", "stop"), order)
+    }
 }

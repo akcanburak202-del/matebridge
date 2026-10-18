@@ -125,4 +125,21 @@ class CameraMathTest {
         assertEquals("Kamera açık", t(CameraMode.AUTO, true, false, CameraUiState.ACTIVE))
         assertEquals("Mac'te OBS sanal kamera yok", t(CameraMode.AUTO, true, false, CameraUiState.UNAVAILABLE))
     }
+
+    @Test fun releaseCounterGrowsFromZeroAndWrapsAtU16() {
+        val c = CameraReleaseCounter()
+        assertEquals(0, c.value)
+        assertEquals(1, c.bump())
+        assertEquals(2, c.bump())
+        assertEquals(2, c.value)
+        repeat(0xFFFF - 2) { c.bump() }
+        assertEquals(0xFFFF, c.value)
+        assertEquals(0, c.bump())
+    }
+
+    @Test fun policyCarriesTheReleaseSeqEvenWhenOff() {
+        val auto = CameraWish(CameraMode.AUTO, CameraFacing.BACK)
+        assertEquals(CameraPrefs(CameraPrefs.MODE_AUTO, CameraPrefs.FACING_BACK, 3), CameraPrefsPolicy.wire(auto, true, false, 3))
+        assertEquals(CameraPrefs(CameraPrefs.MODE_OFF, CameraPrefs.FACING_BACK, 3), CameraPrefsPolicy.wire(auto, true, true, 3))
+    }
 }

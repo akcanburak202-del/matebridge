@@ -44,7 +44,7 @@ class SettingsViews(
             container.addView(header(s.title), rowParams(top = 32, bottom = 8))
             for (item in s.items) {
                 when {
-                    item is SettingItem.Action -> actions += item
+                    item is SettingItem.Action && !item.inline -> actions += item
                     item is SettingItem.Info && item.key == "reset_hint" -> resetHint = item // sits under "Varsayılanlara dön"
                     else -> container.addView(build(item, s.title), rowParams(top = if (item is SettingItem.Info) 4 else 8))
                 }
@@ -233,6 +233,7 @@ class SettingsViews(
             minHeight = dp(CONTROL_DP)
             setOnClickListener { item.run(); onChanged() }
             styleFocusable(this)
+            if (item.inline) refreshers += { visibility = if (item.hidden()) View.GONE else View.VISIBLE } // T-357: e.g. only while the camera streams
         }
 
     private fun styleFocusable(v: View) {

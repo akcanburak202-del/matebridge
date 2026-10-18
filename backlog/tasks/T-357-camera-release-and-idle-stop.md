@@ -1,7 +1,7 @@
 ---
 id: T-357
 title: Kamera — "Kamerayı şimdi kapat" (release_seq) ve boşta kullanım denetimi (karar 0040 ek 2, politika C)
-status: todo
+status: review
 phase: 7
 owner: mac-host-dev + android-client-dev
 depends_on: [T-354, T-355]
@@ -43,6 +43,15 @@ Karar 0040 ek 2 ve PROTOCOL.md (dal `task/T-356-camera-integration`, commit 2e41
 ## Plan
 
 ## Handoff
+
+## Handoff (client)
+
+- Commits: 60669dc4 (release_seq + eylem), d94269d0 (CameraStreamer startup/close serialization, Codex P2). Son: d94269d0.
+- Dosyalar: protocol Messages/Codec (CameraPrefs.releaseSeq u16), camera/CameraWish.kt (CameraReleaseCounter, Policy.wire releaseSeq), settings/SettingsCatalog+SettingsViews (Action.inline/hidden, `camera_release`), MainActivity (sayac, releaseCameraNow, cameraStreaming = uiState ACTIVE), CameraStreamer (startLock + closed kontrolu; close() pipeline/scheduler'i startLock altinda durdurur), testler.
+- Varsayim: sayac uygulama calismasi boyunca artar (oturum basinda 0'a donmez): SessionMachine son CAMERA_PREFS'i oturumlar arasi hatirliyor, sifirlama host taban degeriyle cakisabilirdi; host ilk degeri taban sayar, bu yeterli. u16 sarar.
+- Eylem yalniz inStream && kamera ACTIVE && uzak oturum degil iken gorunur; panel yenilenmesi mevcut refresh/onChanged ile (durum degisince otomatik yenilenmiyorsa panel yeniden acilinca gorunur).
+- check.sh --only android: OK.
+- Tablette bak: kamera akarken Kamera bolumunde "Kamerayi simdi kapat" gorunuyor mu (bolumde, altta degil); basinca Mac kamerayi kapatiyor ve uygulama kullanmaya devam etse de yeniden acmiyor mu; kamera akmazken eylem gizli mi.
 
 ## Open questions
 
