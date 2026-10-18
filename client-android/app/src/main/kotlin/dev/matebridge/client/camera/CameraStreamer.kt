@@ -90,6 +90,7 @@ class CameraStreamer(
     private val closed = AtomicBoolean(false)
     private val watchdog = WriteWatchdog(writeTimeoutMs)
     private val lock = Object()
+    private val startLock = Any()
     @Volatile private var current: CameraConnection? = null
     private var scheduler: ScheduledExecutorService? = null
 
@@ -127,10 +128,15 @@ class CameraStreamer(
         log(false, "camera", "state=start reason=control cam_id=${plan.camId} size=${plan.width}x${plan.height} fps=${plan.fps} facing=${facing.id}")
         startThread("mb-cam-watchdog") { watchdog.runLoop() }
         startThread("mb-cam-link") { linkLoop() }
-        val sched = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "mb-cam-stats").also { it.isDaemon = true } }
-        scheduler = sched
-        sched.scheduleWithFixedDelay({ statsLine() }, statsIntervalMs, statsIntervalMs, TimeUnit.MILLISECONDS)
-        pipeline.start(facing, plan.width, plan.height, plan.fps, plan.bitrateKbps.coerceIn(100, Int.MAX_VALUE.toLong()).toInt(), sink)
+        // T-357: startup is serialized with [close]. The link thread may already have given up (and closed us) by now;
+        // then nothing below may be allocated. A close that comes while we allocate waits here and tears it all down.
+        synchronized(startLock) {
+            if (closed.get()) return this
+            val sched = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "mb-cam-stats").also { it.isDaemon = true } }
+            scheduler = sched
+            sched.scheduleWithFixedDelay({ statsLine() }, statsIntervalMs, statsIntervalMs, TimeUnit.MILLISECONDS)
+            pipeline.start(facing, plan.width, plan.height, plan.fps, plan.bitrateKbps.coerceIn(100, Int.MAX_VALUE.toLong()).toInt(), sink)
+        }
         return this
     }
 
@@ -195,9 +201,11 @@ class CameraStreamer(
         log(false, "camera", "state=stop reason=$reason cam_id=${plan.camId}")
         current?.close()
         queue.close()
-        try { pipeline.stop() } catch (_: RuntimeException) {}
         watchdog.stop()
-        try { scheduler?.shutdownNow() } catch (_: RuntimeException) {}
+        synchronized(startLock) { // waits for a [start] still allocating, then stops what it created (or nothing)
+            try { pipeline.stop() } catch (_: RuntimeException) {}
+            try { scheduler?.shutdownNow() } catch (_: RuntimeException) {}
+        }
         synchronized(lock) { lock.notifyAll() }
     }
 
