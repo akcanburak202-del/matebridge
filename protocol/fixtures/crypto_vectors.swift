@@ -24,6 +24,9 @@ let videoNonce = bytes("0f0e0d0c0b0a09080706050403020100")
 // File connection nonces (decision 0035), the same values as files_hello.hex / files_hello_ack.hex.
 let clientFilesNonce = bytes("707172737475767778797a7b7c7d7e7f")
 let hostFilesNonce = bytes("808182838485868788898a8b8c8d8e8f")
+// Camera connection nonces (decision 0040), the same values as cam_hello.hex / cam_hello_ack.hex.
+let clientCamNonce = bytes("909192939495969798999a9b9c9d9e9f")
+let hostCamNonce = bytes("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf")
 // Transcript: the HELLO payload and the first HELLO_ACK payload exactly as on the wire (payload only, no frame header),
 // read from the golden fixtures: hello.hex with hello_ack.hex (PAIRED) or hello_ack_pending.hex (PAIRING).
 let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
@@ -68,6 +71,8 @@ func schedule(paired: Bool) -> [String: String] {
         "key_video_h2c": hex(expand(prk, "MB1 video h2c", videoNonce, 32)),
         "key_files_c2h": hex(expand(prk, "MB1 files c2h", clientFilesNonce + hostFilesNonce, 32)),
         "key_files_h2c": hex(expand(prk, "MB1 files h2c", clientFilesNonce + hostFilesNonce, 32)),
+        "key_camera_c2h": hex(expand(prk, "MB1 camera c2h", clientCamNonce + hostCamNonce, 32)),
+        "key_camera_h2c": hex(expand(prk, "MB1 camera h2c", clientCamNonce + hostCamNonce, 32)),
     ]
     if !paired {
         let sasBytes = expand(prk, "MB1 sas", Data(), 4)
@@ -98,6 +103,7 @@ let out: [String: Any] = [
         "host_eph_priv": hex(hostPriv.rawRepresentation), "host_eph_pub": hex(hostPub),
         "pair_key": hex(pairKey), "video_nonce": hex(videoNonce),
         "client_files_nonce": hex(clientFilesNonce), "host_files_nonce": hex(hostFilesNonce),
+        "client_cam_nonce": hex(clientCamNonce), "host_cam_nonce": hex(hostCamNonce),
         "hello_payload": hex(helloPayload), "hello_ack_paired_payload": hex(ackPaired),
         "hello_ack_pairing_payload": hex(ackPairing),
     ],
@@ -116,6 +122,9 @@ let out: [String: Any] = [
         seal(key: paired["key_files_c2h"]!, counter: 0, type: 0x20, payload: le32(1) + le64(1_127_500_100_000)),
         seal(key: paired["key_files_h2c"]!, counter: 0, type: 0x52, payload: Data([18, 0]) + Data("OPTIONS / HTTP/1.1".utf8)),
         seal(key: paired["key_files_c2h"]!, counter: 1, type: 0x52, payload: Data([15, 0]) + Data("HTTP/1.1 200 OK".utf8)),
+        // Camera connection (decision 0040): proof PING c2h counter 0, CAM_KEYFRAME_REQUEST (0x63) h2c counter 0.
+        seal(key: paired["key_camera_c2h"]!, counter: 0, type: 0x20, payload: le32(1) + le64(1_127_500_200_000)),
+        seal(key: paired["key_camera_h2c"]!, counter: 0, type: 0x63, payload: Data([2])),
     ],
 ]
 let json = try! JSONSerialization.data(withJSONObject: out, options: [.prettyPrinted, .sortedKeys])

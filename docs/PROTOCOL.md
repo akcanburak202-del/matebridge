@@ -25,11 +25,12 @@ Bu dosya Swift ve Kotlin tarafının tek ortak sözleşmesidir. Tasarım Aşama 
 |---|---|---|---|
 | **Kontrol + girdi** | Bonjour ile bulunur (§3) | `TCP_NODELAY` her iki uçta | Oturum, girdi, heartbeat, istatistik. Sıralı ve kayıpsız. |
 | **Video** | `HELLO_ACK.video_port` | `TCP_NODELAY` | Yalnızca `VIDEO_HELLO` (C→H) ve `VIDEO_FRAME` (H→C). |
+| **Kamera** (0..1 adet, karar 0040) | `CAMERA_CONTROL.port` | `TCP_NODELAY` | Yalnızca `CAM_HELLO` (C→H), `CAM_HELLO_ACK` (H→C), `PING` (C→H, kanıt) , `CAM_FRAME` (C→H) ve `CAM_KEYFRAME_REQUEST` (H→C). §4 "Kamera bağlantısı". |
 | **Dosya** (0..n adet, yalnız Wi-Fi) | `FILES_NET.port` | `TCP_NODELAY`, düşük öncelik (host `NET_SERVICE_TYPE_BK`, istemci `trafficClass 0x20`) | Yalnızca `FILES_HELLO` (C→H), `FILES_HELLO_ACK` (H→C), `PING` (C→H, kanıt/canlı tutma) ve `FILES_DATA` (iki yön). §4 "Dosya bağlantısı". |
 
 USB kullanımında aynı bağlantılar `adb reverse` ile taşınır. Protokol değişmez.
 
-**Çerçeve** (her iki bağlantıda aynı, 5 bayt başlık). Bu biçim yalnızca şifreleme başlamadan önceki mesajlar içindir (`HELLO`, ilk `HELLO_ACK`, `VIDEO_HELLO`, `FILES_HELLO`, `FILES_HELLO_ACK`); sonrasında her çerçeve şifreli kayıt biçimindedir (§9):
+**Çerçeve** (her iki bağlantıda aynı, 5 bayt başlık). Bu biçim yalnızca şifreleme başlamadan önceki mesajlar içindir (`HELLO`, ilk `HELLO_ACK`, `VIDEO_HELLO`, `FILES_HELLO`, `FILES_HELLO_ACK`, `CAM_HELLO`, `CAM_HELLO_ACK`); sonrasında her çerçeve şifreli kayıt biçimindedir (§9):
 
 | Alan | Tip | Açıklama |
 |---|---|---|
@@ -37,7 +38,7 @@ USB kullanımında aynı bağlantılar `adb reverse` ile taşınır. Protokol de
 | `length` | u32 | Yalnızca payload uzunluğu (başlık hariç) |
 | payload | `length` bayt | Mesaja göre |
 
-- **En büyük payload:** kontrol ve dosya bağlantılarında 65.536 bayt, video bağlantısında 16.777.216 bayt. Sınır, başlığın 5 baytı gelir gelmez denetlenir; alıcı payload'u tamponlamadan reddeder. Gönderen de sınırı aşan bir çerçeve **üretmez** (kodlayıcı hata verir).
+- **En büyük payload:** kontrol ve dosya bağlantılarında 65.536 bayt, video bağlantısında 16.777.216 bayt, kamera bağlantısında 4.194.304 bayt. Sınır, başlığın 5 baytı gelir gelmez denetlenir; alıcı payload'u tamponlamadan reddeder. Gönderen de sınırı aşan bir çerçeve **üretmez** (kodlayıcı hata verir).
 - **Bilinmeyen tip:** alıcı payload'u atlar ve devam eder (ileri uyumluluk, fixture `unknown_type`).
 - **Uzunluk:** bilinen bir tip beklenenden **uzun** payload ile gelirse fazlası yok sayılır (yeni alanlar yalnızca sona eklenir). Değişken uzunluklu alanların boyu her zaman kendi uzunluk alanından okunur (`str8` uzunluğu, `PEN.count`, `VIDEO_FRAME.frame_size`), "payload'un geri kalanı" olarak değil. **Kısa** gelirse protokol hatasıdır (fixture `invalid_key_short`).
 - **İsteğe bağlı sondaki grup:** sona sonradan eklenen alanlar bir grup olarak tanımlanabilir. Payload grubun hiçbir baytını içermiyorsa alıcı belgedeki varsayılanı kullanır; grubun yalnız bir kısmı varsa payload kısadır (protokol hatası). Gönderen, grup varsayılan değerdeyse grubu yazmaz. Şu an tek örnek: `STREAM_PREFS.display_*` (fixture `invalid_stream_prefs_partial`).
@@ -48,6 +49,7 @@ USB kullanımında aynı bağlantılar `adb reverse` ile taşınır. Protokol de
 - **Protokol hatası:**
   - Kontrol bağlantısında: alıcı `BYE(PROTOCOL_ERROR)` gönderir, **iki bağlantıyı da** kapatır.
   - Video bağlantısında: alıcı **yalnızca video bağlantısını** kapatır, `BYE` göndermez. Host'ta hata loglanır. İstemci video bağlantısını yeniden açabilir (§3.5).
+  - Kamera bağlantısında: alıcı **yalnızca kamera bağlantısını** kapatır, `BYE` göndermez. Oturum etkilenmez (§4 "Kamera bağlantısı").
   - Dosya bağlantısında: alıcı **yalnızca o dosya bağlantısını** (ve ona eşlenmiş yerel bağlantıyı) kapatır, `BYE` göndermez. Oturum etkilenmez.
 
 ## 3. Oturum akışı
@@ -73,6 +75,8 @@ USB kullanımında aynı bağlantılar `adb reverse` ile taşınır. Protokol de
 7. **Ayar değişikliği** (çözünürlük, codec, FPS): Host yeni `config_id` ile `STREAM_CONFIG` gönderir, sonra mevcut video bağlantısını kapatır. İstemci yeni ayarı uygulayıp yeni `config_id` ile video bağlantısını yeniden açar. Böylece bir video bağlantısındaki bütün kareler tek bir ayara aittir ve iki bağlantı arasındaki sıra sorunu oluşmaz.
 8. **Tablet dosyaları:** USB'de `FILES_INFO` + `adb forward` (karar 0015, 0x09). Wi-Fi'da istek üzerine şifreli dosya bağlantıları (karar 0035): `FILES_INFO(STANDBY)` → kullanıcı Mac menüsünden açar → `FILES_NET(OPEN)` → `FILES_INFO(READY)` + tablet dosya bağlantıları açar (0x0A, §4 "Dosya bağlantısı").
 
+9. **Tablet kamerası (karar 0040):** istemci `CAMERA_PREFS` ile Kapalı/Otomatik bildirir; Mac'te bir uygulama sanal kamerayı kullanmaya başlayınca host `CAMERA_CONTROL(START)` gönderir, tablet kamera bağlantısını açar ve `CAM_FRAME` akıtır; uygulama bırakınca `CAMERA_CONTROL(STOP)` (0x0E, 0x0F, §4 "Kamera bağlantısı").
+
 **Onay öncesi:** `ACCEPTED` gelmeden istemci girdi mesajı **göndermez**. Yeni eşleşmede istemci ayrıca kullanıcı kodu tablette onaylayana kadar (§9, karar 0018) PING dışında bir şey göndermez. Gelirse host yok sayar ve hiçbir olay enjekte edilmez. `PING/PONG`, `HELLO` alındıktan sonra her durumda (onay beklerken de) geçerlidir ve cevaplanır.
 
 Onaylanmamış cihaz ne görüntü alır ne girdi gönderebilir (PLAN §5.4). İlk HELLO_ACK'ten sonraki her şey şifreli ve kimliği doğrulanmıştır (§9).
@@ -94,6 +98,8 @@ Onaylanmamış cihaz ne görüntü alır ne girdi gönderebilir (PLAN §5.4). İ
 | 0x0B | CURSOR_PREFS | C→H | kontrol | `cursor_prefs_on`, `cursor_prefs_off` |
 | 0x0C | CURSOR_SHAPE | H→C | kontrol | `cursor_shape`, `invalid_cursor_shape_short` |
 | 0x0D | CURSOR_STATE | H→C | kontrol | `cursor_state`, `cursor_state_hidden`, `cursor_state_ack`, `invalid_cursor_state_ack_partial` |
+| 0x0E | CAMERA_PREFS | C→H | kontrol | `camera_prefs_auto`, `camera_prefs_off` |
+| 0x0F | CAMERA_CONTROL | H→C | kontrol | `camera_control_start`, `camera_control_stop`, `camera_control_unavailable` |
 | 0x10 | PEN | C→H | kontrol | `pen_hover_to_contact`, `pen_leave`, `pen_eraser`, `pen_extremes`, `invalid_pen_count_zero` |
 | 0x11 | KEY | C→H | kontrol | `key_down`, `key_up_caps`, `key_no_scan`, `invalid_key_short` |
 | 0x12 | POINTER_REL | C→H | kontrol | `pointer_rel` |
@@ -114,9 +120,13 @@ Onaylanmamış cihaz ne görüntü alır ne girdi gönderebilir (PLAN §5.4). İ
 | 0x50 | FILES_HELLO | C→H | dosya | `files_hello`, `invalid_files_hello_short` |
 | 0x51 | FILES_HELLO_ACK | H→C | dosya | `files_hello_ack`, `files_hello_ack_rejected` |
 | 0x52 | FILES_DATA | iki yön | dosya | `files_data`, `invalid_files_data_empty` |
+| 0x60 | CAM_HELLO | C→H | kamera | `cam_hello`, `invalid_cam_hello_short` |
+| 0x61 | CAM_HELLO_ACK | H→C | kamera | `cam_hello_ack`, `cam_hello_ack_rejected` |
+| 0x62 | CAM_FRAME | C→H | kamera | `cam_frame`, `cam_frame_config`, `invalid_cam_frame_short` |
+| 0x63 | CAM_KEYFRAME_REQUEST | H→C | kamera | `cam_keyframe_request` |
 | — | (bilinmeyen) | — | — | `unknown_type` |
 
-Aralıklar: `0x01–0x0F` oturum, `0x10–0x1F` girdi, `0x20–0x2F` bakım/istatistik, `0x30–0x3F` ses, `0x40–0x4F` video, `0x50–0x5F` dosya bağlantısı. `invalid_*` fixture'ları **reddedilmesi** gereken girdilerdir. `unknown_type` ise **atlanması** gereken bir çerçevedir.
+Aralıklar: `0x01–0x0F` oturum, `0x10–0x1F` girdi, `0x20–0x2F` bakım/istatistik, `0x30–0x3F` ses, `0x40–0x4F` video, `0x50–0x5F` dosya bağlantısı, `0x60–0x6F` kamera bağlantısı. `invalid_*` fixture'ları **reddedilmesi** gereken girdilerdir. `unknown_type` ise **atlanması** gereken bir çerçevedir.
 
 ### 0x01 HELLO (C→H)
 
@@ -133,7 +143,7 @@ Aralıklar: `0x01–0x0F` oturum, `0x10–0x1F` girdi, `0x20–0x2F` bakım/ista
 | client_nonce | bytes[16] | Her bağlantıda yeni rastgele değer (§9) |
 | client_eph_pub | bytes[65] | Bu bağlantı için üretilen geçici P-256 açık anahtarı, sıkıştırılmamış (`0x04 ‖ X ‖ Y`) (§9) |
 
-`capabilities`: bit0 `PEN`, bit1 `PEN_HOVER`, bit2 `PEN_TILT`, bit3 `KEYBOARD`, bit4 `TOUCHPAD` (pointer capture ile göreli hareket + kaydırma), bit5 `TOUCH` (ekrana parmakla dokunma), bit6 `DECODE_H264`, bit7 `DECODE_HEVC`, bit8 `AUDIO_PCM` (istemci §4 ses mesajlarını işleyebilir ve PCM s16le 48 kHz stereo çalabilir), bit9 `SETTINGS_PANEL` (istemci akış sırasında ayarlar panelini açabilir ve `SETTINGS_OPEN`'ı işler, karar 0013). bit10 `FILES` (istemci tablet dosyaları için WebDAV sunucusu sunabilir ve `FILES_INFO` gönderir, karar 0015). bit11 `FULL_CHROMA` (istemci `chroma_layout = 1` akışını, yani `VIDEO_FRAME.view` ve iki akışı işleyebilir ve yetenek testini geçti, karar 0034). bit12 `FILES_NET` (istemci `FILES_INFO.state = 2` STANDBY gönderir, `FILES_NET`'i işler ve Wi-Fi'da dosya bağlantıları açar, karar 0035). bit13 `LOCAL_CURSOR` (istemci imleci kendisi çizebilir: `CURSOR_PREFS` gönderir, `CURSOR_SHAPE`/`CURSOR_STATE` işler, karar 0036). bit14 `AUDIO_AAC` (istemci `AUDIO_CONFIG.format = 2` AAC-LC 48 kHz stereo akışını çözüp çalabilir ve `AUDIO_PREFS.codec`'i yazar, karar 0038).
+`capabilities`: bit0 `PEN`, bit1 `PEN_HOVER`, bit2 `PEN_TILT`, bit3 `KEYBOARD`, bit4 `TOUCHPAD` (pointer capture ile göreli hareket + kaydırma), bit5 `TOUCH` (ekrana parmakla dokunma), bit6 `DECODE_H264`, bit7 `DECODE_HEVC`, bit8 `AUDIO_PCM` (istemci §4 ses mesajlarını işleyebilir ve PCM s16le 48 kHz stereo çalabilir), bit9 `SETTINGS_PANEL` (istemci akış sırasında ayarlar panelini açabilir ve `SETTINGS_OPEN`'ı işler, karar 0013). bit10 `FILES` (istemci tablet dosyaları için WebDAV sunucusu sunabilir ve `FILES_INFO` gönderir, karar 0015). bit11 `FULL_CHROMA` (istemci `chroma_layout = 1` akışını, yani `VIDEO_FRAME.view` ve iki akışı işleyebilir ve yetenek testini geçti, karar 0034). bit12 `FILES_NET` (istemci `FILES_INFO.state = 2` STANDBY gönderir, `FILES_NET`'i işler ve Wi-Fi'da dosya bağlantıları açar, karar 0035). bit13 `LOCAL_CURSOR` (istemci imleci kendisi çizebilir: `CURSOR_PREFS` gönderir, `CURSOR_SHAPE`/`CURSOR_STATE` işler, karar 0036). bit14 `AUDIO_AAC` (istemci `AUDIO_CONFIG.format = 2` AAC-LC 48 kHz stereo akışını çözüp çalabilir ve `AUDIO_PREFS.codec`'i yazar, karar 0038). bit15 `CAMERA` (istemci tablet kamerasını H.264 olarak gönderebilir: `CAMERA_PREFS` gönderir, `CAMERA_CONTROL`'ü işler ve kamera bağlantısı açar, karar 0040).
 
 ### 0x02 HELLO_ACK (H→C)
 
@@ -350,6 +360,41 @@ Bir imleç şekli (karar 0036). Host yalnız `CURSOR_PREFS(1)` uygulanmışken v
 - **Onay grubu (`rel_ack_count`, 0036 v3):** payload 22 bayt (grup yok) ya da en az 30 bayttır; 23–29 bayt kısa payload'dur (fixture `invalid_cursor_state_ack_partial`). Host grubu, bu bağlantıda en az bir `POINTER_REL` işlediyse her `CURSOR_STATE`'te yazar; `0` ise yazmaz (§2 isteğe bağlı grup). Sayaç her kontrol bağlantısında `0`'dan başlar ve geri gitmez. TCP mesaj sırasını koruduğu ve host `POINTER_REL`'leri geliş sırasıyla işlediği için sayı, işlenen mesajların **tam öneki**dir: ilk `rel_ack_count` mesaj işlendi, sonrakiler işlenmedi. Bir `POINTER_REL` "işlendi" sayılır: konumu ve düğmeleri bu durumun `x`/`y`'si okunmadan önce enjekte edildiyse ya da girdi kuralları (karar 0025) ya da girdi kapısı onu attıysa. Kuyrukta bekleyen sayılmaz. İstemci aynı bağlantıda gönderdiği `POINTER_REL`'leri 1'den numaralar. Yerel imleç tahmininde (0036 v2) bir deltanın durumun içinde olup olmadığına bununla karar verir: numara ≤ `rel_ack_count` ise içinde. Grup yoksa (eski host) zaman tahminine döner. Grubu tanımayan eski istemci 30 baytlık payload'un fazlasını yok sayar (§2, uzun payload kuralı).
 - **Zaman aşımı:** (uzak oturumda 1,5 s yerine **5 s**, karar 0038) istemci `CURSOR_PREFS(1)` gönderdikten sonra 1,5 s boyunca hiç `CURSOR_STATE` almazsa (ya da sonradan 1,5 s kesilirse) katmanını gizler ve `CURSOR_PREFS(0)` gönderir: imleç videoya döner, kullanıcı imleçsiz kalmaz. İstemci yeniden denemeyi en erken 10 s sonra yapar.
 - Mod değişiminde (Oyun) istemci önce `CURSOR_PREFS(0)` gönderir; host'un video imlecini geri açması bir sonraki karelerde görünür.
+
+### 0x0E CAMERA_PREFS (C→H, kontrol)
+
+Tablet kamerasının Mac'te webcam olarak kullanımı (karar 0040). İstemci yalnızca `ACCEPTED` oturumda ve `HELLO.capabilities` bit15 `CAMERA` ile gönderir: oturum başında bir kez ve her değişiklikte.
+
+| Alan | Tip | Açıklama |
+|---|---|---|
+| mode | u8 | `0` OFF, `1` AUTO. Başka değer: OFF sayılır. |
+| facing | u8 | `0` FRONT, `1` BACK. Başka değer: FRONT sayılır. |
+| reserved | u16 | |
+
+- Uzak oturumda (STREAM_PREFS `link = 1`) istemci her zaman `mode = 0` yazar; host da `link = 1` iken `mode`'u OFF sayar.
+- `facing` değişimi akış sürerken uygulanır: istemci kamerayı değiştirir, aynı kamera bağlantısında yeni `CODEC_CONFIG` + keyframe ile devam eder. Host bir şey yapmaz.
+- Varsayılan (mesaj hiç gelmediyse): OFF.
+
+### 0x0F CAMERA_CONTROL (H→C, kontrol)
+
+Host yalnızca etkin `ACCEPTED` oturumda ve `HELLO.capabilities` bit15 varsa gönderir.
+
+| Alan | Tip | Açıklama |
+|---|---|---|
+| state | u8 | `0` STOP, `1` START, `2` UNAVAILABLE (son `CAMERA_PREFS` AUTO ama Mac'te sanal kamera hedefi yok; istemci panelde gösterir). Bilinmeyen değer: STOP sayılır. |
+| cam_id | u16 | START: her yeni kamera akışında artar (1'den başlar, oturum boyunca). `CAM_HELLO.cam_id` bununla eşleşir. STOP/UNAVAILABLE: son değer ya da 0. |
+| port | u16 | START: host kamera dinleyicisinin TCP portu (dinleyici bu mesajdan **önce** açılır; tercih 47004, doluysa sistemin verdiği). Diğer durumlarda 0. |
+| width | u16 | START: istenen genişlik, piksel (öneri 1920). Diğer durumlarda 0. |
+| height | u16 | START: istenen yükseklik (öneri 1080). |
+| fps | u8 | START: istenen kare hızı (öneri 30). |
+| reserved | u8 | |
+| bitrate_kbps | u32 | START: hedef bit hızı (öneri 6000). |
+
+- **START** yalnız şu koşulların hepsi tutunca gider: son `CAMERA_PREFS.mode = AUTO`, oturum uzak değil, Mac'te sanal kamera hedefi var ve Mac'te bir uygulama o kamerayı kullanıyor. Kullanım bitince (host'un kendi süzgeciyle, öneri 3 sn) ya da koşullardan biri düşünce **STOP** gider ve host dinleyiciyi ve kamera bağlantısını kapatır.
+- İstemci START'ta: `facing` kamerasını açar, H.264 donanım kodlayıcısını `width × height` (desteklenen en yakın 16:9 boyut; gerçek boyut SPS'tedir), `fps`, `bitrate_kbps` ile kurar, kamera bağlantısını açar. Kare **dik ve yatay** gider (tablet yönüne göre döndürülmüş); ön kamerada ayna **uygulanmaz** (Mac uygulamaları önizlemeyi kendisi aynalar).
+- İstemci STOP'ta (ya da UNAVAILABLE'da, oturum sonunda, uygulama arka plana düşünce, `CAMERA_PREFS` OFF'a dönünce) kamerayı, kodlayıcıyı ve kamera bağlantısını **hemen** kapatır. Arka plana düşen istemci ön plana dönünce host hâlâ START durumundaysa kamera bağlantısını yeniden açar (aynı `cam_id`).
+- Aynı `cam_id` ile tekrar gelen START bir şey değiştirmez; yeni `cam_id` ile gelen START, varsa eski kamera bağlantısını kapatıp yenisini açtırır.
+- Kamera kapalıyken iki tarafta da kamera, kodlayıcı, çözücü, dinleyici ya da zamanlayıcı **çalışmaz**.
 
 ### 0x10 PEN (C→H)
 
@@ -694,6 +739,59 @@ Wi-Fi'da tablet WebDAV sunucusu Mac'e şifreli dosya bağlantıları üzerinden 
 
 Gönderen bir kayda en çok `size` bayt koyar; Wi-Fi'da öneri ≤ 16 KiB (§5, küçük isteklerin gecikmesi).
 
+### Kamera bağlantısı (karar 0040)
+
+Tablet kamerasının görüntüsü ayrı bir şifreli TCP bağlantısında Mac'e gider (C→H). Bağlantıyı tablet açar; dosya bağlantısının el sıkışma kalıbı kullanılır.
+
+1. **Açılış:** istemci `CAMERA_CONTROL(START)`'tan sonra kontrol bağlantısının host adresine, `CAMERA_CONTROL.port`'a TCP açar ve ilk mesaj olarak şifresiz `CAM_HELLO` gönderir.
+2. **Kabul:** host kanıtlanmamış kamera bağlantısını en çok **1** tutar (fazlası kabul edilir edilmez kapatılır) ve `CAM_HELLO`'yu TCP kabulünden itibaren en çok **5 sn** bekler. Denetler: dinleyici açık, eş adres kontrol bağlantısının eş adresiyle aynı, `protocol_version = 1`, `session_id` etkin oturumunki, `cam_id` son START'ınki. Uyarsa şifresiz `CAM_HELLO_ACK(OK, host_cam_nonce)` (her bağlantıda yeni rastgele nonce); uymazsa `CAM_HELLO_ACK(REJECTED)` (nonce sıfır) gönderip kapatır. İstemci 5 sn içinde ACK almazsa kapatır.
+3. **Anahtarlar** iki nonce'tan türetilir (§9); OK'tan sonra iki yönde şifreli kayıtlar başlar.
+4. **Kanıt:** istemcinin ilk şifreli kaydı `PING`'dir. Host bu kayıt doğrulanana kadar `CAM_FRAME` kabul etmez ve **varsa eski kamera bağlantısını kapatmaz**; TCP kabulünden itibaren toplam 5 sn içinde gelmezse ya da doğrulanamazsa bağlantıyı kapatır. Kanıt gelince eski kamera bağlantısı (varsa) kapanır: aynı anda en çok **bir** etkin kamera bağlantısı vardır. Kamera bağlantısındaki PING'e PONG gönderilmez.
+5. **Akış:** istemci önce `CAM_FRAME(CODEC_CONFIG)`, sonra keyframe, sonra kareler gönderir. Host çözücüyü `CODEC_CONFIG` ile kurar ve kareleri sanal kameraya yazar.
+6. **Kopma:** kamera bağlantısı koparsa ve son durum hâlâ START ise istemci aynı `cam_id` ile yeniden açar: 1 sn bekleme, en çok 3 deneme; sonra kamerayı kapatır ve yeni bir START'ı bekler. Host, START durumundayken 10 sn boyunca etkin kamera bağlantısı yoksa STOP gönderebilir.
+7. **Oturuma bağlılık:** kamera bağlantısı `session_id`'ye aittir. Oturum bitince (BYE, `HOST_SLEEP`, devralma, kontrol bağlantısının kopması) iki taraf da mesajsız olarak kamera bağlantısını kapatır; istemci kamerayı kapatır, host dinleyiciyi kapatır.
+8. Kamera bağlantısında geçerli tipler yalnız `CAM_HELLO`, `CAM_HELLO_ACK`, `PING`, `CAM_FRAME` (C→H) ve `CAM_KEYFRAME_REQUEST` (H→C)'dir; başka **bilinen** bir tip ya da ters yönde gelen bu tiplerden biri protokol hatasıdır (yalnız kamera bağlantısı kapanır), bilinmeyen tip atlanır (§2).
+9. **Gizlilik:** kamera görüntüsü hiçbir tarafta diske yazılmaz ve loglanmaz; yalnız sayaçlar (kare sayısı, boyut, düşen kare) loglanabilir.
+
+### 0x60 CAM_HELLO (C→H, kamera bağlantısı, şifresiz)
+
+| Alan | Tip | Açıklama |
+|---|---|---|
+| protocol_version | u16 | `1` |
+| session_id | u32 | `HELLO_ACK`'teki değer |
+| cam_id | u16 | Son `CAMERA_CONTROL(START).cam_id` |
+| client_cam_nonce | bytes[16] | Her kamera bağlantısında yeni rastgele değer (§9) |
+
+### 0x61 CAM_HELLO_ACK (H→C, kamera bağlantısı, şifresiz)
+
+| Alan | Tip | Açıklama |
+|---|---|---|
+| status | u8 | `0` OK, `1` REJECTED. Bilinmeyen değer REJECTED sayılır (istemci kapatır). |
+| host_cam_nonce | bytes[16] | OK'ta her kamera bağlantısında yeni rastgele değer (§9); REJECTED'da sıfır |
+
+### 0x62 CAM_FRAME (C→H, kamera bağlantısı)
+
+| Alan | Tip | Açıklama |
+|---|---|---|
+| frame_seq | u32 | Bu kamera bağlantısında her mesajda 1 artar, 0'dan başlar (CODEC_CONFIG dahil) |
+| capture_time_us | u64 | Kamera karesinin **istemci** monoton zamanı (Camera2 sensör zaman damgası, µs). Host saat farkını kontrol bağlantısındaki tahminle düzeltebilir (§6); yalnız tanı ve sıralama içindir. |
+| flags | u8 | bit0 `KEYFRAME`, bit1 `CODEC_CONFIG` (yalnızca H.264 SPS/PPS) |
+| reserved | u8 | |
+| reserved2 | u16 | |
+| frame_size | u32 | `data` uzunluğu, `1…4 194 280` |
+| data | bytes[frame_size] | H.264 Annex-B NAL birimleri (`00 00 00 01` başlangıç kodlarıyla) |
+
+- Payload `20 + frame_size`'dan kısaysa ya da `frame_size = 0` ise **protokol hatasıdır** (fixture `invalid_cam_frame_short`; yalnız kamera bağlantısı kapanır).
+- Codec her zaman H.264'tür (High ya da Main profil, 8 bit 4:2:0). Boyut değişimi yeni `CODEC_CONFIG` ile olur.
+
+### 0x63 CAM_KEYFRAME_REQUEST (H→C, kamera bağlantısı)
+
+| Alan | Tip | Açıklama |
+|---|---|---|
+| reason | u8 | `0` STARTUP, `1` DECODE_ERROR, `2` FRAMES_DROPPED (bilgi amaçlı; bilinmeyen değer kabul edilir) |
+
+İstemci bir sonraki kareyi keyframe olarak kodlar ve önüne güncel `CODEC_CONFIG`'i koyar. Art arda gelen istekler birleştirilebilir; host bir istekten sonra 500 ms içinde yenisini göndermez.
+
 ## 5. Kuyruk sınırları (AGENTS.md: yalnızca sınırlı kuyruk)
 
 **Video:**
@@ -716,6 +814,11 @@ Gönderen bir kayda en çok `size` bayt koyar; Wi-Fi'da öneri ≤ 16 KiB (§5, 
 - Mac vekilinde eşlenmeyi bekleyen yerel bağlantı ≤ 8 (her biri ≤ 5 sn); eşlenmiş yerel bağlantı sayısı dosya bağlantılarıyla sınırlıdır.
 - Aktarma tamponu: bağlantı ve yön başına en çok **64 KiB** aktarma tamponu + çözülmekte olan **bir kayıt** (≤ 65 553 bayt) (host vekili ve istemci tüneli). Dolunca kaynaktan okuma durur (geri basınç); bayt asla atılmaz.
 - Hız tavanı: veri iki yönde de görüntüyü korumak için sınırlanır: `files_cap = clamp((48 − video_Mbps) / 8, 0,5, 3,0)` MB/s (MB = 10⁶ bayt; `video_Mbps` = `STREAM_CONFIG.bitrate_kbps / 1000`, 0 ise 2 MB/s). C→H tabletin hız kovasında, H→C Mac vekilinin gönderiminde uygulanır. Küçük istek/yanıtlar (≤ 32 KiB) ayrı küçük şeritten (~256 KB/s) geçebilir. **Uzak oturumda** (STREAM_PREFS `link = 1`, karar 0038 eki 2026-10-14) `files_cap` bit hızından bağımsız olarak **0,5 MB/s**'dir; küçük şerit aynıdır. İki taraf da tavanı o anki `link`'e göre uygular (host: son uygulanan STREAM_PREFS; istemci: kendi oturum türü) ve `link` ya da bit hızı değişince kovanın hızını günceller. Tel biçimi bundan etkilenmez; değerler ölçümle değişebilir. USB yolu (`adb forward`, 20 MB/s) değişmez.
+
+**Kamera (karar 0040):**
+- İstemci: kodlayıcı çıkışı ile soket arasında en çok **2** kare bekler. Taşarsa en eski keyframe olmayan kareler atılır ve kodlayıcıdan bir sonraki kare keyframe olarak istenir. Kamera → kodlayıcı arası kodlayıcının kendi yüzeyidir (en yeni kare kazanır).
+- Host: çözücüye verilmeyi bekleyen en çok **2** kare; taşarsa bekleyenler atılır ve `CAM_KEYFRAME_REQUEST(FRAMES_DROPPED)` gider (keyframe gelene kadar keyframe olmayan kareler atılır). Sanal kameraya yazım kuyruğu doluysa yeni kare atılır (sayılır), beklenmez.
+- Kamera trafiği ekran akışını korumak için bit hızıyla sınırlıdır (`CAMERA_CONTROL.bitrate_kbps`); kamera bağlantısı ayrı TCP olduğu için girdi ve video bağlantılarını bekletmez.
 
 **İmleç (karar 0036):** host'ta gönderilmeyi bekleyen en çok **bir** imleç birimi vardır: bir `CURSOR_STATE` ve (gerekiyorsa) onun ihtiyaç duyduğu tek `CURSOR_SHAPE` (≤ 61 456 bayt). Yeni durum bekleyeni değiştirir (en yenisi kazanır); değiştirilen birimin şekli de gönderilmez ve "istemcide var" sayılmaz. Bir birim yalnız bir öncekinin **tamamı sokete yazıldıktan sonra** (gönderim tamamlandı) yazılmaya başlar; yani gönderimde en çok bir, beklemede en çok bir birim vardır. Tıkanmada imleç trafiği büyümez; 256 KiB sınırına katkısı en çok iki birimdir (~120 KiB, yalnız iki büyük şekil üst üste gelirse).
 
@@ -803,6 +906,7 @@ Swift ve Kotlin testleri:
 - Video: `video_hello`, `video_frame`, `video_frame_config`, `video_frame_aux`, `video_frame_aux_config`
 - İmleç: `cursor_prefs_on`, `cursor_prefs_off`, `cursor_shape`, `invalid_cursor_shape_short`, `cursor_state`, `cursor_state_hidden`, `cursor_state_ack`, `invalid_cursor_state_ack_partial`
 - Dosya: `files_info_ready`, `files_info_off`, `files_info_standby`, `files_net_open`, `files_net_close`, `files_hello`, `files_hello_ack`, `files_hello_ack_rejected`, `files_data`, `invalid_files_hello_short`, `invalid_files_data_empty`
+- Kamera: `camera_prefs_auto`, `camera_prefs_off`, `camera_control_start`, `camera_control_stop`, `camera_control_unavailable`, `cam_hello`, `invalid_cam_hello_short`, `cam_hello_ack`, `cam_hello_ack_rejected`, `cam_frame`, `cam_frame_config`, `invalid_cam_frame_short`, `cam_keyframe_request`
 - Diğer: `unknown_type`
 - Şifreleme: `crypto_vectors.json` (§9)
 
@@ -822,10 +926,11 @@ Amaç: ev ağında (Wi-Fi) kontrol + girdi (yazılan şifreler dahil) ve görün
 - Kontrol bağlantısı: `k_c2h` = Expand(prk, `"MB1 control c2h"`, 32), `k_h2c` = Expand(prk, `"MB1 control h2c"`, 32).
 - Video bağlantısı: `kv_h2c` = Expand(prk, `"MB1 video h2c" ‖ video_nonce`, 32), `kv_c2h` = Expand(prk, `"MB1 video c2h" ‖ video_nonce`, 32). Host `prk`'yi oturum boyunca tutar; oturum bitince siler.
 - Dosya bağlantısı (karar 0035): `kf_c2h` = Expand(prk, `"MB1 files c2h" ‖ client_files_nonce ‖ host_files_nonce`, 32), `kf_h2c` = Expand(prk, `"MB1 files h2c" ‖ client_files_nonce ‖ host_files_nonce`, 32). İki nonce da her bağlantıda tazedir (host'unki `FILES_HELLO_ACK`'te), bu yüzden kaydedilmiş bir bağlantının tekrarı iki yönde de etiket doğrulamasında düşer; video'daki gibi nonce kümesi gerekmez. İstemci de `prk`'yi oturum boyunca tutar ve oturum bitince siler.
+- Kamera bağlantısı (karar 0040): `kc_c2h` = Expand(prk, `"MB1 camera c2h" ‖ client_cam_nonce ‖ host_cam_nonce`, 32), `kc_h2c` = Expand(prk, `"MB1 camera h2c" ‖ client_cam_nonce ‖ host_cam_nonce`, 32). Dosya bağlantısıyla aynı kalıp: iki nonce da her bağlantıda tazedir.
 - PAIRING'de ayrıca: eşleşme kodu `sas` = Expand(prk, `"MB1 sas"`, 4) → u32 little-endian `mod 1 000 000`, 6 hane (baştaki sıfırlarla); yeni eşleşme anahtarı `new_pair_key` = Expand(prk, `"MB1 pair"`, 32).
 - `info` dizeleri ASCII'dir, sonlandırıcı yoktur.
 
-**Şifreli kayıt** (ilk HELLO_ACK'ten sonra kontrol bağlantısında iki yönde, VIDEO_HELLO'dan sonra video bağlantısında iki yönde, `FILES_HELLO_ACK(OK)`'tan sonra dosya bağlantısında iki yönde):
+**Şifreli kayıt** (ilk HELLO_ACK'ten sonra kontrol bağlantısında iki yönde, VIDEO_HELLO'dan sonra video bağlantısında iki yönde, `FILES_HELLO_ACK(OK)`'tan sonra dosya bağlantısında iki yönde, `CAM_HELLO_ACK(OK)`'tan sonra kamera bağlantısında iki yönde):
 
 | Alan | Tip | Açıklama |
 |---|---|---|
@@ -849,4 +954,4 @@ Amaç: ev ağında (Wi-Fi) kontrol + girdi (yazılan şifreler dahil) ve görün
 
 **Saklama:** eşleşme anahtarları gizlidir, **asla loglanmaz**. Host: macOS Anahtar Zinciri (generic password, hizmet `dev.matebridge.host.pair`, hesap = device_id hex). İstemci: Android Keystore'da üretilen dışa aktarılamaz bir AES-GCM anahtarıyla şifrelenip SharedPreferences'ta. `host_id` host'ta bir kez üretilir ve saklanır. "Onaylı cihazları unut" anahtarları da siler.
 
-**Test vektörleri:** `protocol/fixtures/crypto_vectors.json` (`crypto_vectors.swift` ile üretilir; girdi olarak `hello.hex`, `hello_ack.hex`, `hello_ack_pending.hex` payload'larını kullanır). Her iki taraf: sabit özel anahtarlardan `ecdh`, iki moddaki `transcript_hash`, `prk`, bütün anahtarları (dosya anahtarları `inputs.client_files_nonce` / `inputs.host_files_nonce` ile: `key_files_c2h`, `key_files_h2c`), `sas` ve `new_pair_key`'i, ve `frames` altındaki şifreli kayıtları bayt bayt üretir; kayıtları çözer; bir baytı bozulmuş kaydı reddeder.
+**Test vektörleri:** `protocol/fixtures/crypto_vectors.json` (`crypto_vectors.swift` ile üretilir; girdi olarak `hello.hex`, `hello_ack.hex`, `hello_ack_pending.hex` payload'larını kullanır). Her iki taraf: sabit özel anahtarlardan `ecdh`, iki moddaki `transcript_hash`, `prk`, bütün anahtarları (dosya anahtarları `inputs.client_files_nonce` / `inputs.host_files_nonce` ile: `key_files_c2h`, `key_files_h2c`; kamera anahtarları `inputs.client_cam_nonce` / `inputs.host_cam_nonce` ile: `key_camera_c2h`, `key_camera_h2c`), `sas` ve `new_pair_key`'i, ve `frames` altındaki şifreli kayıtları bayt bayt üretir; kayıtları çözer; bir baytı bozulmuş kaydı reddeder.
