@@ -62,3 +62,10 @@ Karar 0040 ek 2 ve PROTOCOL.md (dal `task/T-356-camera-integration`, commit 2e41
 - Probe pause: 0.5 s maximum (was 0.6), ends at once when the raw property falls. NOT measured on hardware; a too-short value only causes a harmless resume and a retry 10 min later.
 - Codex P2 fixes: (1) ObsVirtualCamera.write stages one frame, newest wins, drops counted as queue_full; (2) CameraConnectionService .close of the active connection now voids work like socketClosed (shared voidActiveWork); (3) one pending CODEC_CONFIG, latest wins, skipped if the connection generation changed (own connection generation, not the gate epoch, so an overflow does not discard a still valid config); (4) startedStream keeps the started IDs, stop always clears local sink state. No unit tests for 1-4 (CMIO/VT glue); --camera-selftest passes.
 - Not tested on hardware: sleep observers, CGEventSource idle age, real OBS probe timing.
+
+### Round 2 (Codex, branch task/T-357-host-r2)
+
+- P2-1: new Core `CameraDecodeStore` (max 2 frames, one config, one drain closure on the decode queue) replaces one closure per frame; overflow/decode error drop waiting frames, a config replaces waiting frames. `CameraStreamGate.codecConfig()` now advances the epoch (frames queued before a config are void).
+- P2-2: generation checked again right before the sink in `decoded`; `ObsVirtualCamera.writesEnabled` is false until `enableWrites()` (listener opened, or a camera connection became active) and false again after `stopSink()`.
+- P2-3: every store item carries its decoder and the connection generation; the drain no longer captures a decoder.
+- Boundary test: CamFrame.maxDataBytes == 4194284, max sealed ok, max+1 rejected. Tests: CameraDecodeStoreTests, gate tests. Full check.sh ALL OK, --camera-selftest passes. Single commit for all three (they share code).

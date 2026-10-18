@@ -54,8 +54,10 @@ public struct CameraStreamGate: Sendable {
     }
 
     /// `CODEC_CONFIG` always goes to the decoder (it rebuilds the session) and never counts as a pending frame.
-    /// A new config means the next picture must be a keyframe.
+    /// A new config means the next picture must be a keyframe, and frames queued before it are void (new epoch).
     public mutating func codecConfig() -> Decision {
+        epoch &+= 1
+        pending = 0
         awaitingKeyframe = true
         return .submit(epoch: epoch)
     }

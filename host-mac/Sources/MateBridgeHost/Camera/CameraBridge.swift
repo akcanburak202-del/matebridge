@@ -177,6 +177,7 @@ public final class CameraBridge: @unchecked Sendable {
             link?.cameraKeys(sessionID: sid, clientNonce: client, hostNonce: host)
         }
         if let port {
+            obs.enableWrites()
             apply(controller.listenerOpened(port: port, now: HostClock.nowUs()))
         } else {
             apply(controller.listenerFailed(now: HostClock.nowUs()))
@@ -220,6 +221,7 @@ public final class CameraBridge: @unchecked Sendable {
 
     /// The camera connection became active (true) or the active one ended (false).
     private func connectionActive(_ active: Bool) {
+        if active, service.isRunning { obs.enableWrites() }
         guard !active, service.isRunning else { return }
         // No frames any more: stop writing so the raw property shows other clients only.
         obs.stopSink()

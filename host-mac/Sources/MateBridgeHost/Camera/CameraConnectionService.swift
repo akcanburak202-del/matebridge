@@ -67,9 +67,21 @@ final class CameraConnectionService: @unchecked Sendable {
     /// Advances whenever the active connection changes or goes (T-357, Codex P2): work queued for an older connection,
     /// such as a pending `CODEC_CONFIG`, is skipped. Not the gate's epoch: an overflow voids frames but a config stays valid.
     private let connectionGeneration = OSAllocatedUnfairLock<UInt64>(initialState: 0)
-    /// At most one `CODEC_CONFIG` waits for the decode queue; a newer one replaces it.
-    private let configSlot = OSAllocatedUnfairLock<(data: [UInt8], generation: UInt64, scheduled: Bool)>(
-        initialState: (data: [], generation: 0, scheduled: false))
+    /// Frames and the newest `CODEC_CONFIG` waiting for the decoder: at most two frames, one config, one drain closure
+    /// on the decode queue (T-357 r2). Every item carries its decoder, so work of an old run never touches a new decoder.
+    private struct FrameWork: @unchecked Sendable {
+        var data: [UInt8]
+        var captureTimeUs: UInt64
+        var epoch: UInt64
+        var generation: UInt64
+        var decoder: H264CameraDecoder
+    }
+    private struct ConfigWork: @unchecked Sendable {
+        var data: [UInt8]
+        var generation: UInt64
+        var decoder: H264CameraDecoder
+    }
+    private let store = OSAllocatedUnfairLock<CameraDecodeStore<FrameWork, ConfigWork>>(uncheckedState: CameraDecodeStore())
     private let scaler = CameraFrameScaler(width: ObsVirtualCamera.sinkWidth, height: ObsVirtualCamera.sinkHeight)
 
     /// Called on `queue`: a camera connection became the active one (true) or the active one ended (false).
@@ -297,6 +309,7 @@ final class CameraConnectionService: @unchecked Sendable {
         gate.reset()
         epochBox.withLock { $0 = gate.epoch }
         connectionGeneration.withLock { $0 &+= 1 }
+        store.withLock { $0.clear() }
     }
 
     // MARK: - Frames (on queue)
@@ -306,60 +319,58 @@ final class CameraConnectionService: @unchecked Sendable {
         bytesIn += frame.data.count
         guard let decoder else { return }
         let now = HostClock.nowUs()
+        let generation = connectionGeneration.withLock { $0 }
         if frame.isCodecConfig {
-            _ = gate.codecConfig()
-            let generation = connectionGeneration.withLock { $0 }
-            let schedule = configSlot.withLock { slot -> Bool in
-                slot.data = frame.data  // newest wins
-                slot.generation = generation
-                let start = !slot.scheduled
-                slot.scheduled = true
-                return start
-            }
-            guard schedule else { return }
-            let slot = configSlot, current = connectionGeneration
-            decodeQueue.async {
-                while true {
-                    let next = slot.withLock { s -> (data: [UInt8], generation: UInt64)? in
-                        if s.data.isEmpty { s.scheduled = false; return nil }
-                        defer { s.data = [] }
-                        return (s.data, s.generation)
-                    }
-                    guard let next else { return }
-                    if current.withLock({ $0 }) == next.generation { decoder.configure(annexB: next.data) }
-                }
-            }
+            _ = gate.codecConfig()  // voids the frames before it (new epoch)
+            epochBox.withLock { $0 = gate.epoch }
+            let work = ConfigWork(data: frame.data, generation: generation, decoder: decoder)
+            if store.withLock({ $0.push(config: work) }) { scheduleDrain() }
             return
         }
         switch gate.frame(keyframe: frame.isKeyframe, now: now) {
         case .submit(let epoch):
-            submit(frame, epoch: epoch, decoder: decoder)
+            let work = FrameWork(data: frame.data, captureTimeUs: frame.captureTimeUs, epoch: epoch,
+                                 generation: generation, decoder: decoder)
+            if store.withLock({ $0.push(frame: work) }) { scheduleDrain() }
         case .dropAwaitingKeyframe:
             break
         case .overflow(let request):
             epochBox.withLock { $0 = gate.epoch }
+            store.withLock { $0.clearFrames() }  // the gate voided them; free their data now
             logger.log(.debug, "camera_frame_drop", sessionID: sessionID, generation: camID, fields: "reason=queue_full")
             if let request { sendKeyframeRequest(request) }
         }
     }
 
-    private func submit(_ frame: CamFrame, epoch: UInt64, decoder: H264CameraDecoder) {
-        let data = frame.data, time = frame.captureTimeUs
-        let box = epochBox
-        let out = outQueue
-        decodeQueue.async { [weak self] in
-            guard let self, box.withLock({ $0 }) == epoch else { return }  // thrown away by an overflow or an error
-            decoder.decode(annexB: data, captureTimeUs: time) { result in
-                out.async { self.decoded(result, epoch: epoch) }
+    private func scheduleDrain() {
+        decodeQueue.async { [weak self] in self?.drain() }
+    }
+
+    /// On `decodeQueue`: the only place the decoder is fed. Items of an older epoch or connection are skipped.
+    private func drain() {
+        let box = epochBox, generations = connectionGeneration, out = outQueue
+        while let item = store.withLock({ $0.pop() }) {
+            switch item {
+            case .config(let c):
+                guard generations.withLock({ $0 }) == c.generation else { continue }
+                _ = c.decoder.configure(annexB: c.data)
+            case .frame(let f):
+                guard box.withLock({ $0 }) == f.epoch, generations.withLock({ $0 }) == f.generation else { continue }
+                let epoch = f.epoch, generation = f.generation
+                f.decoder.decode(annexB: f.data, captureTimeUs: f.captureTimeUs) { [weak self] result in
+                    out.async { self?.decoded(result, epoch: epoch, generation: generation) }
+                }
             }
         }
     }
 
     /// On `outQueue`: one decode result. The sink gets frames of the current epoch only.
-    private func decoded(_ result: H264CameraDecoder.Result, epoch: UInt64) {
+    private func decoded(_ result: H264CameraDecoder.Result, epoch: UInt64, generation: UInt64) {
         switch result {
         case .frame(let image):
-            if epochBox.withLock({ $0 }) == epoch, let scaled = scaler.scaled(image.value) {
+            // The generation is checked again right before the sink: scaling can outlast a STOP (T-357 r2).
+            if epochBox.withLock({ $0 }) == epoch, connectionGeneration.withLock({ $0 }) == generation,
+               let scaled = scaler.scaled(image.value), connectionGeneration.withLock({ $0 }) == generation {
                 sink?(CameraPixelBuffer(scaled))
             }
             queue.async { [weak self] in self?.gate.finished(epoch: epoch, decoded: true) }
@@ -371,6 +382,7 @@ final class CameraConnectionService: @unchecked Sendable {
                 logger.log(.warning, "camera_decode_error", sessionID: sessionID, generation: camID, fields: "status=\(status)")
                 let reason = gate.decodeFailed(epoch: epoch, now: HostClock.nowUs())
                 epochBox.withLock { $0 = gate.epoch }
+                store.withLock { $0.clearFrames() }
                 if let reason { sendKeyframeRequest(reason) }
             }
         }
