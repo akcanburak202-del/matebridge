@@ -79,3 +79,8 @@ Karar 0040 ek 2 ve PROTOCOL.md (dal `task/T-356-camera-integration`, commit 2e41
 - P2-1: a decode failure now first finishes its own frame in the gate, then touches the store/gate only if its epoch is current and its connection generation matches; stale failures change nothing.
 - P2-2: `CameraStreamGate.pending` is now the real count of outstanding submissions across epochs (overflow, config, error, reset no longer zero it). Capacity frees only on `finished` (any epoch; only the current epoch counts as decoded) or `retire(n)` (frames the store dropped/replaced/evicted, frames the drain skips as void). A stalled VT therefore cannot admit more than 2. `CameraDecodeStore.takeDropped()` reports removals.
 - Residual: a new `open()` gets a fresh gate (count 0) while a late completion of the old run may decrement it (clamped at 0). Tests: gate and store tests updated/added; full check.sh ALL OK, camera-selftest passes. Host glue not unit tested.
+
+### Round 4 (Codex, branch task/T-357-host-r4)
+
+- P2-1: new Core `CameraOutputStallPolicy`: a CAM_KEYFRAME_REQUEST is written only when the socket has no pending bytes; otherwise skipped; output stuck for 5 s closes the camera connection (`camera_conn state=closed reason=write_stall`, goes through the normal socketClosed path). Tests in CameraOutputStallPolicyTests.
+- P2-2: `runToken` (bumped per `open()`) travels with every frame work item; gate.finished/retire/decodeFailed from decode/output queues run only if the token still matches, so a previous run never touches the new gate. Closes the r3 residual. Host glue not unit tested; full check.sh ALL OK, camera-selftest passes.
