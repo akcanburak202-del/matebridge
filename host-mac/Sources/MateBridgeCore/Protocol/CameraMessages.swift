@@ -21,10 +21,14 @@ public struct CameraFacing: OpenCode {
 public struct CameraPrefs: Equatable, Sendable {
     public var mode: CameraMode
     public var facing: CameraFacing
+    /// Counts the tablet's "Kamerayı şimdi kapat" taps this session (starts at 0, wraps at 65535). A change from the
+    /// first value seen means: stop writing now and stay stopped until the usage ends (decision 0040 addendum 2).
+    public var releaseSeq: UInt16
 
-    public init(mode: CameraMode, facing: CameraFacing = .front) {
+    public init(mode: CameraMode, facing: CameraFacing = .front, releaseSeq: UInt16 = 0) {
         self.mode = mode
         self.facing = facing
+        self.releaseSeq = releaseSeq
     }
 
     /// Only AUTO is AUTO: any other value, unknown ones included, is OFF.
@@ -33,13 +37,12 @@ public struct CameraPrefs: Equatable, Sendable {
     func write(_ w: inout ByteWriter) {
         w.u8(mode.rawValue)
         w.u8(facing.rawValue)
-        w.u16(0)
+        w.u16(releaseSeq)
     }
 
     static func read(_ r: inout ByteReader) throws -> CameraPrefs {
-        let prefs = CameraPrefs(mode: CameraMode(rawValue: try r.u8()), facing: CameraFacing(rawValue: try r.u8()))
-        try r.skip(2)  // reserved
-        return prefs
+        CameraPrefs(mode: CameraMode(rawValue: try r.u8()), facing: CameraFacing(rawValue: try r.u8()),
+                    releaseSeq: try r.u16())
     }
 }
 

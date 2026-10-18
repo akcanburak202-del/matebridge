@@ -89,7 +89,7 @@ private let validFixtures: [String: Message] = [
     "files_hello_ack": .filesHelloAck(FilesHelloAck(status: .ok, hostNonce: Array(0x80...0x8f))),
     "files_hello_ack_rejected": .filesHelloAck(.rejected),
     "files_data": .filesData(FilesData(data: Array("OPTIONS / HTTP/1.1".utf8))),
-    "camera_prefs_auto": .cameraPrefs(CameraPrefs(mode: .auto, facing: .back)),
+    "camera_prefs_auto": .cameraPrefs(CameraPrefs(mode: .auto, facing: .back, releaseSeq: 2)),
     "camera_prefs_off": .cameraPrefs(CameraPrefs(mode: .off, facing: .front)),
     "camera_control_start": .cameraControl(.start(camID: 1, port: 47004)),
     "camera_control_stop": .cameraControl(.stop(camID: 1)),
