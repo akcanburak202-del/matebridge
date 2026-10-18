@@ -364,3 +364,8 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-350](tasks/T-350-client-perf-boost-toggle.md) | İstemci — panelde "Performans artışı" anahtarı (T-319 fling boost, varsayılan kapalı) | 7 | android-client-dev | [T-319] |
 | [T-351](tasks/T-351-host-obs-camera-probe.md) | Host deneme — OBS sanal kamera sink akışına dışarıdan kare yazılabiliyor mu? | 7 | mac-host-dev | [] |
 | [T-352](tasks/T-352-client-minimal-ui.md) | İstemci — giriş ekranı ve ayar paneli için sade (minimalist) yeniden tasarım | 7 | android-client-dev | [] |
+| [T-354](tasks/T-354-host-camera.md) | Host — tablet kamerası: kamera bağlantısı, H.264 çözme, OBS sanal kameraya yazım, kullanım algılama | 7 | mac-host-dev | [T-351] |
+| [T-355](tasks/T-355-client-camera.md) | İstemci — tablet kamerası: panel ayarı, Camera2 → H.264, kamera bağlantısı | 7 | android-client-dev | [] |
+| [T-357](tasks/T-357-camera-release-and-idle-stop.md) | Kamera — "Kamerayı şimdi kapat" (release_seq) ve boşta kullanım denetimi (karar 0040 ek 2, politika C) | 7 | mac-host-dev + android-client-dev | [T-354, T-355] |
+| [T-358](tasks/T-358-client-camera-wide.md) | İstemci — tablet kamerasında "Arka geniş açı" seçeneği | 7 | android-client-dev | [T-355] |
+| [T-359](tasks/T-359-camera-usb.md) | Kamera — USB oturumunda da çalışsın (adb reverse 47004) | 7 | mac-host-dev | [T-354, T-357] |
