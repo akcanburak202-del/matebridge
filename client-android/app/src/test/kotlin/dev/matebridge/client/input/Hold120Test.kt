@@ -65,7 +65,7 @@ class Hold120Test {
             "mode" to { ok(fps = 60) },
         )
         for ((reason, drop) in cases) {
-            made.clear(); logs.clear()
+            c.shutdown(); made.clear(); logs.clear(); timer.tasks.clear()
             ok()
             val a = made.single()
             drop()
@@ -333,5 +333,31 @@ class Hold120Test {
         assertFalse(made[0].canDispatch!!.invoke())
         now += 1000
         assertTrue(made[0].canDispatch!!.invoke())
+    }
+
+    // ---- round 5: focus ----
+
+    @Test fun focusLossReleasesCancelsRetryAndGuardsTheFirstDispatch() {
+        ok()
+        val a = made[0]
+        a.cancel!!.invoke() // a retry is pending
+        assertTrue(c.retryPending)
+        ok(fg = false) // the shade opened: focus lost
+        assertFalse(c.retryPending); assertFalse(c.holding)
+        ok(); now += 5000; ok(fg = false)
+        assertFalse(made.last().canDispatch!!.invoke())
+    }
+
+    @Test fun focusRegainedStartsOnlyAfterTheQuietPeriod() {
+        ok(); ok(fg = false)
+        assertEquals("hold120 state=off reason=background", logs.last())
+        val n = made.size
+        now += 5000
+        ok() // focus is back
+        assertEquals(n, made.size); assertFalse(c.holding)
+        assertEquals(1000L, timer.tasks.last().ms)
+        now += 1000
+        timer.fireLast()
+        assertTrue(c.holding)
     }
 }

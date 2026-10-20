@@ -90,6 +90,7 @@ class Hold120Controller(
     private var touching = false
     private var touchEndedAt = -10 * Hold120Rules.QUIET_MS
     private var backoffMs = 0L
+    private var wasForeground = true
 
     private data class Conditions(
         val enabled: Boolean, val serviceBound: Boolean, val streaming: Boolean, val foreground: Boolean,
@@ -146,6 +147,9 @@ class Hold120Controller(
     fun update(enabled: Boolean, serviceBound: Boolean, streaming: Boolean, foreground: Boolean, remote: Boolean, game: Boolean, fps: Int) {
         val c = Conditions(enabled, serviceBound, streaming, foreground, remote, game, fps)
         last = c
+        // Coming back to the foreground (focus regained after the shade, resume) starts a quiet period like a lifted touch.
+        if (foreground && !wasForeground) touchEndedAt = maxOf(touchEndedAt, nowMs())
+        wasForeground = foreground
         val reason = c.reason(touchQuiet())
         when (reason) {
             Hold120Rules.Reason.OK -> if (actuator == null && retry == null) startNow()
@@ -163,6 +167,7 @@ class Hold120Controller(
     fun shutdown() {
         cancelRetry()
         last = null
+        wasForeground = true
         val a = actuator ?: return
         actuator = null
         generation++
@@ -175,7 +180,7 @@ class Hold120Controller(
         startedAt = nowMs()
         val gen = ++generation
         try {
-            a.start({ onCancelled(gen) }, { touchQuiet() })
+            a.start({ onCancelled(gen) }, { last?.reason(touchQuiet()) == Hold120Rules.Reason.OK })
         } catch (_: Throwable) {
             actuator = null
             try { a.stop() } catch (_: Throwable) {}

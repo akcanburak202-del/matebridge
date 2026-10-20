@@ -354,7 +354,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             enabled = ::settings.isInitialized && settings.hold120(),
             serviceBound = dev.matebridge.client.input.HoldTouchService.bound,
             streaming = perfStreaming && !isDestroyed,
-            foreground = started && !isDestroyed,
+            foreground = started && resumedNow && windowFocused && !isDestroyed, // T-360: the shade or another window must not get a dispatched gesture
             remote = remoteSession,
             game = streamMode.isGame,
             fps = streamConfig?.fps ?: 0,
@@ -408,6 +408,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var currentEndpoint: Endpoint? = null
     private var manualMode = false
     private var started = false
+    private var resumedNow = false // T-360
+    private var windowFocused = false // T-360
     private var benchForwarded = false // T-090: this instance only forwarded to NetBenchActivity
     private var usbStartMs = 0L
 
@@ -789,6 +791,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
+        windowFocused = hasFocus
+        if (::settings.isInitialized) syncHold120() // T-360
         if (hasFocus) applyImmersive()
         if (::clipboard.isInitialized) { if (hasFocus) clipboard.start() else clipboard.stop() } // clipboard reads need focus
         if (!::capture.isInitialized) return
@@ -800,7 +804,15 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         // Release before onStop() closes the session, so RELEASE_ALL is queued ahead of BYE (PROTOCOL.md section 7).
         if (::capture.isInitialized) capture.releaseAll(ReleaseAll.BACKGROUND, SystemClock.uptimeMillis())
         if (::sidePanel.isInitialized) closeSettingsPanel(SettingsPanelState.Via.BACKGROUND, resync = false) // T-105; the ticker re-syncs
+        resumedNow = false
+        if (::settings.isInitialized) syncHold120() // T-360
         super.onPause()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        resumedNow = true
+        if (::settings.isInitialized) syncHold120() // T-360
     }
 
     // ---- input capture (T-024) ----

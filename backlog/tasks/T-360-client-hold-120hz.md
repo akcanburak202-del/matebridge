@@ -83,4 +83,9 @@ Karar 0041: kumanda ya da klavyeyle Oyun 120'de panel 60 Hz'te kalıyor. Basıl�
 - P2: `OverlayDropFilter` cihaz (deviceId) başına akış izler; yalnız DOWN'u (tüm işaretçiler dikdörtgen içinde) düşürülen cihazın akışı UP/CANCEL'e kadar düşer; başka cihazın UP'si ve karışık işaretçili olaylar geçer.
 - Testler eklendi (hazırlıkta temas, kalkış+sessizlik sonrası yeniden başlatma, koruma yüklemi, kalem UP'si geçer, karışık işaretçi geçer). check.sh: yalnız bilinen zamanlama testleri kırmızı.
 
+### Review turu 5
+
+- Ön plan koşulu artık `started && resumed && pencere odağı`: MainActivity onResume/onPause/onWindowFocusChanged hold koşullarını besler. Odak kaybında (bildirim paneli vb.) tutuş `reason=background` ile bırakılır, bekleyen yeniden deneme iptal edilir. Ön plana dönüş (odak/resume) kalkan dokunma gibi 1 sn sessizlik başlatır. İlk dispatch korumasi (`canDispatch`) artık tüm koşulları (odak dahil) yeniden değerlendirir.
+- Testler: odak kaybı → bırak + yeniden deneme iptal + koruma false; odak dönünce yalnız sessizlik sonrası başlar. check.sh: yalnız bilinen zamanlama testleri kırmızı.
+
 ## Open questions
