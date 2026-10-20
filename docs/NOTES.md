@@ -1984,3 +1984,14 @@ Host release, `main`. Tablette ölçüm için debug APK kullanıldı; sonunda da
 - **Döndürme:** MatePad doğal yönü dikey (base 1840x2800), uygulama ROTATION_90. Sensör: arka 90, ön 270. Camera2 → SurfaceTexture dönüşüm matrisi sensör yönünü (ve önde aynalamayı) **zaten içeriyor**; CameraX formülüyle bir kez daha döndürmek 90° yan ve basık görüntü verdi. Düzeltme: doğal yöndeki boyut + yalnız ekran dönüşü (mvp kuralında 270), ön kamerada yatay çevirme. Photo Booth önizlemesinde: ön kamerada sağ el sağda (doğru), arka kamerada yazılar aynalı (Photo Booth her kamerada önizlemeyi aynalar; gönderilen görüntü düz).
 - Test edilmedi: boşta (10 dk) ve uyku denetimiyle STOP, USB oturumu (UNAVAILABLE beklenir), uzun görüşmede ısı/pil.
 - 12:55 **Geniş açı (T-358):** mantıksal arka kamera 0 + fiziksel "4" (1,95 mm) yolu çalışıyor; görüntü düz, görüş alanı belirgin geniş, döndürme kuralı aynı (fiziksel akışta da SurfaceTexture matrisi sensör yönünü içeriyor). Kullanıcı doğruladı.
+
+## 2026-10-20 ~22:00 — Kumandayla 120 Hz: sahte dokunma denemesi (adb, Wi-Fi)
+
+Kurulum: Oyun 120, 1848×1214, `hw_screen_freq=1` (Yüksek), oyun kapalı (Mac masaüstü). Panel hızı `dumpsys SurfaceFlinger` "Current mode" ile ~0,25 sn'de bir örneklendi; olay 2. saniyede `adb shell input …` ile gönderildi.
+
+- `input mouse roll` → `SecurityException: Injecting to another application requires INJECT_EVENTS`: fare olayı shell'den gönderilemiyor. `trackball roll`, `touchpad roll` → hata yok, panel 60'ta kaldı.
+- `touchscreen swipe` (1 px, 50 ms) ve `tap` → panel **120**'ye çıkıyor, 1,5–2,5 sn sonra 60'a iniyor (iki tekrar aynı).
+- `touchscreen motionevent DOWN` basılı tutuldu → panel **40 sn boyunca kesintisiz 120** (UP ile bitti).
+- Sahte dokunma istemciye normal dokunma olarak ulaşıyor ve Mac'e işaretçi olarak gidiyor (host `input_age pointer_n` arttı). Kullanılacaksa istemci bu dokunmayı yutmalı (ör. ayrı küçük pencere, böylece gerçek dokunmalar çoklu dokunmaya karışmaz).
+- Sonuç: AGP gerçek ve sahte dokunmayı ayırmıyor; basılı tek bir dokunma, kumandayla oyunda paneli 120'de tutmaya yetiyor. Uygulama içi yol (adb'siz) için aday: erişilebilirlik servisi `dispatchGesture` (denenmedi). Pil/ısı bedeli ölçülmedi.
+- Kullanıcı notu: `hw_screen_freq` (Ekran yenileme hızı) kullanıcı tarafından sık sık Standart'a alınıp unutuluyor; 120 modunda panel 60'ta kalırsa önce buna bakılmalı.
