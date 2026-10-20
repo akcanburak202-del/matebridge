@@ -33,7 +33,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-333](tasks/T-333-game-encoder-peaks.md) | Oyun 60 — kodlayıcı kare boyutu tepeleri (LLRC/ConstantBitRate, kısa rate penceresi, MaxAllowedFrameQP) EncodeBench karşılaştırması | 7 | mac-host-dev | [T-330] |
 | [T-334](tasks/T-334-dav-copy-put-concurrency.md) | WebDAV — eşzamanlı COPY/MOVE geri alması başka bağlantının başarılı PUT'unu silmesin | 7 | android-client-dev | [T-288] |
 | [T-335](tasks/T-335-host-pipeline-stop-join.md) | Host — pipeline teardown sürerken ikinci stop çağıranı beklesin; hata zamanı teardown'dan önce alınsın | 7 | mac-host-dev | [T-325, T-293] |
-| [T-360](tasks/T-360-client-hold-120hz.md) | İstemci — "Kumandayla 120 Hz" (erişilebilirlik servisiyle basılı sahte dokunma, varsayılan kapalı) | 7 | android-client-dev | [T-350] |
 
 ## done
 
@@ -370,3 +369,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-357](tasks/T-357-camera-release-and-idle-stop.md) | Kamera — "Kamerayı şimdi kapat" (release_seq) ve boşta kullanım denetimi (karar 0040 ek 2, politika C) | 7 | mac-host-dev + android-client-dev | [T-354, T-355] |
 | [T-358](tasks/T-358-client-camera-wide.md) | İstemci — tablet kamerasında "Arka geniş açı" seçeneği | 7 | android-client-dev | [T-355] |
 | [T-359](tasks/T-359-camera-usb.md) | Kamera — USB oturumunda da çalışsın (adb reverse 47004) | 7 | mac-host-dev | [T-354, T-357] |
+| [T-360](tasks/T-360-client-hold-120hz.md) | İstemci — "Kumandayla 120 Hz" (erişilebilirlik servisiyle basılı sahte dokunma, varsayılan kapalı) | 7 | android-client-dev | [T-350] |
