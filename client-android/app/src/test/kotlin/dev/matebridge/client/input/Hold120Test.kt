@@ -10,7 +10,11 @@ class Hold120Test {
         var starts = 0
         var stops = 0
         var cancel: (() -> Unit)? = null
-        override fun start(onCancelled: () -> Unit) { starts++; cancel = onCancelled }
+        var canDispatch: (() -> Boolean)? = null
+        var preparing = false
+        var aborts = 0
+        override fun start(onCancelled: () -> Unit, canDispatch: () -> Boolean) { starts++; cancel = onCancelled; this.canDispatch = canDispatch }
+        override fun abortIfPreparing(): Boolean { if (preparing) { aborts++; preparing = false; return true }; return false }
         override fun stop() { stops++ }
     }
 
@@ -267,21 +271,67 @@ class Hold120Test {
         assertFalse(g.draining)
     }
 
-    @Test fun touchStartingInsideTheOverlayIsDroppedForItsWholeStream() {
+    private val rect = intArrayOf(48, 48, 72, 72)
+    private fun fx(vararg v: Float) = v
+
+    @Test fun streamStartingInsideTheOverlayIsDroppedThroughItsUp() {
         val f = OverlayDropFilter()
-        val rect = intArrayOf(48, 48, 72, 72)
         val t = ContactTracker.SRC_TOUCH
-        assertTrue(f.drop(t, 0, 60f, 60f, rect))
-        assertTrue(f.drop(t, 2, 500f, 500f, rect)) // moved away: still the same stream
-        assertTrue(f.drop(t, 1, 500f, 500f, null)) // overlay gone: stream still dropped to its UP
-        assertFalse(f.drop(t, 0, 500f, 500f, rect)) // next stream, elsewhere
-        assertFalse(f.drop(t, 1, 500f, 500f, rect))
+        assertTrue(f.drop(1, t, 0, fx(60f), fx(60f), 1, rect))
+        assertTrue(f.drop(1, t, 2, fx(500f), fx(500f), 1, rect))
+        assertTrue(f.drop(1, t, 1, fx(500f), fx(500f), 1, null)) // overlay gone: still dropped to its UP
+        assertEquals(0, f.activeStreams)
+        assertFalse(f.drop(1, t, 0, fx(500f), fx(500f), 1, rect))
     }
 
-    @Test fun dropFilterIgnoresMouseAndNoOverlay() {
+    @Test fun otherDevicesUpPassesWhileAStreamIsDropped() {
         val f = OverlayDropFilter()
-        assertFalse(f.drop(ContactTracker.SRC_MOUSE, 0, 60f, 60f, intArrayOf(48, 48, 72, 72)))
-        assertFalse(f.drop(ContactTracker.SRC_TOUCH, 0, 60f, 60f, null))
-        assertFalse(f.drop(ContactTracker.SRC_TOUCH, 1, 60f, 60f, null))
+        val pen = ContactTracker.SRC_STYLUS
+        assertFalse(f.drop(2, pen, 0, fx(900f), fx(900f), 1, rect)) // pen down outside: forwarded
+        assertTrue(f.drop(1, ContactTracker.SRC_TOUCH, 0, fx(60f), fx(60f), 1, rect)) // finger down in the rect: dropped
+        assertFalse(f.drop(2, pen, 1, fx(900f), fx(900f), 1, rect)) // the pen UP must pass
+        assertTrue(f.drop(1, ContactTracker.SRC_TOUCH, 1, fx(60f), fx(60f), 1, rect))
+    }
+
+    @Test fun mixedPointersAndMouseAndNoOverlayPass() {
+        val f = OverlayDropFilter()
+        assertFalse(f.drop(1, ContactTracker.SRC_TOUCH, 0, fx(60f, 900f), fx(60f, 900f), 2, rect))
+        assertFalse(f.drop(1, ContactTracker.SRC_MOUSE, 0, fx(60f), fx(60f), 1, rect))
+        assertFalse(f.drop(1, ContactTracker.SRC_TOUCH, 0, fx(60f), fx(60f), 1, null))
+        assertEquals(0, f.activeStreams)
+    }
+
+    // ---- round 4 ----
+
+    @Test fun touchDuringPreparationAbortsAndRestartsAfterLiftAndQuiet() {
+        ok()
+        made[0].preparing = true // overlay added, nothing dispatched yet
+        c.onTouch(true)
+        assertEquals(1, made[0].aborts); assertEquals(0, made[0].stops)
+        assertFalse(c.holding); assertEquals("hold120 state=off reason=touch", logs.last())
+        assertTrue(timer.tasks.isEmpty())
+        now += 300
+        c.onTouch(false)
+        assertEquals(1000L, timer.tasks.last().ms)
+        now += 1000
+        timer.fireLast()
+        assertTrue(c.holding); assertEquals(2, made.size)
+    }
+
+    @Test fun runningHoldIsNotReleasedByTouch() {
+        ok()
+        c.onTouch(true)
+        assertTrue(c.holding); assertEquals(0, made[0].aborts)
+    }
+
+    @Test fun guardMatchesTheQuietPredicate() {
+        ok()
+        assertTrue(made[0].canDispatch!!.invoke())
+        c.onTouch(true)
+        assertFalse(made[0].canDispatch!!.invoke())
+        c.onTouch(false)
+        assertFalse(made[0].canDispatch!!.invoke())
+        now += 1000
+        assertTrue(made[0].canDispatch!!.invoke())
     }
 }

@@ -55,8 +55,14 @@ enum class Hold120Target(val id: String) {
 /** The thing that holds the touch. [stop] must send the UP and be safe to call when nothing is held. */
 interface Hold120Actuator {
     /** Starts holding; [onCancelled] fires (any thread; the caller posts to main) when the system cancelled the touch. */
-    fun start(onCancelled: () -> Unit)
+    fun start(onCancelled: () -> Unit, canDispatch: () -> Boolean)
     fun stop()
+
+    /**
+     * A real contact began. If the first gesture has not been dispatched yet, abandons the preparation (overlay removed,
+     * no UP needed) and returns true; a running hold is left alone (returns false: Android cancels it itself).
+     */
+    fun abortIfPreparing(): Boolean
 }
 
 /** One delayed main-thread task, cancellable. */
@@ -103,6 +109,14 @@ class Hold120Controller(
         if (down == touching) return
         touching = down
         if (!down) touchEndedAt = nowMs()
+        if (down) {
+            val a = actuator
+            if (a != null && try { a.abortIfPreparing() } catch (_: Throwable) { false }) {
+                actuator = null
+                generation++
+                log("hold120", "state=off reason=${Hold120Rules.Reason.TOUCH.logName}")
+            }
+        }
         val c = last ?: return
         if (!down && actuator == null) {
             val r = c.reason(touchQuiet())
@@ -161,7 +175,7 @@ class Hold120Controller(
         startedAt = nowMs()
         val gen = ++generation
         try {
-            a.start { onCancelled(gen) }
+            a.start({ onCancelled(gen) }, { touchQuiet() })
         } catch (_: Throwable) {
             actuator = null
             try { a.stop() } catch (_: Throwable) {}
@@ -330,22 +344,30 @@ class DrainGate {
 }
 
 /**
- * Belt and braces: while the overlay exists, a touchscreen/stylus pointer stream whose DOWN lands inside the overlay's
- * on-screen rect is dropped (never forwarded to the Mac) until its UP/CANCEL. Pure; the caller passes raw coordinates.
+ * Belt and braces: while the overlay exists, a touchscreen/stylus stream (per input device) whose DOWN lands inside the
+ * overlay's on-screen rect, with every pointer inside it, is dropped (never forwarded to the Mac) through its UP/CANCEL.
+ * Events of any other device, and events that mix pointers inside and outside the rect, always pass: an UP is only ever
+ * consumed for a stream whose DOWN was consumed too. Pure; the caller passes raw coordinates.
  */
 class OverlayDropFilter {
-    private var dropping = false
+    private val dropped = HashSet<Int>()
 
-    /** [rect] = l, t, r, b on screen, or null when no overlay exists. Returns true to drop the event. */
-    fun drop(source: Int, actionMasked: Int, x: Float, y: Float, rect: IntArray?): Boolean {
+    /** [rect] = l, t, r, b on screen, or null when no overlay exists. [n] pointers in [xs]/[ys]. True = drop the event. */
+    fun drop(deviceId: Int, source: Int, actionMasked: Int, xs: FloatArray, ys: FloatArray, n: Int, rect: IntArray?): Boolean {
         val real = (source and ContactTracker.SRC_MOUSE) != ContactTracker.SRC_MOUSE &&
             ((source and ContactTracker.SRC_TOUCH) == ContactTracker.SRC_TOUCH || (source and ContactTracker.SRC_STYLUS) == ContactTracker.SRC_STYLUS)
         if (!real) return false
-        if (actionMasked == ContactTracker.ACTION_DOWN) {
-            dropping = rect != null && x >= rect[0] && x < rect[2] && y >= rect[1] && y < rect[3]
+        if (deviceId in dropped) {
+            if (actionMasked == ContactTracker.ACTION_UP || actionMasked == ContactTracker.ACTION_CANCEL) dropped.remove(deviceId)
+            return true
         }
-        val drop = dropping
-        if (actionMasked == ContactTracker.ACTION_UP || actionMasked == ContactTracker.ACTION_CANCEL) dropping = false
-        return drop
+        if (actionMasked == ContactTracker.ACTION_DOWN && rect != null && n > 0) {
+            var allInside = true
+            for (i in 0 until n) if (!(xs[i] >= rect[0] && xs[i] < rect[2] && ys[i] >= rect[1] && ys[i] < rect[3])) allInside = false
+            if (allInside) { dropped.add(deviceId); return true }
+        }
+        return false
     }
+
+    val activeStreams: Int get() = dropped.size
 }

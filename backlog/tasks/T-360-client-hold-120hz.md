@@ -77,4 +77,10 @@ Karar 0041: kumanda ya da klavyeyle Oyun 120'de panel 60 Hz'te kalıyor. Basıl�
 - P2: `DrainGate`: boşaltma sırasında ikinci `stop()` etkisiz; overlay'i yalnız son parçanın bitişi/iptali/zaman aşımı kaldırır.
 - Testler: hazırlık kararı, DrainGate, düşürme süzgeci. check.sh: yalnız bilinen zamanlama testleri (DecoderWaitTest, OutputParkTest, Swift BoundedWaitTests) kırmızı.
 
+### Review turu 4
+
+- P1: `Hold120Actuator.abortIfPreparing()` (gerçek temas, ilk dispatch'ten önce başlarsa: dispatch yok, overlay kalkar, UP gerekmez; controller `reason=touch` günlüğü, temas kalkınca + 1 sn sessizlikten sonra normal ertelenmiş başlatma). Ayrıca `start(onCancelled, canDispatch)`: ilk dispatch'ten hemen önce controller'ın sessizlik koşulu yeniden sorulur, değilse iptal yolu. Çalışan tutuş hâlâ onTouch ile bırakılmaz.
+- P2: `OverlayDropFilter` cihaz (deviceId) başına akış izler; yalnız DOWN'u (tüm işaretçiler dikdörtgen içinde) düşürülen cihazın akışı UP/CANCEL'e kadar düşer; başka cihazın UP'si ve karışık işaretçili olaylar geçer.
+- Testler eklendi (hazırlıkta temas, kalkış+sessizlik sonrası yeniden başlatma, koruma yüklemi, kalem UP'si geçer, karışık işaretçi geçer). check.sh: yalnız bilinen zamanlama testleri kırmızı.
+
 ## Open questions

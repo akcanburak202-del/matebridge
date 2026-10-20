@@ -78,12 +78,14 @@ class HoldTouchActuator(private val service: HoldTouchService) : Hold120Actuator
     private var ox = 0 // actual on-screen origin minus the intended one
     private var oy = 0
     private var onCancelled: (() -> Unit)? = null
+    private var canDispatch: () -> Boolean = { true }
     private var epoch = 0
 
-    override fun start(onCancelled: () -> Unit) {
+    override fun start(onCancelled: () -> Unit, canDispatch: () -> Boolean) {
         if (gate.active || gate.draining) return
         gate.onStart()
         this.onCancelled = onCancelled
+        this.canDispatch = canDispatch
         HoldTouchService.activeActuator = this
         val e = ++epoch
         val wm = service.getSystemService(Context.WINDOW_SERVICE) as WindowManager
@@ -127,6 +129,7 @@ class HoldTouchActuator(private val service: HoldTouchService) : Hold120Actuator
         val ready = if (laidOut) (readyAt ?: now) else null
         when (OverlayReadiness.decide(laidOut, laidOut, ready?.let { now - it }, now - startedAt)) {
             OverlayReadiness.Verdict.GO -> {
+                if (!canDispatch()) { fail(e); return } // a real contact (or its quiet period) began during the settle
                 ox = loc[0] - HoldPathGeometry.INSET_PX
                 oy = loc[1] - HoldPathGeometry.INSET_PX
                 HoldTouchService.overlayRect = intArrayOf(loc[0], loc[1], loc[0] + v.width, loc[1] + v.height)
@@ -172,6 +175,16 @@ class HoldTouchActuator(private val service: HoldTouchService) : Hold120Actuator
         val cb = onCancelled
         // The controller calls stop() (which removes the window); it then schedules the retry.
         handler.post { if (e == epoch) cb?.invoke() }
+    }
+
+    override fun abortIfPreparing(): Boolean {
+        if (!gate.active || gate.draining || stroke != null) return false
+        gate.onStop(false)
+        epoch++
+        onCancelled = null
+        if (HoldTouchService.activeActuator === this) HoldTouchService.activeActuator = null
+        removeOverlay()
+        return true
     }
 
     override fun stop() {

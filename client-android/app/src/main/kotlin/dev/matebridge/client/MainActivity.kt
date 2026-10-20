@@ -333,6 +333,15 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     /** T-360: real finger/stylus contacts (not mouse, trackpad or hover) defer the held touch; a dispatched gesture would cancel them. */
     private val hold120Drop = dev.matebridge.client.input.OverlayDropFilter()
+    private val dropXs = FloatArray(16)
+    private val dropYs = FloatArray(16)
+    private fun hold120DropEvent(ev: MotionEvent): Boolean {
+        val n = minOf(ev.pointerCount, dropXs.size)
+        if (ev.actionMasked == MotionEvent.ACTION_DOWN || hold120Drop.activeStreams > 0) {
+            for (i in 0 until n) { dropXs[i] = ev.getRawX(i); dropYs[i] = ev.getRawY(i) }
+        }
+        return hold120Drop.drop(ev.deviceId, ev.source, ev.actionMasked, dropXs, dropYs, n, dev.matebridge.client.input.HoldTouchService.overlayRect)
+    }
     private val hold120Contacts = dev.matebridge.client.input.ContactTracker()
     private fun noteHold120Contact(ev: MotionEvent) {
         val before = hold120Contacts.touching
@@ -878,7 +887,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
         // T-360: a real touch that starts on the hold overlay is dropped, never sent to the Mac.
-        if (hold120Drop.drop(ev.source, ev.actionMasked, ev.rawX, ev.rawY, dev.matebridge.client.input.HoldTouchService.overlayRect)) return true
+        if (hold120DropEvent(ev)) return true
         noteHold120Contact(ev) // before anything can throw
         noteInputActivity()
         try {
