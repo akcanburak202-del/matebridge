@@ -15,12 +15,12 @@ object Hold120Rules {
     /** Why the touch is (not) held; [logName] is the `reason=` token. */
     enum class Reason(val logName: String) {
         SETTING("setting"), REMOTE("remote"), SERVICE("service"), BACKGROUND("background"), STREAM("stream"), MODE("mode"),
-        CANCELLED("cancelled"), OK("ok"),
+        TOUCH("touch"), CANCELLED("cancelled"), OK("ok"),
     }
 
     /** The first failing condition in a fixed order, or [Reason.OK]; the touch is held only for OK. */
     fun reason(
-        enabled: Boolean, serviceBound: Boolean, streaming: Boolean, foreground: Boolean, remote: Boolean, game: Boolean, fps: Int,
+        enabled: Boolean, serviceBound: Boolean, streaming: Boolean, foreground: Boolean, remote: Boolean, game: Boolean, fps: Int, touchQuiet: Boolean = true,
     ): Reason = when {
         !enabled -> Reason.SETTING
         remote -> Reason.REMOTE
@@ -28,11 +28,15 @@ object Hold120Rules {
         !foreground -> Reason.BACKGROUND
         !streaming -> Reason.STREAM
         !game || fps < MIN_FPS -> Reason.MODE
+        !touchQuiet -> Reason.TOUCH
         else -> Reason.OK
     }
 
     /** Retry delay after the n-th quick cancellation in a row (n >= 1): 1 s, 2 s, 4 s, then 8 s at most. */
     fun retryDelayMs(consecutive: Int): Long = 1000L shl (consecutive - 1).coerceIn(0, 3)
+
+    /** No real contact for this long before a (re)start: dispatching a gesture cancels a real one in progress. */
+    const val QUIET_MS = 1000L
 
     /** A hold that lasted this long counts as stable: the next cancellation starts the back-off over. */
     const val STABLE_MS = 5000L
@@ -77,12 +81,49 @@ class Hold120Controller(
     private var quickCancels = 0
     private var last: Conditions? = null
     private var generation = 0
+    private var touching = false
+    private var touchEndedAt = -10 * Hold120Rules.QUIET_MS
+    private var backoffMs = 0L
 
     private data class Conditions(
         val enabled: Boolean, val serviceBound: Boolean, val streaming: Boolean, val foreground: Boolean,
         val remote: Boolean, val game: Boolean, val fps: Int,
     ) {
-        fun reason() = Hold120Rules.reason(enabled, serviceBound, streaming, foreground, remote, game, fps)
+        fun reason(touchQuiet: Boolean) = Hold120Rules.reason(enabled, serviceBound, streaming, foreground, remote, game, fps, touchQuiet)
+    }
+
+    private fun touchQuiet() = !touching && nowMs() - touchEndedAt >= Hold120Rules.QUIET_MS
+    private fun quietRemainingMs() = if (touching) Hold120Rules.QUIET_MS else (Hold120Rules.QUIET_MS - (nowMs() - touchEndedAt)).coerceAtLeast(0)
+
+    /**
+     * A real finger/stylus contact started ([down]) or the last one ended. Never releases a held touch (the UP would cancel
+     * the real gesture); only defers (re)starts until contacts are up and [Hold120Rules.QUIET_MS] has passed.
+     */
+    fun onTouch(down: Boolean) {
+        if (down == touching) return
+        touching = down
+        if (!down) touchEndedAt = nowMs()
+        val c = last ?: return
+        if (!down && actuator == null) {
+            val r = c.reason(touchQuiet())
+            if (r == Hold120Rules.Reason.OK || r == Hold120Rules.Reason.TOUCH) scheduleStart()
+        }
+    }
+
+    private fun scheduleStart() {
+        if (retry != null || touching) return // a touch end schedules it
+        val delay = maxOf(quietRemainingMs(), backoffMs)
+        retry = timer.postDelayed(delay) {
+            retry = null
+            val l = last
+            if (l != null && actuator == null) {
+                when (l.reason(touchQuiet())) {
+                    Hold120Rules.Reason.OK -> startNow()
+                    Hold120Rules.Reason.TOUCH -> scheduleStart()
+                    else -> {}
+                }
+            }
+        }
     }
 
     val holding: Boolean get() = actuator != null
@@ -91,13 +132,16 @@ class Hold120Controller(
     fun update(enabled: Boolean, serviceBound: Boolean, streaming: Boolean, foreground: Boolean, remote: Boolean, game: Boolean, fps: Int) {
         val c = Conditions(enabled, serviceBound, streaming, foreground, remote, game, fps)
         last = c
-        val reason = c.reason()
-        if (reason == Hold120Rules.Reason.OK) {
-            if (actuator == null && retry == null) startNow()
-        } else {
-            cancelRetry()
-            if (actuator != null) release(reason)
-            quickCancels = 0
+        val reason = c.reason(touchQuiet())
+        when (reason) {
+            Hold120Rules.Reason.OK -> if (actuator == null && retry == null) startNow()
+            Hold120Rules.Reason.TOUCH -> if (actuator == null) scheduleStart() // a held touch is left alone
+            else -> {
+                cancelRetry()
+                if (actuator != null) release(reason)
+                quickCancels = 0
+                backoffMs = 0
+            }
         }
     }
 
@@ -134,13 +178,10 @@ class Hold120Controller(
         try { a.stop() } catch (_: Throwable) {}
         log("hold120", "state=off reason=${Hold120Rules.Reason.CANCELLED.logName}")
         quickCancels = if (nowMs() - startedAt >= Hold120Rules.STABLE_MS) 1 else quickCancels + 1
+        backoffMs = Hold120Rules.retryDelayMs(quickCancels)
         val c = last ?: return
-        if (c.reason() != Hold120Rules.Reason.OK) return
-        retry = timer.postDelayed(Hold120Rules.retryDelayMs(quickCancels)) {
-            retry = null
-            val l = last
-            if (l != null && actuator == null && l.reason() == Hold120Rules.Reason.OK) startNow()
-        }
+        val r = c.reason(touchQuiet())
+        if (r == Hold120Rules.Reason.OK || r == Hold120Rules.Reason.TOUCH) scheduleStart()
     }
 
     private fun release(reason: Hold120Rules.Reason) {
@@ -155,4 +196,38 @@ class Hold120Controller(
         try { retry?.close() } catch (_: Exception) {}
         retry = null
     }
+}
+
+/**
+ * Geometry of the held touch (pure). A stroke that never moves produces only a DOWN in AOSP's injector and an unmoved
+ * continuation is reported as a failure, so every segment travels 2 x [AMPLITUDE_PX] inside the overlay: segment n goes
+ * A->B for even n and B->A for odd n, so each starts where the previous ended. All points stay inside the overlay.
+ */
+object HoldPathGeometry {
+    const val OVERLAY_SIZE_PX = 24
+    const val INSET_PX = 48
+    const val AMPLITUDE_PX = 6
+    const val FINAL_STEP_PX = 2
+
+    data class Seg(val x0: Float, val y0: Float, val x1: Float, val y1: Float)
+
+    private const val CX = (INSET_PX + OVERLAY_SIZE_PX / 2).toFloat()
+    private const val CY = (INSET_PX + OVERLAY_SIZE_PX / 2).toFloat()
+
+    /** The n-th chunk (n >= 0). */
+    fun segment(n: Int): Seg {
+        val a = CX - AMPLITUDE_PX
+        val b = CX + AMPLITUDE_PX
+        return if (n % 2 == 0) Seg(a, CY, b, CY) else Seg(b, CY, a, CY)
+    }
+
+    /** The closing UP stroke after chunk [n]: starts where chunk n ended and moves [FINAL_STEP_PX] toward the middle. */
+    fun finalSegment(n: Int): Seg {
+        val end = segment(n)
+        val dx = if (end.x1 > CX) -FINAL_STEP_PX else FINAL_STEP_PX
+        return Seg(end.x1, end.y1, end.x1 + dx, end.y1)
+    }
+
+    fun inside(x: Float, y: Float): Boolean =
+        x > INSET_PX && x < INSET_PX + OVERLAY_SIZE_PX && y > INSET_PX && y < INSET_PX + OVERLAY_SIZE_PX
 }

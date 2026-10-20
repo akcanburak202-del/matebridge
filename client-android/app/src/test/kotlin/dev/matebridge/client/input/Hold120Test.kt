@@ -143,4 +143,66 @@ class Hold120Test {
         assertEquals(Hold120Target.OVERLAY, Hold120Target.parse("x"))
         assertEquals(Hold120Target.SURFACE, Hold120Target.parse(" Surface "))
     }
+
+    // ---- P1-1: geometry ----
+
+    @Test fun segmentsMoveChainAndStayInsideTheOverlay() {
+        for (n in 0..7) {
+            val g = HoldPathGeometry.segment(n)
+            assertTrue("moves", g.x0 != g.x1 || g.y0 != g.y1)
+            assertTrue(HoldPathGeometry.inside(g.x0, g.y0)); assertTrue(HoldPathGeometry.inside(g.x1, g.y1))
+            val nx = HoldPathGeometry.segment(n + 1)
+            assertEquals(g.x1, nx.x0, 0f); assertEquals(g.y1, nx.y0, 0f) // a continuation starts where the last ended
+            val f = HoldPathGeometry.finalSegment(n)
+            assertEquals(g.x1, f.x0, 0f); assertEquals(g.y1, f.y0, 0f)
+            assertTrue("final moves", f.x0 != f.x1)
+            assertTrue(HoldPathGeometry.inside(f.x1, f.y1))
+        }
+    }
+
+    // ---- P1-2: real contact ----
+
+    @Test fun noStartWhileTouchingThenStartsAfterQuietPeriod() {
+        c.onTouch(true)
+        ok()
+        assertTrue(made.isEmpty()); assertFalse(c.holding)
+        assertTrue(timer.tasks.isEmpty()) // waits for the contact to end
+        now += 500
+        c.onTouch(false)
+        assertEquals(1000L, timer.tasks.last().ms)
+        now += 1000
+        timer.fireLast()
+        assertTrue(c.holding); assertEquals(1, made.size)
+    }
+
+    @Test fun retryDeferredUntilContactsLiftAndQuiet() {
+        ok()
+        c.onTouch(true) // the real touch cancels the held one
+        made[0].cancel!!.invoke()
+        assertFalse(c.holding); assertFalse(c.retryPending)
+        now += 3000
+        c.onTouch(false)
+        assertTrue(c.retryPending)
+        assertEquals(1000L, timer.tasks.last().ms)
+        c.onTouch(true) // touches again before the timer fires
+        now += 1000
+        timer.fireLast()
+        assertFalse(c.holding)
+        c.onTouch(false)
+        now += 1000
+        timer.fireLast()
+        assertTrue(c.holding)
+    }
+
+    @Test fun touchNeverReleasesAHeldTouch() {
+        ok()
+        c.onTouch(true)
+        ok()
+        assertEquals(0, made[0].stops); assertTrue(c.holding)
+    }
+
+    @Test fun touchReasonToken() {
+        assertEquals(Hold120Rules.Reason.TOUCH, Hold120Rules.reason(true, true, true, true, false, true, 120, touchQuiet = false))
+        assertEquals("touch", Hold120Rules.Reason.TOUCH.logName)
+    }
 }

@@ -69,7 +69,7 @@ class HoldTouchActuator(private val service: HoldTouchService) : Hold120Actuator
     private val handler = Handler(Looper.getMainLooper())
     private var overlay: View? = null
     private var stroke: GestureDescription.StrokeDescription? = null
-    private var path: Path? = null
+    private var seg = 0 // index of the chunk last dispatched (HoldPathGeometry)
     private var active = false
     private var onCancelled: (() -> Unit)? = null
     private var epoch = 0
@@ -81,7 +81,7 @@ class HoldTouchActuator(private val service: HoldTouchService) : Hold120Actuator
         HoldTouchService.activeActuator = this
         val e = ++epoch
         val wm = service.getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        val size = SIZE_PX
+        val size = HoldPathGeometry.OVERLAY_SIZE_PX
         val v = object : View(service) {
             override fun onTouchEvent(event: MotionEvent?): Boolean = true // swallow: never reaches anything below
         }
@@ -93,8 +93,8 @@ class HoldTouchActuator(private val service: HoldTouchService) : Hold120Actuator
             PixelFormat.TRANSLUCENT,
         )
         lp.gravity = Gravity.TOP or Gravity.START
-        lp.x = INSET_PX
-        lp.y = INSET_PX
+        lp.x = HoldPathGeometry.INSET_PX
+        lp.y = HoldPathGeometry.INSET_PX
         try {
             wm.addView(v, lp)
             overlay = v
@@ -104,10 +104,8 @@ class HoldTouchActuator(private val service: HoldTouchService) : Hold120Actuator
             handler.post { if (e == epoch) onCancelled() }
             return
         }
-        val p = Path().apply { moveTo((INSET_PX + size / 2).toFloat(), (INSET_PX + size / 2).toFloat()) }
-        path = p
-        val d = chunkMs()
-        val s = GestureDescription.StrokeDescription(p, 0, d, true)
+        seg = 0
+        val s = GestureDescription.StrokeDescription(pathOf(HoldPathGeometry.segment(0)), 0, chunkMs(), true)
         stroke = s
         dispatch(s, e)
     }
@@ -121,9 +119,9 @@ class HoldTouchActuator(private val service: HoldTouchService) : Hold120Actuator
                 object : android.accessibilityservice.AccessibilityService.GestureResultCallback() {
                     override fun onCompleted(g: GestureDescription?) {
                         if (e != epoch || !active) return
-                        val p = path ?: return
                         val prev = stroke ?: return
-                        val next = try { prev.continueStroke(p, 0, chunkMs(), true) } catch (_: Throwable) { fail(e); return }
+                        seg++
+                        val next = try { prev.continueStroke(pathOf(HoldPathGeometry.segment(seg)), 0, chunkMs(), true) } catch (_: Throwable) { fail(e); return }
                         stroke = next
                         dispatch(next, e)
                     }
@@ -152,19 +150,31 @@ class HoldTouchActuator(private val service: HoldTouchService) : Hold120Actuator
         epoch++
         if (HoldTouchService.activeActuator === this) HoldTouchService.activeActuator = null
         val s = stroke
-        val p = path
         stroke = null
-        path = null
         onCancelled = null
-        if (wasActive && s != null && p != null) {
-            // The UP: a short final stroke with willContinue = false ends the held touch.
+        if (wasActive && s != null) {
+            // The UP: a short final stroke (it must move, see HoldPathGeometry) with willContinue = false ends the held touch.
+            // The overlay stays until it completes or cancels (or a short timeout), so the UP lands on the overlay.
+            var done = false
+            val finish = Runnable { if (!done) { done = true; handler.removeCallbacksAndMessages(null); removeOverlay() } }
             try {
-                val last = s.continueStroke(p, 0, FINAL_MS, false)
-                service.dispatchGesture(GestureDescription.Builder().addStroke(last).build(), null, handler)
+                val f = HoldPathGeometry.finalSegment(seg)
+                val last = s.continueStroke(pathOf(f), 0, FINAL_MS, false)
+                val ok = service.dispatchGesture(
+                    GestureDescription.Builder().addStroke(last).build(),
+                    object : AccessibilityService.GestureResultCallback() {
+                        override fun onCompleted(g: GestureDescription?) = finish.run()
+                        override fun onCancelled(g: GestureDescription?) = finish.run()
+                    },
+                    handler,
+                )
+                if (ok) { handler.postDelayed(finish, FINAL_TIMEOUT_MS); return }
             } catch (_: Throwable) {}
         }
         removeOverlay()
     }
+
+    private fun pathOf(g: HoldPathGeometry.Seg) = Path().apply { moveTo(g.x0, g.y0); lineTo(g.x1, g.y1) }
 
     private fun removeOverlay() {
         val v = overlay ?: return
@@ -173,10 +183,9 @@ class HoldTouchActuator(private val service: HoldTouchService) : Hold120Actuator
     }
 
     private companion object {
-        const val SIZE_PX = 16
-        const val INSET_PX = 48
         const val CHUNK_MS = 10_000L
         const val MIN_CHUNK_MS = 1_000L
         const val FINAL_MS = 50L
+        const val FINAL_TIMEOUT_MS = 400L
     }
 }

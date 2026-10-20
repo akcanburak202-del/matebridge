@@ -331,6 +331,16 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         log = { ev, f -> MbLog.i(ev, f) },
     )
 
+    /** T-360: real finger/stylus contact (not mouse, trackpad or hover) defers the held touch; a dispatched gesture would cancel it. */
+    private fun noteHold120Contact(ev: MotionEvent) {
+        val src = ev.source
+        if (src and (android.view.InputDevice.SOURCE_TOUCHSCREEN or android.view.InputDevice.SOURCE_STYLUS) == 0) return
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> hold120.onTouch(true)
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> hold120.onTouch(false)
+        }
+    }
+
     private fun syncHold120() {
         hold120.update(
             enabled = ::settings.isInitialized && settings.hold120(),
@@ -868,6 +878,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        noteHold120Contact(ev) // T-360: before anything can throw
         noteInputActivity()
         try {
             return routeToCapture(ev) || super.dispatchTouchEvent(ev)
