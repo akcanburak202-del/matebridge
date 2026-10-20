@@ -88,4 +88,8 @@ Karar 0041: kumanda ya da klavyeyle Oyun 120'de panel 60 Hz'te kalıyor. Basıl�
 - Ön plan koşulu artık `started && resumed && pencere odağı`: MainActivity onResume/onPause/onWindowFocusChanged hold koşullarını besler. Odak kaybında (bildirim paneli vb.) tutuş `reason=background` ile bırakılır, bekleyen yeniden deneme iptal edilir. Ön plana dönüş (odak/resume) kalkan dokunma gibi 1 sn sessizlik başlatır. İlk dispatch korumasi (`canDispatch`) artık tüm koşulları (odak dahil) yeniden değerlendirir.
 - Testler: odak kaybı → bırak + yeniden deneme iptal + koruma false; odak dönünce yalnız sessizlik sonrası başlar. check.sh: yalnız bilinen zamanlama testleri kırmızı.
 
+### Review turu 6
+
+- `resetHold120Contacts()` (ContactTracker + OverlayDropFilter sıfırla, controller'a "şimdi kalktı"): cihaz çıkarılınca, onPause, odak kaybı ve oturum sıfırlamasında çağrılır; normal 1 sn sessizlik uygulanır. Test: temas basılı → sıfırla → sessizlikten sonra tutuş başlar. check.sh: yalnız bilinen zamanlama testleri kırmızı.
+
 ## Open questions

@@ -335,6 +335,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private val hold120Drop = dev.matebridge.client.input.OverlayDropFilter()
     private val dropXs = FloatArray(16)
     private val dropYs = FloatArray(16)
+    /** T-360: real input was reset (device detach, pause, focus loss, session reset): no contact can still be down; the quiet period applies. */
+    private fun resetHold120Contacts() {
+        hold120Contacts.reset()
+        hold120Drop.reset()
+        hold120.onTouch(false)
+    }
+
     private fun hold120DropEvent(ev: MotionEvent): Boolean {
         val n = minOf(ev.pointerCount, dropXs.size)
         if (ev.actionMasked == MotionEvent.ACTION_DOWN || hold120Drop.activeStreams > 0) {
@@ -664,6 +671,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 runOnUiThread {
                     inputGen = gen
                     capture.onSessionReset()
+                    resetHold120Contacts() // T-360
                     // T-276: a new connection (also a migration switch) starts without cursor state (the link was reset); the host resends it
                     if (::cursorOverlay.isInitialized) cursorPolicy.onNewConnection(SystemClock.elapsedRealtime())
                     // T-096: a migration stays Connected; re-arm the clipboard for the new generation (render() accepts it).
@@ -792,6 +800,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         windowFocused = hasFocus
+        if (!hasFocus) resetHold120Contacts() // T-360
         if (::settings.isInitialized) syncHold120() // T-360
         if (hasFocus) applyImmersive()
         if (::clipboard.isInitialized) { if (hasFocus) clipboard.start() else clipboard.stop() } // clipboard reads need focus
@@ -805,6 +814,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (::capture.isInitialized) capture.releaseAll(ReleaseAll.BACKGROUND, SystemClock.uptimeMillis())
         if (::sidePanel.isInitialized) closeSettingsPanel(SettingsPanelState.Via.BACKGROUND, resync = false) // T-105; the ticker re-syncs
         resumedNow = false
+        resetHold120Contacts() // T-360
         if (::settings.isInitialized) syncHold120() // T-360
         super.onPause()
     }
@@ -1362,7 +1372,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private val inputDeviceListener = object : InputManager.InputDeviceListener {
         override fun onInputDeviceAdded(deviceId: Int) {}
         override fun onInputDeviceChanged(deviceId: Int) {}
-        override fun onInputDeviceRemoved(deviceId: Int) { capture.onDeviceRemoved(deviceId, SystemClock.uptimeMillis()) }
+        override fun onInputDeviceRemoved(deviceId: Int) { capture.onDeviceRemoved(deviceId, SystemClock.uptimeMillis()); resetHold120Contacts() }
     }
 
     /** Persists the audio setting, tells the host (AUDIO_PREFS) and refreshes both settings panels. Main thread. */

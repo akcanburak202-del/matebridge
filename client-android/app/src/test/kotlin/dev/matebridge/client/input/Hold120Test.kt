@@ -360,4 +360,17 @@ class Hold120Test {
         timer.fireLast()
         assertTrue(c.holding)
     }
+
+    @Test fun resetAfterContactDownLetsTheHoldStartAfterQuiet() { // stylus detached without UP
+        val tracker = ContactTracker()
+        assertTrue(tracker.onEvent(ContactTracker.SRC_STYLUS, 0, 1)); c.onTouch(true)
+        ok()
+        assertFalse(c.holding)
+        tracker.reset(); c.onTouch(false) // the same reset MainActivity does
+        assertFalse(tracker.touching)
+        assertEquals(1000L, timer.tasks.last().ms)
+        now += 1000
+        timer.fireLast()
+        assertTrue(c.holding)
+    }
 }

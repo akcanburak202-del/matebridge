@@ -375,4 +375,6 @@ class OverlayDropFilter {
     }
 
     val activeStreams: Int get() = dropped.size
+
+    fun reset() = dropped.clear()
 }
