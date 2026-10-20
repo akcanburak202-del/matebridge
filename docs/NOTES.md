@@ -1995,3 +1995,13 @@ Kurulum: Oyun 120, 1848×1214, `hw_screen_freq=1` (Yüksek), oyun kapalı (Mac m
 - Sahte dokunma istemciye normal dokunma olarak ulaşıyor ve Mac'e işaretçi olarak gidiyor (host `input_age pointer_n` arttı). Kullanılacaksa istemci bu dokunmayı yutmalı (ör. ayrı küçük pencere, böylece gerçek dokunmalar çoklu dokunmaya karışmaz).
 - Sonuç: AGP gerçek ve sahte dokunmayı ayırmıyor; basılı tek bir dokunma, kumandayla oyunda paneli 120'de tutmaya yetiyor. Uygulama içi yol (adb'siz) için aday: erişilebilirlik servisi `dispatchGesture` (denenmedi). Pil/ısı bedeli ölçülmedi.
 - Kullanıcı notu: `hw_screen_freq` (Ekran yenileme hızı) kullanıcı tarafından sık sık Standart'a alınıp unutuluyor; 120 modunda panel 60'ta kalırsa önce buna bakılmalı.
+
+## 2026-10-20 22:30 – 2026-10-21 00:31 — Uzun oturum: TotK, Oyun 60, 1848×1214, 60 Mbps, Wi-Fi, "Performans artışı" açık
+
+Kullanıcı ~2 saat kumandayla oynadı. Kaynak: host.log (`ev=stats`, `cadence`, `tcp`), tablet `batterystats --history`, `thermalservice`. Loglar repo dışında arşivlendi.
+
+- **Akış:** tablet fps 20 dk dilimlerinde ort. 46–57. Tablette <50 fps olan 1704 saniyenin 1302'sinde oyun Mac'te zaten <55 fps çiziyordu (`cap_fps`; sahneye bağlı, 30'a inen anlar var). Yalnız 402 saniyede oyun ~60 iken tablet düştü.
+- **Takılmalar:** `cap_dec_ms` > 150 ms 55 kez (en çok 605 ms, hepsi ~1 sn). 55'in 54'ünden hemen önce video TCP'de yeniden gönderim ya da rtt > 50 ms vardı. Video bağlantısında saniyelerin %35'inde yeniden gönderim (toplam 8485 paket); rtt p50 9 ms. Yani 60 Mbps'te Wi-Fi kayıplı (NOTES 2026-10-08/09 bulgusuyla aynı: 30 Mbps temizdi). KEYFRAME isteği 1 (başlangıç).
+- **Çözme:** decode p50 10,8–11,1 ms, p95 12–19 ms (1848×1214; Performans artışı olmadan bu boyutta ölçüm yok, karşılaştırma yapılamaz). cap_dec p50 15 ms.
+- **Pil:** %68 → %48 (22:29 → 00:28), ~%10/saat; oturum öncesi boşta/menüde ~%8,5/saat. Pil sıcaklığı en çok 29 °C; termal durum 0, kısma yok.
+- **Ses:** düşen paket toplam ~240 (ilk ve son dilimde; başlangıç/kapanış).
