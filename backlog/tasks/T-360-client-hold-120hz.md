@@ -93,3 +93,7 @@ Karar 0041: kumanda ya da klavyeyle Oyun 120'de panel 60 Hz'te kalıyor. Basıl�
 - `resetHold120Contacts()` (ContactTracker + OverlayDropFilter sıfırla, controller'a "şimdi kalktı"): cihaz çıkarılınca, onPause, odak kaybı ve oturum sıfırlamasında çağrılır; normal 1 sn sessizlik uygulanır. Test: temas basılı → sıfırla → sessizlikten sonra tutuş başlar. check.sh: yalnız bilinen zamanlama testleri kırmızı.
 
 ## Open questions
+
+## Sonuç (orkestratör, 2026-10-21)
+
+Cihazda olumsuz: erişilebilirlik jesti Huawei'de hiçbir pencereye ulaşmıyor (`InputDispatcher: Not find touchable window … toolType is 0`), panel 60'ta kaldı; shell enjeksiyonu (`adb input`) overlay'de 120 veriyor (NOTES 2026-10-21 ~01:00). Kullanıcı karma (host adb) yolu yerine bırakmayı seçti. Kod main'den geri alındı (merge 1d60428b revert); dal `task/T-360-hold-120hz` başvuru için kalır. Karar 0041 reddedildi.

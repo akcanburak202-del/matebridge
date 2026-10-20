@@ -1,6 +1,6 @@
 # 0041 — Kumandayla 120 Hz: erişilebilirlik servisiyle basılı sahte dokunma (deneysel, varsayılan kapalı)
 
-- **Durum:** deneme (2026-10-20), cihazda doğrulanınca kabul
+- **Durum:** reddedildi (2026-10-21) — cihazda çalışmadı, kod geri alındı
 - **Tarih:** 2026-10-20
 
 ## Bağlam
@@ -23,3 +23,7 @@ NOTES 2026-10-20 ~22:00: `adb shell input touchscreen motionevent DOWN` ile bas�
 - Erişilebilirlik izni kullanıcıdan bir kez istenir. Servis yalnız jest gönderir; ekran içeriği okumaz (`canRetrieveWindowContent=false`, olay türü yok).
 - Huawei'ye özgü davranışa dayanır; HarmonyOS güncellemesinde etkisiz kalabilir.
 - Yeniden düşünme: AGP servis jestini saymazsa ya da pil bedeli kabul edilemezse anahtar kaldırılır.
+
+## Ek (2026-10-21): reddedildi
+
+Cihaz testi (NOTES 2026-10-21 ~01:00): erişilebilirlik `dispatchGesture` olayları Huawei InputDispatcher'da hiçbir pencereye eşlenmiyor (`toolType 0`), panel 60'ta kalıyor. adb shell enjeksiyonu aynı overlay'de 120 veriyor, ama host'tan adb ile basılı dokunma (kablosuz adb yeniden başlatmada kaybolur) kullanıcı tarafından istenmedi. Kumandayla oyunda Oyun 60 doğru mod olarak kalır (0016). T-360 kodu main'den geri alındı.

@@ -99,14 +99,6 @@ interface SettingsHost {
     val perfBoost: Boolean
     fun setPerfBoost(on: Boolean)
 
-    /** "Kumandayla 120 Hz" (decision 0041, T-360): stored; off by default; never in a remote session. */
-    val hold120: Boolean get() = false
-    fun setHold120(on: Boolean) {}
-    /** The accessibility service is connected (the switch can work). */
-    val hold120ServiceBound: Boolean get() = true
-    /** Opens the system accessibility settings. */
-    fun openAccessibilitySettings() {}
-
     // Kamera (decision 0040, T-355)
     /** The tablet can send its camera (a camera and an H.264 encoder); false hides the whole "Kamera" section. */
     val cameraAvailable: Boolean get() = false
@@ -320,10 +312,6 @@ object SettingsCatalog {
     /** T-276 (decision 0036): where the Mac's cursor is drawn. */
     const val CURSOR_TITLE = "İmleç"
     const val PERF_BOOST_TITLE = "Performans artışı"
-    const val HOLD120_TITLE = "Kumandayla 120 Hz"
-    const val HOLD120_NOTE = "Oyun 120'de ekranı 120 Hz'te tutar, pil tüketimi artar."
-    const val HOLD120_NEEDS_SERVICE = "Erişilebilirlik izni gerekli"
-    const val HOLD120_OPEN_SETTINGS = "Erişilebilirlik ayarlarını aç"
     const val PERF_BOOST_NOTE = "Çözmeyi hızlandırır, pil tüketimi artabilir."
     const val CURSOR_TABLET = "tablet"
     const val CURSOR_VIDEO = "video"
@@ -471,10 +459,6 @@ object SettingsCatalog {
                 )
                 add(SettingItem.Toggle("perf_boost", PERF_BOOST_TITLE, { h.perfBoost }, { h.setPerfBoost(it) }, onText = "Açık", offText = "Kapalı", hidden = { h.remoteSession }))
                 add(SettingItem.Info("perf_boost_note", { h.remoteSession }) { PERF_BOOST_NOTE })
-                // T-360 (decision 0041): without the accessibility service the note asks for the permission and a button opens its settings.
-                add(SettingItem.Toggle("hold120", HOLD120_TITLE, { h.hold120 }, { h.setHold120(it) }, onText = "Açık", offText = "Kapalı", hidden = { h.remoteSession }))
-                add(SettingItem.Info("hold120_note", { h.remoteSession }) { if (h.hold120ServiceBound || !h.hold120) HOLD120_NOTE else HOLD120_NEEDS_SERVICE })
-                add(SettingItem.Action("hold120_open", HOLD120_OPEN_SETTINGS, inline = true, hidden = { h.remoteSession || h.hold120ServiceBound || !h.hold120 }) { h.openAccessibilitySettings() })
             },
         )
         if (h.cameraAvailable) {

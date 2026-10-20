@@ -320,52 +320,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             foreground = started && !isDestroyed,
             remote = remoteSession,
         )
-        syncHold120()
-    }
-
-    // T-360 (decision 0041): "Kumandayla 120 Hz". Creates nothing until every condition holds; the fake touch never leaves the service's overlay.
-    private val hold120 = dev.matebridge.client.input.Hold120Controller(
-        newActuator = { dev.matebridge.client.input.HoldTouchService.instance?.let { dev.matebridge.client.input.HoldTouchActuator(it) } },
-        timer = { ms, task -> ui.postDelayed(task, ms); AutoCloseable { ui.removeCallbacks(task) } },
-        nowMs = { SystemClock.elapsedRealtime() },
-        log = { ev, f -> MbLog.i(ev, f) },
-    )
-
-    /** T-360: real finger/stylus contacts (not mouse, trackpad or hover) defer the held touch; a dispatched gesture would cancel them. */
-    private val hold120Drop = dev.matebridge.client.input.OverlayDropFilter()
-    private val dropXs = FloatArray(16)
-    private val dropYs = FloatArray(16)
-    /** T-360: real input was reset (device detach, pause, focus loss, session reset): no contact can still be down; the quiet period applies. */
-    private fun resetHold120Contacts() {
-        hold120Contacts.reset()
-        hold120Drop.reset()
-        hold120.onTouch(false)
-    }
-
-    private fun hold120DropEvent(ev: MotionEvent): Boolean {
-        val n = minOf(ev.pointerCount, dropXs.size)
-        if (ev.actionMasked == MotionEvent.ACTION_DOWN || hold120Drop.activeStreams > 0) {
-            for (i in 0 until n) { dropXs[i] = ev.getRawX(i); dropYs[i] = ev.getRawY(i) }
-        }
-        return hold120Drop.drop(ev.deviceId, ev.source, ev.actionMasked, dropXs, dropYs, n, dev.matebridge.client.input.HoldTouchService.overlayRect)
-    }
-    private val hold120Contacts = dev.matebridge.client.input.ContactTracker()
-    private fun noteHold120Contact(ev: MotionEvent) {
-        val before = hold120Contacts.touching
-        val now = hold120Contacts.onEvent(ev.source, ev.actionMasked, ev.pointerCount)
-        if (now != before) hold120.onTouch(now)
-    }
-
-    private fun syncHold120() {
-        hold120.update(
-            enabled = ::settings.isInitialized && settings.hold120(),
-            serviceBound = dev.matebridge.client.input.HoldTouchService.bound,
-            streaming = perfStreaming && !isDestroyed,
-            foreground = started && resumedNow && windowFocused && !isDestroyed, // T-360: the shade or another window must not get a dispatched gesture
-            remote = remoteSession,
-            game = streamMode.isGame,
-            fps = streamConfig?.fps ?: 0,
-        )
     }
     private var lastStatsMs = 0L
     /** T-141: log window of the video stats lines (10 s; `--ez stats_1s true` = 1 s). The STATS message stays per second. */
@@ -415,8 +369,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var currentEndpoint: Endpoint? = null
     private var manualMode = false
     private var started = false
-    private var resumedNow = false // T-360
-    private var windowFocused = false // T-360
     private var benchForwarded = false // T-090: this instance only forwarded to NetBenchActivity
     private var usbStartMs = 0L
 
@@ -671,7 +623,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 runOnUiThread {
                     inputGen = gen
                     capture.onSessionReset()
-                    resetHold120Contacts() // T-360
                     // T-276: a new connection (also a migration switch) starts without cursor state (the link was reset); the host resends it
                     if (::cursorOverlay.isInitialized) cursorPolicy.onNewConnection(SystemClock.elapsedRealtime())
                     // T-096: a migration stays Connected; re-arm the clipboard for the new generation (render() accepts it).
@@ -799,9 +750,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        windowFocused = hasFocus
-        if (!hasFocus) resetHold120Contacts() // T-360
-        if (::settings.isInitialized) syncHold120() // T-360
         if (hasFocus) applyImmersive()
         if (::clipboard.isInitialized) { if (hasFocus) clipboard.start() else clipboard.stop() } // clipboard reads need focus
         if (!::capture.isInitialized) return
@@ -813,16 +761,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         // Release before onStop() closes the session, so RELEASE_ALL is queued ahead of BYE (PROTOCOL.md section 7).
         if (::capture.isInitialized) capture.releaseAll(ReleaseAll.BACKGROUND, SystemClock.uptimeMillis())
         if (::sidePanel.isInitialized) closeSettingsPanel(SettingsPanelState.Via.BACKGROUND, resync = false) // T-105; the ticker re-syncs
-        resumedNow = false
-        resetHold120Contacts() // T-360
-        if (::settings.isInitialized) syncHold120() // T-360
         super.onPause()
-    }
-
-    override fun onResume() {
-        super.onResume()
-        resumedNow = true
-        if (::settings.isInitialized) syncHold120() // T-360
     }
 
     // ---- input capture (T-024) ----
@@ -908,9 +847,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
-        // T-360: a real touch that starts on the hold overlay is dropped, never sent to the Mac.
-        if (hold120DropEvent(ev)) return true
-        noteHold120Contact(ev) // before anything can throw
         noteInputActivity()
         try {
             return routeToCapture(ev) || super.dispatchTouchEvent(ev)
@@ -1253,18 +1189,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             syncPerfBoost()
             refreshSettings()
         }
-        override val hold120 get() = settings.hold120()
-        override fun setHold120(on: Boolean) { // T-360: starts or stops at once, no reconnect
-            settings.setHold120(on)
-            syncHold120()
-            refreshSettings()
-        }
-        override val hold120ServiceBound get() = dev.matebridge.client.input.HoldTouchService.bound
-        override fun openAccessibilitySettings() {
-            try {
-                startActivity(android.content.Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
-            } catch (_: Exception) {}
-        }
         override val statsOverlay get() = statsOn
         override fun setStatsOverlay(on: Boolean) { if (on != statsOn) toggleStats() }
 
@@ -1372,7 +1296,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private val inputDeviceListener = object : InputManager.InputDeviceListener {
         override fun onInputDeviceAdded(deviceId: Int) {}
         override fun onInputDeviceChanged(deviceId: Int) {}
-        override fun onInputDeviceRemoved(deviceId: Int) { capture.onDeviceRemoved(deviceId, SystemClock.uptimeMillis()); resetHold120Contacts() }
+        override fun onInputDeviceRemoved(deviceId: Int) { capture.onDeviceRemoved(deviceId, SystemClock.uptimeMillis()) }
     }
 
     /** Persists the audio setting, tells the host (AUDIO_PREFS) and refreshes both settings panels. Main thread. */
@@ -1417,7 +1341,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         settings.setStreamMode(m)
         idle.setGameMode(m.isGame, SystemClock.uptimeMillis()) // T-234: no idle stages in Oyun
         gameSettings.onModeChanged(m)?.let { change -> applyGameLayer(change) }
-        syncHold120() // T-360
         applyCursorWish() // T-276: Oyun sends CURSOR_PREFS(0) first (PROTOCOL.md 0x0D), then STREAM_PREFS
         sendStreamPrefs(gameSettings.prefs(m))
         refreshSettings()
@@ -1768,7 +1691,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun installConfig(config: StreamConfig) {
         if (!started || isDestroyed) return
         streamConfig = config
-        syncHold120() // T-360: the stream rate decides
         files.onStreamBitrate(config.bitrateKbps.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()) // T-269: the Wi-Fi file cap follows the video rate
         capture.setStreamGeometry(config.widthPt, config.heightPt)
         val r = renderer ?: VideoRenderer(
@@ -1872,7 +1794,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         detachVideoOutput()
         packedVideo = false
         streamConfig = null
-        syncHold120() // T-360
         audio?.onVideoLatency(null) // no video: no A/V target
         flushStatsLog() // T-141: the partial log window of the stream that ends
         statsView.text = ""
@@ -2287,8 +2208,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     override fun onStart() {
         super.onStart()
         started = true
-        dev.matebridge.client.input.HoldTouchService.onBoundChanged = { syncHold120(); if (::settings.isInitialized) refreshSettings() } // T-360
-        syncHold120() // T-360: a service connected while in the background
         cameraController?.setForeground(true) // T-355: a held START reopens the same cam_id
         if (cameraController != null) applyCameraWish() // the permission may have changed in the system settings
         dev.matebridge.client.session.MbLog.i("activity_start")
@@ -2651,8 +2570,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (benchForwarded) { super.onDestroy(); return } // T-090: nothing below was initialised
         ui.removeCallbacksAndMessages(null)
         perfBoost.shutdown() // T-350
-        hold120.shutdown() // T-360
-        dev.matebridge.client.input.HoldTouchService.onBoundChanged = null
         releaseRenderer()
         cameraController?.onSessionEnd()
         controller.shutdown()

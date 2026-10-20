@@ -74,11 +74,6 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
 
     fun setPerfBoost(on: Boolean) = store.putString(KEY_PERF_BOOST, if (on) "1" else "0")
 
-    /** "Kumandayla 120 Hz" (T-360, decision 0041); default off, only a stored "1" enables. */
-    fun hold120(): Boolean = store.getString(KEY_HOLD120) == "1"
-
-    fun setHold120(on: Boolean) = store.putString(KEY_HOLD120, if (on) "1" else "0")
-
     /** "Kamera" (T-355, decision 0040): Kapalı by default, also for an unknown stored value. */
     fun cameraMode(): dev.matebridge.client.camera.CameraMode = dev.matebridge.client.camera.CameraMode.parse(store.getString(KEY_CAMERA_MODE))
 
@@ -276,7 +271,7 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
             KEY_STATS, KEY_STREAM_MODE, KEY_BITRATE, KEY_PAD_SPEED, KEY_MOUSE_SPEED, KEY_CLIPBOARD, KEY_FILES,
             KEY_FILES_ROOT, KEY_FILES_RO, KEY_AUDIO, KEY_AUDIO_OUT, KEY_PEN_TRAIL, KEY_PEN_DOT, KEY_FINGER_OFF,
             KEY_TRANSPORT, KEY_GAME_RESOLUTION, KEY_FPS_DAILY, KEY_FPS_GAME, KEY_HDR_GAME, KEY_HDR_DAILY, KEY_CURSOR, KEY_REMOTE_BITRATE, KEY_REMOTE_AUDIO,
-            KEY_PERF_BOOST, KEY_HOLD120, KEY_CAMERA_MODE, KEY_CAMERA_FACING,
+            KEY_PERF_BOOST, KEY_CAMERA_MODE, KEY_CAMERA_FACING,
         )
 
         const val KEY_DEVICE_ID = "device_id"
@@ -306,7 +301,6 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
         const val KEY_FINGER_OFF = "finger_touch_disabled"
         const val KEY_CURSOR = "cursor_local"
         const val KEY_PERF_BOOST = "perf_boost"
-        const val KEY_HOLD120 = "hold120"
         const val KEY_CAMERA_MODE = "camera_mode"
         const val KEY_CAMERA_FACING = "camera_facing"
     }

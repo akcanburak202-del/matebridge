@@ -48,7 +48,6 @@
     <string name="trust_btn_ignore">Yoksay</string>
     <string name="trust_btn_repair">Yeniden eşleş</string>
     <string name="trust_btn_connect">Bağlan</string>
-    <string name="hold_touch_service_description">MateBridge, kumandayla oynarken tablet ekranını 120 Hz\'te tutmak için görünmez bir dokunma kullanır. Ekran içeriğini okumaz.</string>
     <string name="forget_host">Bu Mac\'i unut</string>
     <string name="forget_ask_first">Bu tablet, bağlandığı Mac\'in eşleşme anahtarını silecek. Açık bağlantı önce kapanır.</string>
     <string name="forget_ask_second">Emin misin? Yeniden bağlanmak için Mac\'le baştan eşleşmen gerekecek.</string>
