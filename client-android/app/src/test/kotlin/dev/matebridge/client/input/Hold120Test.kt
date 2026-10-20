@@ -237,4 +237,51 @@ class Hold120Test {
         assertTrue(t.onEvent(ContactTracker.SRC_TOUCH, 2, 1)) // a move changes nothing
         assertFalse(t.onEvent(ContactTracker.SRC_TOUCH, 3, 1))
     }
+
+    // ---- round 3 ----
+
+    @Test fun readinessGatesTheFirstDispatch() {
+        val w = OverlayReadiness.Verdict.WAIT
+        assertEquals(w, OverlayReadiness.decide(false, false, null, 0))
+        assertEquals(w, OverlayReadiness.decide(true, true, 0, 10)) // laid out but not settled
+        assertEquals(w, OverlayReadiness.decide(true, true, 99, 200))
+        assertEquals(OverlayReadiness.Verdict.GO, OverlayReadiness.decide(true, true, 100, 300))
+        assertEquals(OverlayReadiness.Verdict.FAIL, OverlayReadiness.decide(false, false, null, 1000))
+        assertEquals(OverlayReadiness.Verdict.FAIL, OverlayReadiness.decide(true, true, 50, 1000))
+    }
+
+    @Test fun secondStopWhileDrainingIsANoOp() {
+        val g = DrainGate()
+        g.onStart()
+        assertEquals(DrainGate.Action.DRAIN, g.onStop(true))
+        assertEquals(DrainGate.Action.NOOP, g.onStop(true)) // the service's release + the controller's stop
+        assertEquals(DrainGate.Action.NOOP, g.onStop(false))
+        g.onDrained()
+        assertEquals(DrainGate.Action.REMOVE_NOW, g.onStop(true)) // nothing active any more
+    }
+
+    @Test fun stopBeforeAnyStrokeRemovesTheOverlayAtOnce() {
+        val g = DrainGate()
+        g.onStart()
+        assertEquals(DrainGate.Action.REMOVE_NOW, g.onStop(false))
+        assertFalse(g.draining)
+    }
+
+    @Test fun touchStartingInsideTheOverlayIsDroppedForItsWholeStream() {
+        val f = OverlayDropFilter()
+        val rect = intArrayOf(48, 48, 72, 72)
+        val t = ContactTracker.SRC_TOUCH
+        assertTrue(f.drop(t, 0, 60f, 60f, rect))
+        assertTrue(f.drop(t, 2, 500f, 500f, rect)) // moved away: still the same stream
+        assertTrue(f.drop(t, 1, 500f, 500f, null)) // overlay gone: stream still dropped to its UP
+        assertFalse(f.drop(t, 0, 500f, 500f, rect)) // next stream, elsewhere
+        assertFalse(f.drop(t, 1, 500f, 500f, rect))
+    }
+
+    @Test fun dropFilterIgnoresMouseAndNoOverlay() {
+        val f = OverlayDropFilter()
+        assertFalse(f.drop(ContactTracker.SRC_MOUSE, 0, 60f, 60f, intArrayOf(48, 48, 72, 72)))
+        assertFalse(f.drop(ContactTracker.SRC_TOUCH, 0, 60f, 60f, null))
+        assertFalse(f.drop(ContactTracker.SRC_TOUCH, 1, 60f, 60f, null))
+    }
 }

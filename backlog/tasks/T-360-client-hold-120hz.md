@@ -71,4 +71,10 @@ Karar 0041: kumanda ya da klavyeyle Oyun 120'de panel 60 Hz'te kalıyor. Basıl�
 - KNOBS: 24x24 overlay, `touch` nedeni eklendi.
 - check.sh: yalnız bilinen zamanlama testleri (DecoderWaitTest, OutputParkTest, AacDecodeWorkerTest) kırmızı; Swift bu turda geçti.
 
+### Review turu 3
+
+- P1: ilk `dispatchGesture` artık overlay hazır olmadan gitmez: 50 ms'lik yoklama, görünüm takılı + ölçülü olunca 100 ms oturma (`OverlayReadiness`), gerçek `getLocationOnScreen` ile yol kaydırılır (ox/oy); 1 sn içinde hazır olmazsa dispatch yok, iptal yolu. Ek olarak `OverlayDropFilter`: overlay varken (`HoldTouchService.overlayRect`) DOWN'u bu dikdörtgene düşen gerçek dokunma akışı UP/CANCEL'e kadar Mac'e gitmeden düşürülür (`dispatchTouchEvent`'te).
+- P2: `DrainGate`: boşaltma sırasında ikinci `stop()` etkisiz; overlay'i yalnız son parçanın bitişi/iptali/zaman aşımı kaldırır.
+- Testler: hazırlık kararı, DrainGate, düşürme süzgeci. check.sh: yalnız bilinen zamanlama testleri (DecoderWaitTest, OutputParkTest, Swift BoundedWaitTests) kırmızı.
+
 ## Open questions

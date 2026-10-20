@@ -284,3 +284,68 @@ class ContactTracker {
         const val ACTION_POINTER_UP = 6
     }
 }
+
+/** Gate for the first dispatch: the overlay must be attached, laid out and settled, or the DOWN could land on the video surface. */
+object OverlayReadiness {
+    const val SETTLE_MS = 100L
+    const val TIMEOUT_MS = 1000L
+    const val POLL_MS = 50L
+
+    enum class Verdict { WAIT, GO, FAIL }
+
+    /**
+     * [readySinceMs]: ms since the view was first seen attached and laid out (null = not yet); [elapsedMs]: ms since addView.
+     * [locationOk]: the on-screen location was readable and the view has its size.
+     */
+    fun decide(attachedAndLaidOut: Boolean, locationOk: Boolean, readySinceMs: Long?, elapsedMs: Long): Verdict = when {
+        attachedAndLaidOut && locationOk && readySinceMs != null && readySinceMs >= SETTLE_MS -> Verdict.GO
+        elapsedMs >= TIMEOUT_MS -> Verdict.FAIL
+        else -> Verdict.WAIT
+    }
+}
+
+/**
+ * stop() bookkeeping of the actuator: a second stop while the final stroke drains is a no-op, so the overlay is removed
+ * only by the drain's end (completion, cancel or timeout). Pure.
+ */
+class DrainGate {
+    enum class Action { NOOP, DRAIN, REMOVE_NOW }
+
+    var active = false
+        private set
+    var draining = false
+        private set
+
+    fun onStart() { active = true; draining = false }
+
+    /** [hasStroke]: a stroke is running, so there is a touch to end. */
+    fun onStop(hasStroke: Boolean): Action {
+        if (draining) return Action.NOOP
+        val was = active
+        active = false
+        return if (was && hasStroke) { draining = true; Action.DRAIN } else Action.REMOVE_NOW
+    }
+
+    fun onDrained() { draining = false }
+}
+
+/**
+ * Belt and braces: while the overlay exists, a touchscreen/stylus pointer stream whose DOWN lands inside the overlay's
+ * on-screen rect is dropped (never forwarded to the Mac) until its UP/CANCEL. Pure; the caller passes raw coordinates.
+ */
+class OverlayDropFilter {
+    private var dropping = false
+
+    /** [rect] = l, t, r, b on screen, or null when no overlay exists. Returns true to drop the event. */
+    fun drop(source: Int, actionMasked: Int, x: Float, y: Float, rect: IntArray?): Boolean {
+        val real = (source and ContactTracker.SRC_MOUSE) != ContactTracker.SRC_MOUSE &&
+            ((source and ContactTracker.SRC_TOUCH) == ContactTracker.SRC_TOUCH || (source and ContactTracker.SRC_STYLUS) == ContactTracker.SRC_STYLUS)
+        if (!real) return false
+        if (actionMasked == ContactTracker.ACTION_DOWN) {
+            dropping = rect != null && x >= rect[0] && x < rect[2] && y >= rect[1] && y < rect[3]
+        }
+        val drop = dropping
+        if (actionMasked == ContactTracker.ACTION_UP || actionMasked == ContactTracker.ACTION_CANCEL) dropping = false
+        return drop
+    }
+}
