@@ -90,6 +90,10 @@ class SettingsCatalogTest {
         override fun setCursorLocal(on: Boolean) { calls += "cursor $on"; v["cursor"] = on }
         override val clipboardShare get() = v["clip"] ?: true
         override fun setClipboardShare(on: Boolean) { calls += "clip $on"; v["clip"] = on }
+        override val hold120 get() = v["hold"] ?: false
+        override fun setHold120(on: Boolean) { calls += "hold $on"; v["hold"] = on }
+        override var hold120ServiceBound = false
+        override fun openAccessibilitySettings() { calls += "a11y" }
         override val perfBoost get() = v["perf"] ?: false
         override fun setPerfBoost(on: Boolean) { calls += "perf $on"; v["perf"] = on }
         override val statsOverlay get() = v["stats"] ?: false
@@ -206,7 +210,7 @@ class SettingsCatalogTest {
         assertEquals(side - setOf("disconnect", "bitrate_applied", "hdr_applied", "colour_applied"), connect)
         assertEquals(
             listOf(
-                "transport", "disconnect", "forget_host", "remote_mode", "remote_profile", "remote_bitrate", "stream_mode", "frame_rate", "game_resolution", "bitrate", "bitrate_applied", "hdr", "hdr_applied", "colour", "colour_note", "colour_applied", "idle_dim", "cursor", "perf_boost", "perf_boost_note", "audio", "audio_out",
+                "transport", "disconnect", "forget_host", "remote_mode", "remote_profile", "remote_bitrate", "stream_mode", "frame_rate", "game_resolution", "bitrate", "bitrate_applied", "hdr", "hdr_applied", "colour", "colour_note", "colour_applied", "idle_dim", "cursor", "perf_boost", "perf_boost_note", "hold120", "hold120_note", "hold120_open", "audio", "audio_out",
                 "touchpad_speed", "mouse_speed", "finger_off", "pen_trail", "pen_dot", "files", "files_root", "files_ro", "files_status", "files_remote",
                 "clipboard", "stats", "reset_defaults", "reset_hint", "shortcuts", "version",
             ),
@@ -701,5 +705,27 @@ class SettingsCatalogTest {
         h.remoteSession = true
         assertTrue(t.hidden())
         assertTrue(note.hidden())
+    }
+
+    @Test fun hold120Toggle() { // T-360, decision 0041
+        val s = SettingsCatalog.sections(h, inStream = true)
+        val t = item(s, "hold120") as SettingItem.Toggle
+        assertEquals("Kumandayla 120 Hz: Kapalı", t.text())
+        assertFalse(t.hidden())
+        val note = item(s, "hold120_note") as SettingItem.Info
+        val open = item(s, "hold120_open") as SettingItem.Action
+        assertEquals(SettingsCatalog.HOLD120_NOTE, note.text()) // off: the normal note, no permission nag
+        assertTrue(open.hidden())
+        t.set(true)
+        assertEquals("Kumandayla 120 Hz: Açık", t.text())
+        assertEquals("Erişilebilirlik izni gerekli", note.text())
+        assertFalse(open.hidden())
+        open.run()
+        assertTrue(h.calls.contains("a11y"))
+        h.hold120ServiceBound = true
+        assertEquals(SettingsCatalog.HOLD120_NOTE, note.text())
+        assertTrue(open.hidden())
+        h.remoteSession = true
+        assertTrue(t.hidden()); assertTrue(note.hidden()); assertTrue(open.hidden())
     }
 }

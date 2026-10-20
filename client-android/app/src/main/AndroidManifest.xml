@@ -33,6 +33,19 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- T-360 (decision 0041): "Kumandayla 120 Hz"; the service only dispatches a held gesture, it reads nothing. -->
+        <service
+            android:name=".input.HoldTouchService"
+            android:exported="false"
+            android:label="MateBridge 120 Hz"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/hold_touch_service" />
+        </service>
         <!-- T-301 (decision 0037): lets the non-debuggable daily build be profiled from the shell (simpleperf). -->
         <profileable android:shell="true" />
         <!-- T-185: the T-090 NetBenchActivity is declared in src/debug/AndroidManifest.xml (debug source set only). -->

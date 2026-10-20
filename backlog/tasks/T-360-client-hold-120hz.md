@@ -1,7 +1,7 @@
 ---
 id: T-360
 title: İstemci — "Kumandayla 120 Hz" (erişilebilirlik servisiyle basılı sahte dokunma, varsayılan kapalı)
-status: todo
+status: review
 phase: 7
 owner: android-client-dev
 depends_on: [T-350]
@@ -48,5 +48,13 @@ Karar 0041: kumanda ya da klavyeyle Oyun 120'de panel 60 Hz'te kalıyor. Basıl�
 7. Birim testleri: kurallar, controller, katalog.
 
 ## Handoff
+
+- Commit: bkz. dal `task/T-360-hold-120hz` son commit (SHA orkestratör mesajında).
+- Dosyalar: `input/Hold120.kt` (kurallar, controller, arayüzler), `input/HoldTouchService.kt` (servis + actuator + overlay), `res/xml/hold_touch_service.xml`, manifest, strings, `Settings.hold120`, `DevKnobs.hold120Target`, `SettingsCatalog` (anahtar, not, "Erişilebilirlik ayarlarını aç" düğmesi), `MainActivity` (syncHold120, PerfBoost'un yanında), testler (`Hold120Test`, katalog, DevKnobs), `docs/KNOBS.md`.
+- Varsayımlar: overlay 16x16 px, sol üstten 48 px içeride, dokunma ortasında; zincir 10 s (getMaxGestureDuration ile sınırlı), UP = 50 ms'lik willContinue=false son parça. Geri çekilme 1/2/4/8 sn, 5 sn dayanan tutuş sayacı sıfırlar. Servis "bağlı" = `HoldTouchService.instance != null`. Mod/fps: `streamMode.isGame` ve `streamConfig.fps >= 120`.
+- `surface` yedek yolu uygulanmadı: `hold120_target` yalnız ayrıştırılıyor/KNOBS'ta, bugün overlay gibi davranıyor (kapsam 4 "iskelet"; AGP overlay'i saymazsa orkestratör kararıyla ayrı iş).
+- check.sh: Android derlemesi ve yeni testler geçti. check.sh FAIL veriyor, ama yalnız temel dalda da (HEAD~1) yeniden üretilen, makine yüküne bağlı zamanlama testleri yüzünden: `DecoderWaitTest.inputParksWith...`, `OutputParkTest.withParkOff...` (+ ara sıra `AacDecodeWorkerTest.lateOutput...`) ve Swift `BoundedWaitTests` (host-mac'e dokunulmadı).
+- Test EDİLMEDİ (cihaz): servisin gerçekten bağlanması, overlay'in AGP'yi 120'de tutması, continueStroke zincirinin 10 s sınırında kesintisiz sürmesi, gerçek dokunmanın tutuşu iptal edip geri gelmesi.
+- Cihazda kontrol: (1) Ayarlar > Erişilebilirlik'ten "MateBridge 120 Hz" servisini aç; panelde "Kumandayla 120 Hz" Açık. (2) Oyun 120, dokunmadan: `dumpsys SurfaceFlinger` Current mode 120'de kalır, host `display_rate hz=120`. (3) Host logunda sahte dokunmadan işaretçi olayı yok (`input_age pointer_n` dokunmazken 0). (4) Gerçek tek parmak tıklama, pinch, kalem normal; gerçek dokunma sonrası ~1 sn içinde `ev=hold120 state=off reason=cancelled` sonra `state=on`. (5) Anahtarı kapat / arka plana al / Oyun 60'a geç / uzak oturum: `state=off reason=setting|background|mode|remote`, panel 60'a döner; servis izni yokken panelde "Erişilebilirlik izni gerekli" + düğme.
 
 ## Open questions

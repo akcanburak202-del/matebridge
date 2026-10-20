@@ -28,7 +28,7 @@ class DevKnobsTest {
         "decoder_fault_after_s" to 15, "game_display" to 0,
         "pace_dcap_half" to 3, "pace_feedback" to false,
         "catch_up" to false, "dec_out_park" to "off", "cursor_predict" to false,
-        "audio_idle_pause" to "stop", "unbuffered_src" to "relative",
+        "audio_idle_pause" to "stop", "unbuffered_src" to "relative", "hold120_target" to "surface",
     )
 
     private fun assertDefaults(k: DevKnobs) {
@@ -139,7 +139,7 @@ class DevKnobsTest {
                 "hz:120", "lead_us:4000", "deadline_us:-1", "ping_ms:100",
                 "audio:0", "transport:wifi", "audio_out:track", "audio_buf_bursts:3", "audio_idle_pause:stop", "quickack:0",
                 "decoder_fault:dequeue", "decoder_fault_after_s:15", "game_display:0",
-                "pace_dcap_half:3", "pace_feedback:0", "catch_up:0", "dec_out_park:off", "cursor_predict:0", "unbuffered_src:relative", "stats_1s:1",
+                "pace_dcap_half:3", "pace_feedback:0", "catch_up:0", "dec_out_park:off", "cursor_predict:0", "unbuffered_src:relative", "hold120_target:surface", "stats_1s:1",
             ),
             k.knobs,
         )
