@@ -57,4 +57,11 @@ Karar 0041: kumanda ya da klavyeyle Oyun 120'de panel 60 Hz'te kalıyor. Basıl�
 - Test EDİLMEDİ (cihaz): servisin gerçekten bağlanması, overlay'in AGP'yi 120'de tutması, continueStroke zincirinin 10 s sınırında kesintisiz sürmesi, gerçek dokunmanın tutuşu iptal edip geri gelmesi.
 - Cihazda kontrol: (1) Ayarlar > Erişilebilirlik'ten "MateBridge 120 Hz" servisini aç; panelde "Kumandayla 120 Hz" Açık. (2) Oyun 120, dokunmadan: `dumpsys SurfaceFlinger` Current mode 120'de kalır, host `display_rate hz=120`. (3) Host logunda sahte dokunmadan işaretçi olayı yok (`input_age pointer_n` dokunmazken 0). (4) Gerçek tek parmak tıklama, pinch, kalem normal; gerçek dokunma sonrası ~1 sn içinde `ev=hold120 state=off reason=cancelled` sonra `state=on`. (5) Anahtarı kapat / arka plana al / Oyun 60'a geç / uzak oturum: `state=off reason=setting|background|mode|remote`, panel 60'a döner; servis izni yokken panelde "Erişilebilirlik izni gerekli" + düğme.
 
+### Review turu 1 (P1 düzeltmeleri)
+
+- P1-1: her parça artık hareket ediyor (`HoldPathGeometry`: 24x24 overlay, A<->B ±6 px, her devam öncekinin bittiği yerden başlar; UP parçası da 2 px hareket eder). UP sonrası overlay son parça bitince (ya da 400 ms zaman aşımıyla) kaldırılır.
+- P1-2: `Hold120Controller.onTouch(down)`; MainActivity `dispatchTouchEvent` gerçek parmak/kalem temasını (SOURCE_TOUCHSCREEN/STYLUS) izler. Temas varken ya da bitişten 1 sn dolmadan başlatma/yeniden deneme yok (`reason=touch`); tutulan dokunma temas yüzünden bırakılmaz (UP gerçek jesti iptal ederdi). Testler eklendi.
+- Cihazda ek kontrol: tutuş 10 sn sınırını aşıp kesintisiz sürer (SurfaceFlinger 120); gerçek dokunma sonrası ~1 sn içinde geri gelir.
+- check.sh: yeni testler geçti; yalnız taban dalda da kırık zamanlama testleri (DecoderWaitTest, OutputParkTest, Swift BoundedWaitTests) kırmızı.
+
 ## Open questions
