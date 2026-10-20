@@ -1,5 +1,6 @@
 package dev.matebridge.client.session
 
+import dev.matebridge.client.input.Hold120Target
 import dev.matebridge.client.input.UnbufferedSources
 import dev.matebridge.client.video.PacerTuning
 import java.util.Locale
@@ -88,6 +89,8 @@ data class DevKnobs(
      * Unknown or absent = [UnbufferedSources.OFF] (the pen behaviour is unchanged either way).
      */
     val unbufferedSrc: UnbufferedSources = UnbufferedSources.OFF,
+    /** `--es hold120_target overlay|surface` (T-360, decision 0041): where the fake touch lands. Unknown or absent = overlay. */
+    val hold120Target: Hold120Target = Hold120Target.OVERLAY,
     /** Keep: `--ez stats_1s true` (T-141). */
     val stats1s: Boolean = false,
     /** Keep: `--ez pace_trace true` (T-069). */
@@ -141,6 +144,7 @@ data class DevKnobs(
             Spec("dec_out_park", Kind.STRING, debugOnly = true, ids = setOf("off", "on")),
             Spec("cursor_predict", Kind.BOOL, debugOnly = true),
             Spec("unbuffered_src", Kind.STRING, debugOnly = true, ids = setOf("off", "relative")),
+            Spec("hold120_target", Kind.STRING, debugOnly = true, ids = setOf("overlay", "surface")),
             Spec("stats_1s", Kind.BOOL, debugOnly = false),
             Spec("pace_trace", Kind.BOOL, debugOnly = false),
             Spec("stall_diag", Kind.BOOL, debugOnly = false),
@@ -180,6 +184,7 @@ data class DevKnobs(
                 decOutPark = x.string("dec_out_park")?.trim()?.lowercase(Locale.ROOT) != "off",
                 cursorPredict = x.bool("cursor_predict", true),
                 unbufferedSrc = UnbufferedSources.parse(x.string("unbuffered_src")),
+                hold120Target = Hold120Target.parse(x.string("hold120_target")),
                 stats1s = x.bool("stats_1s", false),
                 paceTrace = x.bool("pace_trace", false),
                 stallDiag = x.bool("stall_diag", false),

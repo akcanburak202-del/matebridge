@@ -1,7 +1,7 @@
 ---
 id: T-360
 title: İstemci — "Kumandayla 120 Hz" (erişilebilirlik servisiyle basılı sahte dokunma, varsayılan kapalı)
-status: todo
+status: done
 phase: 7
 owner: android-client-dev
 depends_on: [T-350]
@@ -39,8 +39,57 @@ Karar 0041: kumanda ya da klavyeyle Oyun 120'de panel 60 Hz'te kalıyor. Basıl�
 
 ## Plan
 
-(boş — ajan yazar)
+1. Saf mantık `input/Hold120.kt`: `Hold120Rules` (koşul fonksiyonu), `Hold120Controller` (tut/bırak durumu, iptalde 1 sn geri çekilmeli yeniden deneme, kenar-tetikli günlük) — Android bağımlılığı yok, `Hold120Actuator` arayüzü (start/stop) ve `Scheduler` arayüzü ile test edilir.
+2. `input/HoldTouchService.kt`: AccessibilityService; `TYPE_ACCESSIBILITY_OVERLAY` 16x16 pencere (köşeden 48 px içeride), `dispatchGesture` + `continueStroke` zinciri (10 s), bırakınca willContinue=false son parça. Süreç içi `HoldTouchService.instance` ile actuator.
+3. Manifest servis kaydı + `res/xml/hold_touch_service.xml` + Türkçe açıklama string.
+4. `Settings.hold120` (varsayılan false, USER_KEYS), `hold120_target` dev düğmesi; panel Toggle + izin notu/düğmesi (SettingsCatalog), uzak oturumda gizli.
+5. MainActivity: PerfBoost gibi `hold120.update(...)` çağrıları (ayar, mod, fps, ön plan, uzak, servis bağlı), onStop/disconnect'te bırak, shutdown.
+6. Yedek `surface` hedefi: iskelet (Hold120Target enum + MainActivity'de atma kancası yok sayılırsa varsayılan overlay); KNOBS güncellenir.
+7. Birim testleri: kurallar, controller, katalog.
 
 ## Handoff
+
+- Commit: bkz. dal `task/T-360-hold-120hz` son commit (SHA orkestratör mesajında).
+- Dosyalar: `input/Hold120.kt` (kurallar, controller, arayüzler), `input/HoldTouchService.kt` (servis + actuator + overlay), `res/xml/hold_touch_service.xml`, manifest, strings, `Settings.hold120`, `DevKnobs.hold120Target`, `SettingsCatalog` (anahtar, not, "Erişilebilirlik ayarlarını aç" düğmesi), `MainActivity` (syncHold120, PerfBoost'un yanında), testler (`Hold120Test`, katalog, DevKnobs), `docs/KNOBS.md`.
+- Varsayımlar: overlay 16x16 px, sol üstten 48 px içeride, dokunma ortasında; zincir 10 s (getMaxGestureDuration ile sınırlı), UP = 50 ms'lik willContinue=false son parça. Geri çekilme 1/2/4/8 sn, 5 sn dayanan tutuş sayacı sıfırlar. Servis "bağlı" = `HoldTouchService.instance != null`. Mod/fps: `streamMode.isGame` ve `streamConfig.fps >= 120`.
+- `surface` yedek yolu uygulanmadı: `hold120_target` yalnız ayrıştırılıyor/KNOBS'ta, bugün overlay gibi davranıyor (kapsam 4 "iskelet"; AGP overlay'i saymazsa orkestratör kararıyla ayrı iş).
+- check.sh: Android derlemesi ve yeni testler geçti. check.sh FAIL veriyor, ama yalnız temel dalda da (HEAD~1) yeniden üretilen, makine yüküne bağlı zamanlama testleri yüzünden: `DecoderWaitTest.inputParksWith...`, `OutputParkTest.withParkOff...` (+ ara sıra `AacDecodeWorkerTest.lateOutput...`) ve Swift `BoundedWaitTests` (host-mac'e dokunulmadı).
+- Test EDİLMEDİ (cihaz): servisin gerçekten bağlanması, overlay'in AGP'yi 120'de tutması, continueStroke zincirinin 10 s sınırında kesintisiz sürmesi, gerçek dokunmanın tutuşu iptal edip geri gelmesi.
+- Cihazda kontrol: (1) Ayarlar > Erişilebilirlik'ten "MateBridge 120 Hz" servisini aç; panelde "Kumandayla 120 Hz" Açık. (2) Oyun 120, dokunmadan: `dumpsys SurfaceFlinger` Current mode 120'de kalır, host `display_rate hz=120`. (3) Host logunda sahte dokunmadan işaretçi olayı yok (`input_age pointer_n` dokunmazken 0). (4) Gerçek tek parmak tıklama, pinch, kalem normal; gerçek dokunma sonrası ~1 sn içinde `ev=hold120 state=off reason=cancelled` sonra `state=on`. (5) Anahtarı kapat / arka plana al / Oyun 60'a geç / uzak oturum: `state=off reason=setting|background|mode|remote`, panel 60'a döner; servis izni yokken panelde "Erişilebilirlik izni gerekli" + düğme.
+
+### Review turu 1 (P1 düzeltmeleri)
+
+- P1-1: her parça artık hareket ediyor (`HoldPathGeometry`: 24x24 overlay, A<->B ±6 px, her devam öncekinin bittiği yerden başlar; UP parçası da 2 px hareket eder). UP sonrası overlay son parça bitince (ya da 400 ms zaman aşımıyla) kaldırılır.
+- P1-2: `Hold120Controller.onTouch(down)`; MainActivity `dispatchTouchEvent` gerçek parmak/kalem temasını (SOURCE_TOUCHSCREEN/STYLUS) izler. Temas varken ya da bitişten 1 sn dolmadan başlatma/yeniden deneme yok (`reason=touch`); tutulan dokunma temas yüzünden bırakılmaz (UP gerçek jesti iptal ederdi). Testler eklendi.
+- Cihazda ek kontrol: tutuş 10 sn sınırını aşıp kesintisiz sürer (SurfaceFlinger 120); gerçek dokunma sonrası ~1 sn içinde geri gelir.
+- check.sh: yeni testler geçti; yalnız taban dalda da kırık zamanlama testleri (DecoderWaitTest, OutputParkTest, Swift BoundedWaitTests) kırmızı.
+
+### Review turu 2
+
+- P1 (UP gecikmesi): seçilen yol = kısa parçalar. `HoldPathGeometry.CHUNK_MS = 500` (A<->B hareketi aynı); `continueStroke(false)` çalışan parçanın arkasına kuyruklanır, yani UP en çok chunk+50 ms (`maxUpLagMs`) sonra gelir. Overlay kaldırma zaman aşımı `removalTimeoutMs = chunk + final + 300 ms`, böylece overlay UP'den uzun yaşar. Pure test: `timingContractBoundsTheUpLagAndOverlayOutlivesIt`. Bedel: saniyede ~2 dispatchGesture (cihazda pil/CPU'ya bak).
+- P2: `ContactTracker` (tam kaynak eşleşmesi, mouse hariç, parmak ve kalem ayrı sayaç, ACTION_DOWN/POINTER_DOWN/POINTER_UP/UP/CANCEL ile eşzamanlı temas sayısı); MainActivity yalnız 0<->>0 geçişte `hold120.onTouch` çağırır. Testler: parmak basılıyken fare tıklaması/bırakması hâlâ temas; çoklu işaretçi sayımı.
+- KNOBS: 24x24 overlay, `touch` nedeni eklendi.
+- check.sh: yalnız bilinen zamanlama testleri (DecoderWaitTest, OutputParkTest, AacDecodeWorkerTest) kırmızı; Swift bu turda geçti.
+
+### Review turu 3
+
+- P1: ilk `dispatchGesture` artık overlay hazır olmadan gitmez: 50 ms'lik yoklama, görünüm takılı + ölçülü olunca 100 ms oturma (`OverlayReadiness`), gerçek `getLocationOnScreen` ile yol kaydırılır (ox/oy); 1 sn içinde hazır olmazsa dispatch yok, iptal yolu. Ek olarak `OverlayDropFilter`: overlay varken (`HoldTouchService.overlayRect`) DOWN'u bu dikdörtgene düşen gerçek dokunma akışı UP/CANCEL'e kadar Mac'e gitmeden düşürülür (`dispatchTouchEvent`'te).
+- P2: `DrainGate`: boşaltma sırasında ikinci `stop()` etkisiz; overlay'i yalnız son parçanın bitişi/iptali/zaman aşımı kaldırır.
+- Testler: hazırlık kararı, DrainGate, düşürme süzgeci. check.sh: yalnız bilinen zamanlama testleri (DecoderWaitTest, OutputParkTest, Swift BoundedWaitTests) kırmızı.
+
+### Review turu 4
+
+- P1: `Hold120Actuator.abortIfPreparing()` (gerçek temas, ilk dispatch'ten önce başlarsa: dispatch yok, overlay kalkar, UP gerekmez; controller `reason=touch` günlüğü, temas kalkınca + 1 sn sessizlikten sonra normal ertelenmiş başlatma). Ayrıca `start(onCancelled, canDispatch)`: ilk dispatch'ten hemen önce controller'ın sessizlik koşulu yeniden sorulur, değilse iptal yolu. Çalışan tutuş hâlâ onTouch ile bırakılmaz.
+- P2: `OverlayDropFilter` cihaz (deviceId) başına akış izler; yalnız DOWN'u (tüm işaretçiler dikdörtgen içinde) düşürülen cihazın akışı UP/CANCEL'e kadar düşer; başka cihazın UP'si ve karışık işaretçili olaylar geçer.
+- Testler eklendi (hazırlıkta temas, kalkış+sessizlik sonrası yeniden başlatma, koruma yüklemi, kalem UP'si geçer, karışık işaretçi geçer). check.sh: yalnız bilinen zamanlama testleri kırmızı.
+
+### Review turu 5
+
+- Ön plan koşulu artık `started && resumed && pencere odağı`: MainActivity onResume/onPause/onWindowFocusChanged hold koşullarını besler. Odak kaybında (bildirim paneli vb.) tutuş `reason=background` ile bırakılır, bekleyen yeniden deneme iptal edilir. Ön plana dönüş (odak/resume) kalkan dokunma gibi 1 sn sessizlik başlatır. İlk dispatch korumasi (`canDispatch`) artık tüm koşulları (odak dahil) yeniden değerlendirir.
+- Testler: odak kaybı → bırak + yeniden deneme iptal + koruma false; odak dönünce yalnız sessizlik sonrası başlar. check.sh: yalnız bilinen zamanlama testleri kırmızı.
+
+### Review turu 6
+
+- `resetHold120Contacts()` (ContactTracker + OverlayDropFilter sıfırla, controller'a "şimdi kalktı"): cihaz çıkarılınca, onPause, odak kaybı ve oturum sıfırlamasında çağrılır; normal 1 sn sessizlik uygulanır. Test: temas basılı → sıfırla → sessizlikten sonra tutuş başlar. check.sh: yalnız bilinen zamanlama testleri kırmızı.
 
 ## Open questions

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- T-360 (decision 0041): gesture-only accessibility service; reads no window content and listens to no events. -->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/hold_touch_service_description"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:canPerformGestures="true"
+    android:canRetrieveWindowContent="false" />
