@@ -2005,3 +2005,13 @@ Kullanıcı ~2 saat kumandayla oynadı. Kaynak: host.log (`ev=stats`, `cadence`,
 - **Çözme:** decode p50 10,8–11,1 ms, p95 12–19 ms (1848×1214; Performans artışı olmadan bu boyutta ölçüm yok, karşılaştırma yapılamaz). cap_dec p50 15 ms.
 - **Pil:** %68 → %48 (22:29 → 00:28), ~%10/saat; oturum öncesi boşta/menüde ~%8,5/saat. Pil sıcaklığı en çok 29 °C; termal durum 0, kısma yok.
 - **Ses:** düşen paket toplam ~240 (ilk ve son dilimde; başlangıç/kapanış).
+
+## 2026-10-21 ~01:00 — T-360 cihazda: erişilebilirlik jesti Huawei'de hiçbir pencereye ulaşmıyor
+
+Kurulum: daily APK 253e1348, `hw_screen_freq=1`, servis "MateBridge 120 Hz" bağlı (`dumpsys accessibility` Bound services), Oyun 120 (1848×1214), "Kumandayla 120 Hz" açık.
+
+- Denetleyici çalışıyor: `ev=hold120 state=on reason=ok`; overlay penceresi ekranda (`ty=2032`, `mFrame=[48,48][72,72]`, `isVisible=true`, `dumpsys input` listesinde dokunulabilir).
+- Panel 60'ta kaldı. Jest olayları sistemde düşüyor: her ~40 ms `InputDispatcher: Not find touchable window and gesture monitor, current event toolType is 0`, ardından `Dropping event because the pointer is not down…`. Altındaki tam ekran MainActivity de bulunamıyor, yani sorun overlay türü değil; erişilebilirlik enjeksiyonunun olayları (`toolType 0` = TOOL_TYPE_UNKNOWN) Huawei'nin isabet testinde hiçbir pencereye eşlenmiyor. Ara sıra `reason=cancelled` → yeniden deneme döngüsü.
+- Karşılaştırma: `adb shell input touchscreen tap 60 60` (shell enjeksiyonu, parmak) overlay'e düşüyor (Mac'e gitmiyor) ve panel ~1 sn **120**'ye çıkıyor. Yani AGP overlay'deki dokunmayı sayıyor; engel yalnız erişilebilirlik jestinde.
+- Sonuç: 0041'in adb'siz yolu bu cihazda çalışmıyor. Kalan yol: overlay erişilebilirlik servisinden, basılı dokunma host'tan `adb shell input touchscreen motionevent DOWN/UP` (adb kablosuz bağlantısı yeniden başlatmada kaybolur). Kullanıcı kararı bekliyor.
+- Not: teşhis sırasında bir kez `input touchscreen tap 1400 1700` video yüzeyine düştü (Mac'e tek bir tıklama olarak gitti).
