@@ -331,14 +331,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         log = { ev, f -> MbLog.i(ev, f) },
     )
 
-    /** T-360: real finger/stylus contact (not mouse, trackpad or hover) defers the held touch; a dispatched gesture would cancel it. */
+    /** T-360: real finger/stylus contacts (not mouse, trackpad or hover) defer the held touch; a dispatched gesture would cancel them. */
+    private val hold120Contacts = dev.matebridge.client.input.ContactTracker()
     private fun noteHold120Contact(ev: MotionEvent) {
-        val src = ev.source
-        if (src and (android.view.InputDevice.SOURCE_TOUCHSCREEN or android.view.InputDevice.SOURCE_STYLUS) == 0) return
-        when (ev.actionMasked) {
-            MotionEvent.ACTION_DOWN -> hold120.onTouch(true)
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> hold120.onTouch(false)
-        }
+        val before = hold120Contacts.touching
+        val now = hold120Contacts.onEvent(ev.source, ev.actionMasked, ev.pointerCount)
+        if (now != before) hold120.onTouch(now)
     }
 
     private fun syncHold120() {

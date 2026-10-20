@@ -205,4 +205,36 @@ class Hold120Test {
         assertEquals(Hold120Rules.Reason.TOUCH, Hold120Rules.reason(true, true, true, true, false, true, 120, touchQuiet = false))
         assertEquals("touch", Hold120Rules.Reason.TOUCH.logName)
     }
+
+    // ---- round 2 ----
+
+    @Test fun timingContractBoundsTheUpLagAndOverlayOutlivesIt() {
+        assertTrue(HoldPathGeometry.CHUNK_MS <= 500L)
+        assertEquals(HoldPathGeometry.CHUNK_MS + HoldPathGeometry.FINAL_MS, HoldPathGeometry.maxUpLagMs())
+        assertTrue(HoldPathGeometry.removalTimeoutMs() >= HoldPathGeometry.maxUpLagMs() + 300L)
+    }
+
+    @Test fun mouseUpDoesNotClearAFingerThatIsDown() {
+        val t = ContactTracker()
+        assertTrue(t.onEvent(ContactTracker.SRC_TOUCH, 0, 1)) // finger down
+        assertTrue(t.onEvent(ContactTracker.SRC_MOUSE, 0, 1)) // mouse click
+        assertTrue(t.onEvent(ContactTracker.SRC_MOUSE, 1, 1)) // mouse up: finger still down
+        assertEquals(1, t.contacts)
+        assertFalse(t.onEvent(ContactTracker.SRC_TOUCH, 1, 1))
+    }
+
+    @Test fun multiPointerCountsAndStylusIsSeparate() {
+        val t = ContactTracker()
+        t.onEvent(ContactTracker.SRC_TOUCH, 0, 1)
+        t.onEvent(ContactTracker.SRC_TOUCH, 5, 2)
+        assertEquals(2, t.contacts)
+        assertTrue(t.onEvent(ContactTracker.SRC_TOUCH, 6, 2)) // one lifts
+        assertEquals(1, t.contacts)
+        t.onEvent(ContactTracker.SRC_STYLUS, 0, 1)
+        assertEquals(2, t.contacts)
+        t.onEvent(ContactTracker.SRC_STYLUS, 3, 1) // cancel
+        assertEquals(1, t.contacts)
+        assertTrue(t.onEvent(ContactTracker.SRC_TOUCH, 2, 1)) // a move changes nothing
+        assertFalse(t.onEvent(ContactTracker.SRC_TOUCH, 3, 1))
+    }
 }

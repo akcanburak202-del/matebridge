@@ -64,4 +64,11 @@ Karar 0041: kumanda ya da klavyeyle Oyun 120'de panel 60 Hz'te kalıyor. Basıl�
 - Cihazda ek kontrol: tutuş 10 sn sınırını aşıp kesintisiz sürer (SurfaceFlinger 120); gerçek dokunma sonrası ~1 sn içinde geri gelir.
 - check.sh: yeni testler geçti; yalnız taban dalda da kırık zamanlama testleri (DecoderWaitTest, OutputParkTest, Swift BoundedWaitTests) kırmızı.
 
+### Review turu 2
+
+- P1 (UP gecikmesi): seçilen yol = kısa parçalar. `HoldPathGeometry.CHUNK_MS = 500` (A<->B hareketi aynı); `continueStroke(false)` çalışan parçanın arkasına kuyruklanır, yani UP en çok chunk+50 ms (`maxUpLagMs`) sonra gelir. Overlay kaldırma zaman aşımı `removalTimeoutMs = chunk + final + 300 ms`, böylece overlay UP'den uzun yaşar. Pure test: `timingContractBoundsTheUpLagAndOverlayOutlivesIt`. Bedel: saniyede ~2 dispatchGesture (cihazda pil/CPU'ya bak).
+- P2: `ContactTracker` (tam kaynak eşleşmesi, mouse hariç, parmak ve kalem ayrı sayaç, ACTION_DOWN/POINTER_DOWN/POINTER_UP/UP/CANCEL ile eşzamanlı temas sayısı); MainActivity yalnız 0<->>0 geçişte `hold120.onTouch` çağırır. Testler: parmak basılıyken fare tıklaması/bırakması hâlâ temas; çoklu işaretçi sayımı.
+- KNOBS: 24x24 overlay, `touch` nedeni eklendi.
+- check.sh: yalnız bilinen zamanlama testleri (DecoderWaitTest, OutputParkTest, AacDecodeWorkerTest) kırmızı; Swift bu turda geçti.
+
 ## Open questions

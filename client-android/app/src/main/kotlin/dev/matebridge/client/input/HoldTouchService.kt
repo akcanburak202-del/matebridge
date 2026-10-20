@@ -110,7 +110,7 @@ class HoldTouchActuator(private val service: HoldTouchService) : Hold120Actuator
         dispatch(s, e)
     }
 
-    private fun chunkMs(): Long = minOf(CHUNK_MS, GestureDescription.getMaxGestureDuration()).coerceAtLeast(MIN_CHUNK_MS)
+    private fun chunkMs(): Long = minOf(HoldPathGeometry.CHUNK_MS, GestureDescription.getMaxGestureDuration()).coerceAtLeast(100L)
 
     private fun dispatch(s: GestureDescription.StrokeDescription, e: Int) {
         val ok = try {
@@ -159,7 +159,7 @@ class HoldTouchActuator(private val service: HoldTouchService) : Hold120Actuator
             val finish = Runnable { if (!done) { done = true; handler.removeCallbacksAndMessages(null); removeOverlay() } }
             try {
                 val f = HoldPathGeometry.finalSegment(seg)
-                val last = s.continueStroke(pathOf(f), 0, FINAL_MS, false)
+                val last = s.continueStroke(pathOf(f), 0, HoldPathGeometry.FINAL_MS, false)
                 val ok = service.dispatchGesture(
                     GestureDescription.Builder().addStroke(last).build(),
                     object : AccessibilityService.GestureResultCallback() {
@@ -168,7 +168,7 @@ class HoldTouchActuator(private val service: HoldTouchService) : Hold120Actuator
                     },
                     handler,
                 )
-                if (ok) { handler.postDelayed(finish, FINAL_TIMEOUT_MS); return }
+                if (ok) { handler.postDelayed(finish, HoldPathGeometry.removalTimeoutMs()); return }
             } catch (_: Throwable) {}
         }
         removeOverlay()
@@ -183,9 +183,5 @@ class HoldTouchActuator(private val service: HoldTouchService) : Hold120Actuator
     }
 
     private companion object {
-        const val CHUNK_MS = 10_000L
-        const val MIN_CHUNK_MS = 1_000L
-        const val FINAL_MS = 50L
-        const val FINAL_TIMEOUT_MS = 400L
     }
 }

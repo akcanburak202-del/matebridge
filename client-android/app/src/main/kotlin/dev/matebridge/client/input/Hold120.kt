@@ -209,6 +209,18 @@ object HoldPathGeometry {
     const val AMPLITUDE_PX = 6
     const val FINAL_STEP_PX = 2
 
+    /**
+     * Timing contract: a `continueStroke(..., false)` is queued after the running chunk, so the UP lands up to one chunk
+     * after stop. Chunks are short ([CHUNK_MS]) to bound that; the overlay outlives the UP by [removalTimeoutMs].
+     */
+    const val CHUNK_MS = 500L
+    const val FINAL_MS = 50L
+    const val MARGIN_MS = 300L
+
+    /** The most the UP can lag behind a stop, and the overlay's removal fallback (chunk + final stroke + margin). */
+    fun maxUpLagMs(chunkMs: Long = CHUNK_MS): Long = chunkMs + FINAL_MS
+    fun removalTimeoutMs(chunkMs: Long = CHUNK_MS): Long = maxUpLagMs(chunkMs) + MARGIN_MS
+
     data class Seg(val x0: Float, val y0: Float, val x1: Float, val y1: Float)
 
     private const val CX = (INSET_PX + OVERLAY_SIZE_PX / 2).toFloat()
@@ -230,4 +242,45 @@ object HoldPathGeometry {
 
     fun inside(x: Float, y: Float): Boolean =
         x > INSET_PX && x < INSET_PX + OVERLAY_SIZE_PX && y > INSET_PX && y < INSET_PX + OVERLAY_SIZE_PX
+}
+
+/**
+ * Counts concurrent REAL contacts (finger on the touchscreen, stylus) from raw events, per source, so a mouse click or a
+ * trackpad cannot clear a finger that is still down. Sources are matched on all bits (mouse, touchscreen and stylus share
+ * SOURCE_CLASS_POINTER). Pure: the caller passes the numbers.
+ */
+class ContactTracker {
+    private var finger = 0
+    private var stylus = 0
+
+    val contacts: Int get() = finger + stylus
+    val touching: Boolean get() = contacts > 0
+
+    /** [pointerCount] is the event's own count (a POINTER_UP still includes the lifting pointer). Returns [touching]. */
+    fun onEvent(source: Int, actionMasked: Int, pointerCount: Int): Boolean {
+        val isStylus = (source and SRC_STYLUS) == SRC_STYLUS
+        val isFinger = (source and SRC_TOUCH) == SRC_TOUCH
+        if ((source and SRC_MOUSE) == SRC_MOUSE || (!isStylus && !isFinger)) return touching
+        val n = when (actionMasked) {
+            ACTION_DOWN, ACTION_POINTER_DOWN -> pointerCount
+            ACTION_POINTER_UP -> pointerCount - 1
+            ACTION_UP, ACTION_CANCEL -> 0
+            else -> return touching
+        }.coerceAtLeast(0)
+        if (isStylus) stylus = n else finger = n
+        return touching
+    }
+
+    fun reset() { finger = 0; stylus = 0 }
+
+    companion object {
+        const val SRC_TOUCH = 0x00001002 // InputDevice.SOURCE_TOUCHSCREEN
+        const val SRC_STYLUS = 0x00004002 // InputDevice.SOURCE_STYLUS
+        const val SRC_MOUSE = 0x00002002 // InputDevice.SOURCE_MOUSE
+        const val ACTION_DOWN = 0
+        const val ACTION_UP = 1
+        const val ACTION_CANCEL = 3
+        const val ACTION_POINTER_DOWN = 5
+        const val ACTION_POINTER_UP = 6
+    }
 }
