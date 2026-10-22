@@ -1,13 +1,18 @@
 import Testing
 @testable import MateBridgeCore
 
-// HID-* (T-272, changed by T-361): while the Mac's cursor is hidden, relative pointer moves still move it (a web page
+// HID-* (T-272, changed by T-361 and T-363): while the Mac's cursor is hidden, relative pointer moves still move it (a web page
 // shows a `cursor: none` cursor again only when its position changes) but keep it 8 pt inside every display edge, so it
 // never reaches the Dock or the menu bar. `testGeometry`: origin (100, 50), 1400 x 920 pt, scale 2; center (800, 510);
 // inner rectangle x 108...1491.5, y 58...961.5.
 
 private func env(cursor: DisplayPoint?, hidden: Bool) -> InjectionEnvironment {
     InjectionEnvironment(canInject: true, geometry: testGeometry, cursor: cursor, cursorHidden: hidden)
+}
+
+/// T-363: a hidden relative move is two events: (a) at the base with the delta, (b) at the inset target with delta 0.
+private func pair(_ kind: MacMouse.Kind = .moved, base: DisplayPoint, target: DisplayPoint, delta: DisplayPoint) -> [MacEvent] {
+    [mouseEvent(kind, at: base, delta: delta), mouseEvent(kind, at: target, delta: .zero)]
 }
 
 private func rel(_ dx: Float, _ dy: Float, dragging: MouseButton? = nil) -> InjectAction {
@@ -21,7 +26,7 @@ struct HiddenCursorTests {
         var p = InjectionPlanner()
         let live = DisplayPoint(x: 1000, y: 700)
         let events = p.plan([rel(30, 20)], environment: env(cursor: live, hidden: true), now: 0)
-        #expect(events == [mouseEvent(.moved, at: DisplayPoint(x: 1030, y: 720), delta: DisplayPoint(x: 30, y: 20))])
+        #expect(events == pair(base: live, target: DisplayPoint(x: 1030, y: 720), delta: DisplayPoint(x: 30, y: 20)))
         #expect(p.cursor == DisplayPoint(x: 1030, y: 720))
         #expect(p.counters.hiddenCursorMoves == 1)
     }
@@ -38,14 +43,14 @@ struct HiddenCursorTests {
         for (dx, dy, want) in cases {
             var p = InjectionPlanner()
             let events = p.plan([rel(dx, dy)], environment: env(cursor: live, hidden: true), now: 0)
-            #expect(events == [mouseEvent(.moved, at: want, delta: DisplayPoint(x: Double(dx), y: Double(dy)))])
+            #expect(events == pair(base: live, target: want, delta: DisplayPoint(x: Double(dx), y: Double(dy))))
         }
         // Repeated pushes against the wall stay on the margin.
         var p = InjectionPlanner()
         var at = live
         for i in 0..<50 {
             let events = p.plan([rel(-100, 0)], environment: env(cursor: at, hidden: true), now: UInt64(i) * 8_000)
-            guard case .mouse(let m) = events[0] else { Issue.record("no mouse event"); return }
+            guard events.count == 2, case .mouse(let m) = events[1] else { Issue.record("no mouse pair"); return }
             at = m.position
         }
         // At the wall the 1 pt inward step alternates 108 / 109 (see HID-1d).
@@ -56,16 +61,19 @@ struct HiddenCursorTests {
     func hid1c_edgeBroughtIn() {
         var p = InjectionPlanner()
         var events = p.plan([rel(0, 0)], environment: env(cursor: DisplayPoint(x: 100, y: 400), hidden: true), now: 0)
-        #expect(events == [mouseEvent(.moved, at: DisplayPoint(x: 108, y: 400), delta: .zero)])
+        #expect(events == pair(base: DisplayPoint(x: 100, y: 400), target: DisplayPoint(x: 108, y: 400), delta: .zero))
         p = InjectionPlanner()
         events = p.plan([rel(-3, 2)], environment: env(cursor: DisplayPoint(x: 100, y: 400), hidden: true), now: 0)
-        #expect(events == [mouseEvent(.moved, at: DisplayPoint(x: 108, y: 402), delta: DisplayPoint(x: -3, y: 2))])
+        #expect(events == pair(base: DisplayPoint(x: 100, y: 400), target: DisplayPoint(x: 108, y: 402),
+                               delta: DisplayPoint(x: -3, y: 2)))
         p = InjectionPlanner()
         events = p.plan([rel(1, -1)], environment: env(cursor: DisplayPoint(x: 600, y: 50), hidden: true), now: 0)
-        #expect(events == [mouseEvent(.moved, at: DisplayPoint(x: 601, y: 58), delta: DisplayPoint(x: 1, y: -1))])
+        #expect(events == pair(base: DisplayPoint(x: 600, y: 50), target: DisplayPoint(x: 601, y: 58),
+                               delta: DisplayPoint(x: 1, y: -1)))
         p = InjectionPlanner()
         events = p.plan([rel(0, 0)], environment: env(cursor: DisplayPoint(x: 1499.5, y: 969.5), hidden: true), now: 0)
-        #expect(events == [mouseEvent(.moved, at: DisplayPoint(x: 1491.5, y: 961.5), delta: .zero)])
+        #expect(events == pair(base: DisplayPoint(x: 1499.5, y: 969.5), target: DisplayPoint(x: 1491.5, y: 961.5),
+                               delta: .zero))
     }
 
     @Test("HID-1d hidden: moving outward from each inset boundary still changes the position (1 pt inward)")
@@ -79,14 +87,14 @@ struct HiddenCursorTests {
         for (live, dx, dy, want) in cases {
             var p = InjectionPlanner()
             let events = p.plan([rel(dx, dy)], environment: env(cursor: live, hidden: true), now: 0)
-            #expect(events == [mouseEvent(.moved, at: want, delta: DisplayPoint(x: Double(dx), y: Double(dy)))])
+            #expect(events == pair(base: live, target: want, delta: DisplayPoint(x: Double(dx), y: Double(dy))))
         }
         // Repeated pushes into the left wall: every post differs from the live position and stays inside.
         var p = InjectionPlanner()
         var at = DisplayPoint(x: 108, y: 400)
         for i in 0..<10 {
             let events = p.plan([rel(-10, 0)], environment: env(cursor: at, hidden: true), now: UInt64(i) * 8_000)
-            guard case .mouse(let m) = events[0] else { Issue.record("no mouse event"); return }
+            guard events.count == 2, case .mouse(let m) = events[1] else { Issue.record("no mouse pair"); return }
             #expect(m.position != at)
             #expect(m.position.x >= 108)
             at = m.position
@@ -116,9 +124,13 @@ struct HiddenCursorTests {
         var deltas: [Double] = []
         for i in 0..<5 {
             let events = p.plan([rel(0.4, 0)], environment: env(cursor: at, hidden: true), now: UInt64(i) * 8_000)
-            guard events.count == 1, case .mouse(let m) = events[0] else { Issue.record("no mouse event"); return }
+            guard events.count == 2, case .mouse(let a) = events[0], case .mouse(let m) = events[1] else {
+                Issue.record("no mouse pair"); return
+            }
+            #expect(a.position == at)
+            #expect(m.deltaX == 0)
             #expect(abs(m.position.x - (at.x + 0.4)) < 1e-6)
-            deltas.append(m.deltaX)
+            deltas.append(a.deltaX)
             at = m.position
         }
         #expect(deltas == [0, 0, 1, 0, 1])
@@ -135,9 +147,11 @@ struct HiddenCursorTests {
         for i in 0..<200 {
             events = p.plan([rel(-25, 0, dragging: .left)], environment: env(cursor: at, hidden: true),
                             now: 1_010_000 + UInt64(i) * 8_000)
-            guard case .mouse(let m) = events[0] else { Issue.record("no mouse event"); return }
-            #expect(m.kind == .dragged)
-            #expect(m.deltaX == -25)
+            guard events.count == 2, case .mouse(let a) = events[0], case .mouse(let m) = events[1] else {
+                Issue.record("no mouse pair"); return
+            }
+            #expect(a.kind == .dragged && m.kind == .dragged)
+            #expect(a.deltaX == -25 && m.deltaX == 0)
             #expect(m.position.x >= 108)
             at = m.position
             model.apply(events)
@@ -151,6 +165,15 @@ struct HiddenCursorTests {
         #expect(!p.isHoldingInput)
     }
 
+    @Test("HID-1e hidden: a move into the wall is still two events; the first stays at the base, the second steps in")
+    func hid1e_wallPair() {
+        var p = InjectionPlanner()
+        let live = DisplayPoint(x: 108, y: 400)
+        let events = p.plan([rel(-10, 0)], environment: env(cursor: live, hidden: true), now: 0)
+        #expect(events == pair(base: live, target: DisplayPoint(x: 109, y: 400), delta: DisplayPoint(x: -10, y: 0)))
+        #expect(p.counters.hiddenCursorMoves == 1)  // per message, not per event
+    }
+
     @Test("HID-5 visible to hidden to visible: the hidden stretch is clamped inside, visible goes to the edge")
     func hid5_transitions() {
         var p = InjectionPlanner()
@@ -160,7 +183,7 @@ struct HiddenCursorTests {
         at = DisplayPoint(x: 310, y: 300)
         for i in 1...5 {
             events = p.plan([rel(-100, 0)], environment: env(cursor: at, hidden: true), now: UInt64(i) * 8_000)
-            guard case .mouse(let m) = events[0] else { Issue.record("no mouse event"); return }
+            guard events.count == 2, case .mouse(let m) = events[1] else { Issue.record("no mouse pair"); return }
             #expect(m.position.x >= 108)
             at = m.position
         }
@@ -174,10 +197,10 @@ struct HiddenCursorTests {
         var p = InjectionPlanner()
         var events = p.plan([rel(5, 5)], environment: env(cursor: nil, hidden: true), now: 0)
         let first = DisplayPoint(x: testGeometry.center.x + 5, y: testGeometry.center.y + 5)
-        #expect(events == [mouseEvent(.moved, at: first, delta: DisplayPoint(x: 5, y: 5))])
+        #expect(events == pair(base: testGeometry.center, target: first, delta: DisplayPoint(x: 5, y: 5)))
         events = p.plan([rel(5, 5)], environment: env(cursor: DisplayPoint(x: 20, y: 20), hidden: true), now: 8_000)
-        #expect(events == [mouseEvent(.moved, at: DisplayPoint(x: first.x + 5, y: first.y + 5),
-                                      delta: DisplayPoint(x: 5, y: 5))])
+        #expect(events == pair(base: first, target: DisplayPoint(x: first.x + 5, y: first.y + 5),
+                               delta: DisplayPoint(x: 5, y: 5)))
     }
 
     @Test("HID-7 absolute pointer and the pen are unaffected by the hidden flag")

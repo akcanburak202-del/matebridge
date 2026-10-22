@@ -263,6 +263,9 @@ public struct InjectionPlanner: Sendable {
             guard let g = openGate(env) else { return }
             let target: DisplayPoint
             var delta = DisplayPoint.zero
+            // T-363: a hidden cursor gets a second, delta-0 event at the inset target; this is the first one's
+            // position (the base, where the delta-carrying event goes). Nil while the cursor is visible.
+            var hiddenFirst: DisplayPoint?
             switch motion {
             case .absolute(let x, let y):
                 target = g.point(x: x, y: y)
@@ -281,6 +284,7 @@ public struct InjectionPlanner: Sendable {
                 if fy != 0, t.y == base.y { t.y += base.y < g.center.y ? 1 : -1 }
                 target = t
                 delta = takeRelativeDelta(fx, fy)
+                hiddenFirst = base
                 remember(target, now: now)
                 counters.hiddenCursorMoves += 1
             case .relative(let dx, let dy):
@@ -294,8 +298,19 @@ public struct InjectionPlanner: Sendable {
             }
             // A drag only if that button's down was really posted; otherwise it is a plain move.
             let held = dragging.flatMap { heldButtons[$0] != nil ? $0 : nil }
-            out.append(.mouse(MacMouse(kind: held == nil ? .moved : .dragged, button: held ?? .left, position: target,
-                                       deltaX: delta.x, deltaY: delta.y, clickState: 0)))
+            let kind: MacMouse.Kind = held == nil ? .moved : .dragged
+            if let first = hiddenFirst {
+                // T-363: (a) the pre-T-361 event, at the base with the delta: it lifts an AppKit "hide while typing"
+                // obscure (Terminal) and games read the delta from it. (b) a delta-0 event at the inset target: the
+                // position really changes, which wakes `cursor: none` web pages (T-361). Both are needed.
+                out.append(.mouse(MacMouse(kind: kind, button: held ?? .left, position: first,
+                                           deltaX: delta.x, deltaY: delta.y, clickState: 0)))
+                out.append(.mouse(MacMouse(kind: kind, button: held ?? .left, position: target,
+                                           deltaX: 0, deltaY: 0, clickState: 0)))
+            } else {
+                out.append(.mouse(MacMouse(kind: kind, button: held ?? .left, position: target,
+                                           deltaX: delta.x, deltaY: delta.y, clickState: 0)))
+            }
             cursor = target
 
         case .mouseButton(let button, let down):
