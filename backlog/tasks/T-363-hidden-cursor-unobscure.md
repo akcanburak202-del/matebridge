@@ -1,7 +1,7 @@
 ---
 id: T-363
 title: Host — gizli imleç: Terminal "yazarken gizle" T-361 ile açılmıyor; yerinde + kaydırılmış iki olay
-status: in_progress
+status: review
 phase: 7
 owner: mac-host-dev
 depends_on: [T-361]
@@ -40,6 +40,15 @@ Kanıt (canlı izleme, `CGCursorIsVisible` + konum her 20 ms, 2026-10-22 23:54�
 
 ## Plan
 
+`InjectionPlanner.mouseMove`, `.relative where env.cursorHidden` dalı: hedef/delta hesabı aynı (T-361 hedefi, ham delta, kesir taşıma); `hiddenFirst = base` işaretlenir ve olay üretiminde iki olay çıkar: (a) base konumunda delta'lı, (b) hedefte delta 0; ikisi de aynı kind (moved/dragged). `cursor = target`, `remember` yalnız hedef için, sayaç mesaj başına. Testler `pair(...)` yardımcısıyla güncellenir; LOGGING.md cümlesi.
+
 ## Handoff
+
+- Commit: son `T-363: ...` commit'i (branch `task/T-363-hidden-cursor-unobscure`).
+- Dosyalar: `host-mac/Sources/MateBridgeCore/Input/InjectionPlanner.swift`, `host-mac/Tests/MateBridgeCoreTests/Input/HiddenCursorTests.swift`, `docs/LOGGING.md`, bu kart. `MateBridgeHost` değişmedi.
+- Davranış: gizliyken her `POINTER_REL` iki olay (a: base, delta; b: T-361 hedefi, delta 0), sürüklemede ikisi de `dragged`. Görünür/ABS/kalem/dokunma/kaydırma/düğme değişmedi.
+- Değişen test beklentileri (hepsi HiddenCursorTests, tek olay yerine iki olay): HID-1, 1b (köşe tabloları + tekrarlı itme son olaydan okunur), 1c, 1d, 3 (delta ilk olayda, ikincisi 0; konum ikinciden), 4 (iki dragged, a delta -25, b 0), 5 (son olaydan okunur), 6. Yeni: HID-1e (duvara itme çifti, sayaç mesaj başına). HID-2/2b/7/8/9 ve diğer paketler (fuzz/pipeline dahil) değişmedi.
+- check.sh: ALL OK (1299 test).
+- Gerçek donanımda EDİLMEDİ (CGEvent gönderilmedi): Terminal'de yazınca gizlenen imleç trackpad hareketiyle geri geliyor mu (kartın çıkarımı doğrulanmadı); Safari/YouTube gizli imleç hâlâ geri geliyor mu; oyunda (delta okuyan) çift olay çift hareket saymıyor mu (ikinci delta 0 olduğundan saymamalı).
 
 ## Open questions
