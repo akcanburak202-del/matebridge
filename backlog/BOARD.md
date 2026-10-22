@@ -371,3 +371,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-359](tasks/T-359-camera-usb.md) | Kamera — USB oturumunda da çalışsın (adb reverse 47004) | 7 | mac-host-dev | [T-354, T-357] |
 | [T-360](tasks/T-360-client-hold-120hz.md) | İstemci — "Kumandayla 120 Hz" (erişilebilirlik servisiyle basılı sahte dokunma, varsayılan kapalı) | 7 | android-client-dev | [T-350] |
 | [T-361](tasks/T-361-hidden-cursor-inset-move.md) | Host — gizli imleç kilitlenmesi; gizliyken de hareket et, kenardan içeride tut | 7 | mac-host-dev | [T-272] |
+| [T-362](tasks/T-362-client-connect-path-choice.md) | İstemci — bağlantı ekranı "Yerel ağ | Tailscale" + veri tasarrufu, Bağlan/Durdur, açılışta bağlanma yok | 7 | android-client-dev | [T-352] |

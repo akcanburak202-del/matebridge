@@ -1,7 +1,7 @@
 ---
 id: T-362
 title: İstemci — bağlantı ekranı "Yerel ağ | Tailscale" + veri tasarrufu, Bağlan/Durdur, açılışta bağlanma yok
-status: review
+status: done
 phase: 7
 owner: android-client-dev
 depends_on: [T-352]
