@@ -115,6 +115,11 @@ class SessionMachine(
              * the PONG timeout is 10 s and no migration happens. Null = the normal session.
              */
             val remote: RemoteProfile? = null,
+            /**
+             * T-362: explicit user retry intent ("Bağlan" on Tailscale). Clears the cancel / key-mismatch latches like a user
+             * tap, but is NOT permission to pair ([userInitiated] is).
+             */
+            val retry: Boolean = false,
         ) : Event
         data object Stop : Event
         /**
@@ -434,7 +439,7 @@ class SessionMachine(
             is Event.Start -> {
                 if (phase != Phase.IDLE) byeAndClose(out)
                 clearPrompt()
-                if (event.userInitiated || event.remote != null) { // 0038: the remote button is a user tap too (clears the latches, never pairs)
+                if (event.userInitiated || event.remote != null || event.retry) { // 0038: the remote button is a user tap too (clears the latches, never pairs)
                     cancelLatched = false
                     authFailures.clear() // T-156: the user tries again
                 } else if (cancelLatched) {

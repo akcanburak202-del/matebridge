@@ -294,10 +294,11 @@ class SessionController(
         userInitiated: Boolean = false,
         expectHost: HostTag? = null,
         remote: RemoteProfile? = null,
+        retry: Boolean = false,
     ) {
         if (terminated.get()) return
         ensureEngine()
-        mail.intent.post(SessionMachine.Event.Start(endpoint, wake, userInitiated, expectHost, remote))
+        mail.intent.post(SessionMachine.Event.Start(endpoint, wake, userInitiated, expectHost, remote, retry))
     }
 
     /**

@@ -71,6 +71,16 @@ object ConnectButton {
     }
 }
 
+/**
+ * T-362: what a start's origin means for the session machine, apart from the session profile. Path / profile (remote,
+ * Tailscale) and trust intent are separate: a stored-trust "Bağlan" keeps [ConnectOrigin.userInitiated] on any path
+ * (the host still refuses pairing over Tailscale, 0038 section 5), and a "Bağlan" press on Tailscale is a retry intent.
+ */
+object StartIntent {
+    /** A user press on the Tailscale path (saver on or off) clears the failure latches. */
+    fun retry(origin: ConnectOrigin): Boolean = origin == ConnectOrigin.TAILSCALE || origin == ConnectOrigin.REMOTE
+}
+
 /** Decision 0042 section 2: which addresses may become `lastWifiEndpoint` (the local AUTO fallback target). */
 object WifiMemory {
     fun mayRemember(origin: ConnectOrigin, ep: Endpoint, pinnedSession: Boolean): Boolean =

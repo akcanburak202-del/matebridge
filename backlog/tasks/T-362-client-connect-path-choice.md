@@ -73,5 +73,10 @@ Tablette bakılacak:
 4. Bağlanırken "Durdur": döngü, bulma ve WoL durur, ekran "Bağlan"a döner, "Bağlantı kesildi" metni; arka plana gidip dönünce yeniden bağlanmaz.
 5. Bağlan sonrası uygulamayı arka plana al ve dön: yeniden bağlanır. Segment/Switch seçimi uygulama yeniden açılınca hatırlanıyor; "Varsayılanlara dön" Yerel ağ'a çeviriyor, adres kalıyor. Segment ve Switch odak halkası (klavye).
 
+## Codex düzeltmesi (2 x P2)
+- `SessionMachine.Event.Start.retry` (ve `SessionController.start(retry=)`): "Bağlan" Tailscale'de (tasarruf açık/kapalı) kilitleri (iptal, anahtar uyuşmazlığı) kullanıcı dokunuşu gibi açar ama eşleşme izni değildir (`userInitiated` ayrı kalır). `StartIntent.retry(via)`.
+- `connect(ep, origin, via)`: yol/profil (`via`: REMOTE/TAILSCALE) ile güven niyeti (`origin`, ör. STORED_CONNECT `userInitiated=true`) ayrıldı; `userStartStored` artık origin'i değiştirmiyor, profil `via` ile taşınıyor, böylece kayıtlı güven ekranı döngüye girmez. Host Tailscale'de eşleşmeyi yine reddeder (0038 §5).
+- Testler: `PairTrustFlowTest` (iptal kilidi + retry, kayıtlı güven + retry), `ConnectPathTest.startIntentMaps...`. Tam `./scripts/check.sh` geçti.
+
 ## Open questions
 - Tailscale adresi alanı ayarlar listesinde değil giriş ekranında (yukarıdaki sapma). İstenirse ayrı bir kartla SettingsCatalog'a metin öğesi eklenir.

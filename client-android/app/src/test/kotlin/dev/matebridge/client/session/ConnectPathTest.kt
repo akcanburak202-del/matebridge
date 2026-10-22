@@ -170,4 +170,12 @@ class ConnectPathTest {
         assertNull(s.lastEndpoint())
         assertEquals(Endpoint("mac.ts.net", 47001), s.tailscaleEndpoint())
     }
+
+    @Test fun startIntentMapsProfilesToRetryWithoutTouchingPairing() {
+        assertTrue(StartIntent.retry(ConnectOrigin.TAILSCALE))
+        assertTrue(StartIntent.retry(ConnectOrigin.REMOTE))
+        assertFalse(StartIntent.retry(ConnectOrigin.DISCOVERY))
+        assertFalse(StartIntent.retry(ConnectOrigin.STORED_CONNECT))
+        assertFalse(ConnectOrigin.TAILSCALE.userInitiated) // retry intent is not permission to pair
+    }
 }

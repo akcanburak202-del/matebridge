@@ -604,6 +604,32 @@ class PairTrustFlowTest {
         assertArrayEquals(keyK, trustedOf(mac))
     }
 
+    // T-362: a retry intent (Bağlan on Tailscale) clears the latches without being permission to pair.
+    @Test fun retryIntentClearsTheCancelLatchButNeverPairs() {
+        f.store.put(mac.hostId, keyK)
+        pairUntilPrompt()
+        step(Event.TrustCancelled(shownGen()))
+        // an automatic start stays latched
+        assertTrue(step(Event.Start(discovered)).none { it is Action.OpenControl })
+        // the Tailscale press: retry, not user-initiated
+        val open = step(Event.Start(discovered, retry = true)).filterIsInstance<Action.OpenControl>().single()
+        assertFalse(open.userInitiated)
+    }
+
+    // T-362: a stored-trust button keeps its user intent on any profile, so the stored prompt is not shown again.
+    @Test fun storedTrustStartKeepsUserIntentWithAProfileAndRetry() {
+        f.store.put(mac.hostId, keyK)
+        pairUntilPrompt()
+        step(Event.Stop)
+        assertNull(start(discovered, user = false)) // the stored prompt, no connection
+        assertTrue(uis.last() is SessionUi.StoredTrust)
+        // the origin mapping: STORED_* stays user-initiated, the Tailscale profile adds the retry intent
+        assertTrue(ConnectOrigin.STORED_CONNECT.userInitiated)
+        assertTrue(StartIntent.retry(ConnectOrigin.TAILSCALE))
+        val a = step(Event.Start(discovered, userInitiated = ConnectOrigin.STORED_CONNECT.userInitiated, retry = true))
+        assertTrue(a.any { it is Action.OpenControl })
+    }
+
     @Test fun rejectedBeforeConfirmDropsPendingAndAfterConfirmKeepsTheKeyAndClearsTheMarker() {
         val c = pairUntilPrompt()
         val r = c.records(HelloAck(1, HelloAck.REJECTED, 0, 0, "Mac mini"))

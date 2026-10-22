@@ -115,6 +115,7 @@ import dev.matebridge.client.session.ConnectMode
 import dev.matebridge.client.session.ConnectPath
 import dev.matebridge.client.session.ConnectPlan
 import dev.matebridge.client.session.ConnectPlanner
+import dev.matebridge.client.session.StartIntent
 import dev.matebridge.client.session.WifiMemory
 import dev.matebridge.client.session.RemoteAddress
 import dev.matebridge.client.session.RemoteProfile
@@ -2835,12 +2836,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
      * Starts a session to [ep]. T-151 (decision 0018): only a [ConnectOrigin.userInitiated] start may pair; an
      * [ConnectOrigin.automatic] one to an endpoint that already answered PAIRING is skipped (returns false).
      */
-    private fun connect(ep: Endpoint, origin: ConnectOrigin): Boolean {
+    private fun connect(ep: Endpoint, origin: ConnectOrigin, via: ConnectOrigin = origin): Boolean {
         if (origin.automatic && !pairPick.allowsAuto(ep)) {
             MbLog.i("pair_auto_skip", "origin=${origin.logName}")
             return false
         }
-        if (origin != ConnectOrigin.REMOTE && origin != ConnectOrigin.TAILSCALE) setRemoteSession(false) // T-339: any other way of connecting is a normal session
+        if (via != ConnectOrigin.REMOTE && via != ConnectOrigin.TAILSCALE) setRemoteSession(false) // T-339: any other way of connecting is a normal session
         wakeConnect.disown() // T-134: an ordinary session from here, even to the same address
         // T-227: the user's choice ends a rediscovery episode; T-229: another Mac also drops the remembered identity.
         if (!origin.automatic) rediscovery.onUserStart(ep)
@@ -2848,14 +2849,15 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         forgetNotice = false
         forgetFailed = false
         transportEpoch++ // a migration started before this new session reports into nothing (onMigrationResult)
-        if (ConnectMode.transportOf(ep) == Transport.WIFI && WifiMemory.mayRemember(origin, ep, pinnedSession)) lastWifiEndpoint = ep // T-339 / T-362: never a remote, Tailscale or typed address
+        if (ConnectMode.transportOf(ep) == Transport.WIFI && WifiMemory.mayRemember(via, ep, pinnedSession)) lastWifiEndpoint = ep // T-339 / T-362: never a remote, Tailscale or typed address
         MbLog.i("transport", "transport=${ConnectMode.transportOf(ep).logName} origin=${origin.logName}")
         // T-227: during a rediscovery episode every automatic start (candidate, way back, T-151's pick fallback) may reach
         // only the host of the last authenticated session; the machine refuses any other one before HELLO_ACK.
         val expect = if (origin.automatic) rediscovery.expectedHost() else null
         controller.start(
             ep, userInitiated = origin.userInitiated, expectHost = expect,
-            remote = if (origin == ConnectOrigin.REMOTE) settings.remoteProfile() else null, // T-339
+            remote = if (via == ConnectOrigin.REMOTE) settings.remoteProfile() else null, // T-339
+            retry = StartIntent.retry(via), // T-362: "Bağlan" on Tailscale clears the latches; pairing stays [origin]'s call
         )
         return true
     }
@@ -3218,7 +3220,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             return
         }
         userDisconnected = false
-        connect(ep, if (remoteSession) ConnectOrigin.REMOTE else if (tailscaleFull) ConnectOrigin.TAILSCALE else origin)
+        // T-362: the trust action keeps its own intent (origin); the Tailscale / remote profile rides along as [via]
+        connect(ep, origin, via = if (remoteSession) ConnectOrigin.REMOTE else if (tailscaleFull) ConnectOrigin.TAILSCALE else origin)
     }
 
     /** A pick prompt holds no connection: try another discovered Mac at once (never the one that asked to pair). */
