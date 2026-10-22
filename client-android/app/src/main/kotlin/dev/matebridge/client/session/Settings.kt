@@ -52,7 +52,32 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
      * Remote address (decision 0038 section 1): kept apart from the manual address ([lastEndpoint]); null until the user
      * enters one. Stored as `host[:port]`, parsed by [RemoteAddress].
      */
-    fun remoteEndpoint(): Endpoint? = store.getString(KEY_REMOTE_ENDPOINT)?.let { RemoteAddress.parse(it) }
+    fun remoteEndpoint(): Endpoint? = tailscaleEndpoint()
+
+    /** T-362 (decision 0042): the one Tailscale address (the former remote address, same key). */
+    fun tailscaleEndpoint(): Endpoint? = store.getString(KEY_REMOTE_ENDPOINT)?.let { RemoteAddress.parse(it) }
+
+    /** T-362: the remembered path and "Veri tasarrufu" choice (cleared by "Varsayılanlara dön"). */
+    fun connectChoice(): ConnectChoice =
+        ConnectChoice(ConnectPath.parse(store.getString(KEY_CONNECT_PATH)), store.getString(KEY_CONNECT_SAVER) == "1")
+
+    fun setConnectChoice(c: ConnectChoice) {
+        store.putString(KEY_CONNECT_PATH, c.path.id)
+        store.putString(KEY_CONNECT_SAVER, if (c.saver) "1" else "0")
+    }
+
+    /**
+     * T-362 (decision 0042 section 7): the former manual address key is moved to the Tailscale address (when that is
+     * empty and the old one is in 100.64.0.0/10) or dropped. Runs at every start; once the key is gone it does nothing.
+     * Returns true when a stored manual address was found.
+     */
+    fun migrateManualEndpoint(): Boolean {
+        val raw = store.getString(KEY_ENDPOINT) ?: return false
+        val r = TailscaleMigration.migrate(Endpoint.parse(raw), tailscaleEndpoint())
+        r.newTailscale?.let { saveRemoteEndpoint(it) }
+        store.remove(KEY_ENDPOINT)
+        return true
+    }
 
     fun saveRemoteEndpoint(endpoint: Endpoint) = store.putString(KEY_REMOTE_ENDPOINT, RemoteAddress.display(endpoint))
 
@@ -272,11 +297,14 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
             KEY_FILES_ROOT, KEY_FILES_RO, KEY_AUDIO, KEY_AUDIO_OUT, KEY_PEN_TRAIL, KEY_PEN_DOT, KEY_FINGER_OFF,
             KEY_TRANSPORT, KEY_GAME_RESOLUTION, KEY_FPS_DAILY, KEY_FPS_GAME, KEY_HDR_GAME, KEY_HDR_DAILY, KEY_CURSOR, KEY_REMOTE_BITRATE, KEY_REMOTE_AUDIO,
             KEY_PERF_BOOST, KEY_CAMERA_MODE, KEY_CAMERA_FACING,
+            KEY_CONNECT_PATH, KEY_CONNECT_SAVER,
         )
 
         const val KEY_DEVICE_ID = "device_id"
         const val KEY_ENDPOINT = "last_endpoint"
         const val KEY_REMOTE_ENDPOINT = "remote_endpoint" // kept by "Varsayılanlara dön", like the last endpoint
+        const val KEY_CONNECT_PATH = "connect_path" // T-362
+        const val KEY_CONNECT_SAVER = "connect_saver"
         const val KEY_REMOTE_BITRATE = "remote_bitrate_kbps"
         const val KEY_REMOTE_AUDIO = "remote_audio"
         const val KEY_TRANSPORT = "transport"

@@ -20,9 +20,7 @@
     <string name="cause_version_mismatch">sürüm uyumsuz</string>
     <string name="cause_protocol_error">protokol hatası</string>
     <string name="cause_connect_failed">Mac\'e ulaşılamadı</string>
-    <string name="endpoint_hint">IP:port (örn. 192.168.1.20:7420)</string>
     <string name="connect">Bağlan</string>
-    <string name="invalid_endpoint">Geçersiz adres, IP:port biçiminde girin</string>
     <string name="usb_missing">USB bağlantısı yok — adb reverse kurulu mu?</string>
     <string name="transport_usb">Bağlantı: USB</string>
     <string name="transport_wifi">Bağlantı: Wi-Fi</string>
@@ -60,10 +58,15 @@
     <string name="key_mismatch">Bu Mac\'in anahtarı uyuşmuyor. Önce Mac\'in açık ve doğru Mac olduğundan emin ol; sonra tablette \'Bu Mac\'i unut\' ve Mac\'te \'Onaylı cihazları unut\' deyip yeniden eşleş.</string>
     <string name="forget_none">Bu tablette unutulacak bir Mac yok (önce Mac\'e bağlan).</string>
     <!-- T-339 remote connection (decision 0038) -->
-    <string name="remote_connect">Uzaktan bağlan</string>
-    <string name="remote_edit">Uzak adres</string>
-    <string name="remote_endpoint_hint">Uzak adres (örn. mac.tailnet.ts.net)</string>
-    <string name="invalid_remote_endpoint">Geçersiz uzak adres: IPv4 ya da ad yaz, istersen :port ekle</string>
+    <!-- T-362 (decision 0042) -->
+    <string name="path_local">Yerel ağ</string>
+    <string name="path_tailscale">Tailscale</string>
+    <string name="saver_label">Veri tasarrufu</string>
+    <string name="connect_stop">Durdur</string>
+    <string name="tailscale_need_address">Önce Tailscale adresini gir</string>
+    <string name="remote_edit">Tailscale adresi</string>
+    <string name="remote_endpoint_hint">Tailscale adresi (örn. 100.x.y.z ya da mac.tailnet.ts.net)</string>
+    <string name="invalid_remote_endpoint">Geçersiz Tailscale adresi: IPv4 ya da ad yaz, istersen :port ekle</string>
     <string name="remote_pairing_refused">Yeni eşleşme yalnız ev ağında ya da USB ile yapılabilir.</string>
     <string name="remote_no_mode_change">Uzak oturumda görüntü modu değişmez.</string>
 </resources>

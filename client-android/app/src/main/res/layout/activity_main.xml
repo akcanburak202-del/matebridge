@@ -30,8 +30,8 @@
         android:textSize="14sp"
         android:visibility="gone" />
 
-    <!-- Connect panel (shown until the stream starts). T-352: quiet layout, one big "Bağlan"; remote, manual address and
-         settings are text buttons below it. The shared settings controls (T-105) are built into panel_settings from code,
+    <!-- Connect panel (shown until the stream starts). T-352: quiet layout, one big "Bağlan"/"Durdur"; T-362: path choice above it,
+         the Tailscale address and settings are text buttons below it. The shared settings controls (T-105) are built into panel_settings from code,
          the same builder the in-stream side panel uses; they open under "Ayarlar". -->
     <ScrollView
         android:id="@+id/panel"
@@ -73,17 +73,25 @@
                 android:textColor="@color/mb_text_secondary"
                 android:textSize="@dimen/mb_text_label" />
 
-            <!-- T-078: hidden and disabled by default. A focused/visible editable field makes Huawei HiWrite put a
-                 touchable handwriting window over the top centre of the screen, which then swallows pen input
-                 while streaming. Opened only via the "Manuel adres" button below. -->
-            <EditText
-                android:id="@+id/endpoint"
-                style="@style/MbField"
+            <!-- T-362 (decision 0042): "Yerel ağ | Tailscale" segments and the "Veri tasarrufu" switch, built from code. -->
+            <LinearLayout
+                android:id="@+id/path_container"
                 android:layout_width="360dp"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="@dimen/mb_space_3"
+                android:orientation="vertical" />
+
+            <!-- T-078 / T-339: the Tailscale address field, hidden and disabled by default. A focused/visible editable field
+                 makes Huawei HiWrite put a touchable handwriting window over the top centre of the screen, which then swallows
+                 pen input while streaming. Opened only via "Tailscale adresi" (or by "Bağlan" without an address). -->
+            <EditText
+                android:id="@+id/remote_endpoint"
+                style="@style/MbField"
+                android:layout_width="360dp"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/mb_space_2"
                 android:enabled="false"
-                android:hint="@string/endpoint_hint"
+                android:hint="@string/remote_endpoint_hint"
                 android:imeOptions="actionDone"
                 android:inputType="textUri"
                 android:singleLine="true"
@@ -107,21 +115,6 @@
                 android:text="@string/wol_button"
                 android:visibility="gone" />
 
-            <!-- T-339 (decision 0038): the remote address field, hidden and disabled by default for the same HiWrite reason as
-                 the manual address field above. Opened by "Uzak adres" (or by the first "Uzaktan bağlan"). -->
-            <EditText
-                android:id="@+id/remote_endpoint"
-                style="@style/MbField"
-                android:layout_width="360dp"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="@dimen/mb_space_2"
-                android:enabled="false"
-                android:hint="@string/remote_endpoint_hint"
-                android:imeOptions="actionDone"
-                android:inputType="textUri"
-                android:singleLine="true"
-                android:visibility="gone" />
-
             <LinearLayout
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
@@ -130,25 +123,12 @@
                 android:orientation="horizontal">
 
                 <Button
-                    android:id="@+id/remote_connect"
-                    style="@style/MbButtonText"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="@string/remote_connect" />
-
-                <Button
                     android:id="@+id/remote_edit"
                     style="@style/MbButtonText"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="@string/remote_edit" />
-
-                <Button
-                    android:id="@+id/endpoint_toggle"
-                    style="@style/MbButtonText"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Manuel adres" />
+                    android:text="@string/remote_edit"
+                    android:visibility="gone" />
 
                 <Button
                     android:id="@+id/settings_toggle"

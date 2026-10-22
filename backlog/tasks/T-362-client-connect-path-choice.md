@@ -1,7 +1,7 @@
 ---
 id: T-362
 title: İstemci — bağlantı ekranı "Yerel ağ | Tailscale" + veri tasarrufu, Bağlan/Durdur, açılışta bağlanma yok
-status: in_progress
+status: review
 phase: 7
 owner: android-client-dev
 depends_on: [T-352]
@@ -40,6 +40,48 @@ Arka plan (2026-10-22 logları): yerel yolda `origin=saved_wifi host=100.77.121.
 
 ## Plan
 
+Saf mantık `session/ConnectPath.kt` (birim testli): `ConnectPath` (LOCAL/TAILSCALE) + `ConnectChoice(path, saver)`, `ConnectPlanner.plan(choice, tailscaleAddr)` -> `Local | Tailscale(ep, saver) | NeedAddress`, `ConnectGate` (engaged: Bağlan'la açılır, Durdur/Bağlantıyı kes ile kapanır, süreç başında kapalı; `waitingOnStart`), `ConnectButton.label(engaged, ui)` (Durdur yalnız bağlanma sürerken), `WifiMemory.mayRemember(origin, ep, pinned)` (Tailscale/elle/100.64.0.0/10 adresleri asla `lastWifiEndpoint` olmaz), `TailscaleMigration` (eski `last_endpoint` -> Tailscale adresi ya da silinir). `Settings`: yeni anahtarlar `connect_path`, `connect_saver` (USER_KEYS'e girer, "Varsayılanlara dön" sıfırlar), `tailscaleEndpoint()` = bugünkü `remote_endpoint` anahtarı, `migrateManualEndpoint()` bir kez.
+
+MainActivity: `engaged` bayrağı. `onStart`: engaged ise bugünkü başlangıç (plana göre), değilse `userDisconnected = true` bekleme (hiç bağlanma/bulma/WoL yok). `userDisconnect` (Bağlantıyı kes + Durdur) engaged'i kapatır. "Bağlan": plana göre `startTailscale(ep, saver)` (saver: remoteSession=true, 0038 profili; değil: normal oturum, yalnız `pinnedSession`) ya da yerel `applyTransport`. Otomatik davranışları kapatan `remoteSession` kontrolleri `pinnedSession` (remote || Tailscale tam kalite) olur. Elle adres alanı ve düğmeleri giriş ekranından kalkar; Tailscale adres alanı (tek, `remote_endpoint`) Tailscale seçiliyken "Tailscale adresi" satırı ile açılır. Giriş ekranında segment + Switch (SettingsViews'teki biçim) kodla eklenir. Log `connect_path`, `connect_stop`; LOGGING.md.
+
 ## Handoff
 
+Commit: 09533075 (kod) + kart güncellemesi (dal `task/T-362-client-connect-path-choice`). `./scripts/check.sh --only android` geçti (tam `check.sh` değil: yalnız istemci dokunuldu).
+
+Dosyalar: `session/ConnectPath.kt` (yeni, saf mantık), `session/Settings.kt` (`connect_path`/`connect_saver`, `tailscaleEndpoint()`, `migrateManualEndpoint()`), `session/TrustUiText.kt` (`ConnectOrigin.TAILSCALE`), `settings/ConnectChoiceViews.kt` (yeni, segment + Switch), `MainActivity.kt`, `res/layout/activity_main.xml`, `res/values/strings.xml`, `docs/LOGGING.md`, test `session/ConnectPathTest.kt`.
+
+Ne oldu:
+- Giriş ekranı: "Yerel ağ | Tailscale" segmenti, Tailscale'de "Veri tasarrufu" Switch'i, tek büyük Bağlan/Durdur, "Mac'i uyandır" (yalnız Yerel ağ), "Tailscale adresi" (yalnız Tailscale) ve "Ayarlar". "Uzaktan bağlan", "Uzak adres", "Manuel adres" ve elle adres alanı kalktı.
+- Açılışta bağlanma yok: `ConnectGate.engaged` (bellekte). `onStart` engaged değilse `userDisconnected=true` ile bekler (keşif, USB probe, WoL, otomatik yeniden bağlanma hepsi zaten bu bayrağa bağlı). Bağlan sonrası arka plana gidip dönmek eskisi gibi yeniden bağlanır. Durdur / Bağlantıyı kes / unutma `userDisconnect()` ile engaged'i kapatır. Süreç ölürse bekler.
+- Yerel yol: `lastWifiEndpoint` yalnız `WifiMemory.mayRemember` izin verirse dolar (REMOTE/TAILSCALE/TYPED_ADDRESS origin, pinned oturum ve 100.64.0.0/10 ya da `.ts.net` adresi asla). `startWifi` ayrıca 100.x/ts.net adresi `SAVED_WIFI` olarak denemez. Bugünkü hata (5 sn'de bir 100.x) bu yüzden yapısal olarak biter.
+- Tailscale + tasarruf açık: eski `startRemote` davranışı aynen (`ConnectOrigin.REMOTE`, `remoteSession`). Tailscale + tasarruf kapalı: `ConnectOrigin.TAILSCALE`, normal profil, `tailscaleFull` bayrağı; `pinnedSession = remoteSession || tailscaleFull` eski `remoteSession` otomatik-davranış korumalarının hepsine (AUTO göç, probe, fallback, keşif, rediscovery, WoL, pick prompt, "eşleşme reddedildi" metni) geçti. Profil/ses/imleç/dosya/kamera koşulları `remoteSession`'da kaldı.
+- Seçim kalıcı (`connect_path`, `connect_saver`; USER_KEYS, "Varsayılanlara dön" sıfırlar, Tailscale adresi kalır). Seçim değişirse çalışan deneme Durdur'a eşdeğer durdurulur.
+- Taşıma: açılışta `migrateManualEndpoint()`; eski `last_endpoint` 100.64.0.0/10 ise ve Tailscale adresi boşsa taşınır, aksi halde silinir; anahtar silindiği için bir kez. Log `manual_endpoint_migrated`.
+- Loglar: `connect_path`, `connect_stop`, LOGGING.md.
+
+Varsayımlar / sapmalar:
+- Kart 4: "Tailscale adresi ayarlarda tek alan". Ayarlar listesi (SettingsCatalog) metin alanı türü içermiyor; yeni öğe türü eklememek için alan giriş ekranında, yalnız Tailscale seçiliyken "Tailscale adresi" düğmesiyle açılıyor (HiWrite kuralı korunur: kapalıyken gizli+devre dışı). Klavye Done = Bağlan. Akış içi yan panelde adres alanı yok.
+- Durdur etiketi yalnız Aranıyor/Bağlanılıyor/Bağlantı yok (yeniden deneme) durumlarında; Hazır/Failed/eşleşme durumlarında "Bağlan" kalır (iptal-latch'i kaldıran eski Bağlan akışı korunsun diye). Basınca eski mantık çalışır.
+- Bağlan'dan sonra uygulama içi aktarım modu (Otomatik/USB/Wi-Fi) değişirse engaged değilken yalnız kaydedilir, bağlanmaz.
+- Adb ile test: uygulama artık açılınca bağlanmıyor; orkestratör Bağlan'a dokunmalı (ya da `adb shell input tap`). Başlatma extra'sı eklenmedi (kart "açılışta bağlanma yok" diyor).
+- Birim testleri: yol -> plan eşlemesi, kalıcılık/reset, ConnectGate (taze süreç bekler, arka plan dönüşü yeniden bağlanır, Durdur sonrası bekler), Durdur etiketi, 100.x'in `lastWifiEndpoint` olmaması, taşıma (Settings üzerinden bir kez). `MainActivity` bağlama kodu (UI, ağ) birim testsiz.
+
+Tablette bakılacak:
+1. Taze açılış (kill + aç): "Hazır", hiçbir `transport`/`transport_pick`/`wol_*`/discovery logu yok; "Bağlan" ile bağlanıyor, loglarda `ev=connect_path path=local saver=0`.
+2. Yerel ağ seçili, eski 100.x elle adres kayıtlıyken (taşıma sonrası): Bonjour adresine bağlanır, 100.x denenmez. Tailscale kapalıyken de bağlanır.
+3. Tailscale + tasarruf açık: eski uzak oturum (15 fps, 1400x920, panel "Uzak (Tasarruf)"); kapalı: tam kalite normal oturum, `origin=tailscale`, WoL yok, ekranı kapatıp açınca ve kopunca aynı adrese yeniden bağlanır. Adres yokken Bağlan alanı açar ve uyarır.
+4. Bağlanırken "Durdur": döngü, bulma ve WoL durur, ekran "Bağlan"a döner, "Bağlantı kesildi" metni; arka plana gidip dönünce yeniden bağlanmaz.
+5. Bağlan sonrası uygulamayı arka plana al ve dön: yeniden bağlanır. Segment/Switch seçimi uygulama yeniden açılınca hatırlanıyor; "Varsayılanlara dön" Yerel ağ'a çeviriyor, adres kalıyor. Segment ve Switch odak halkası (klavye).
+
+## Codex düzeltmesi (2 x P2)
+- `SessionMachine.Event.Start.retry` (ve `SessionController.start(retry=)`): "Bağlan" Tailscale'de (tasarruf açık/kapalı) kilitleri (iptal, anahtar uyuşmazlığı) kullanıcı dokunuşu gibi açar ama eşleşme izni değildir (`userInitiated` ayrı kalır). `StartIntent.retry(via)`.
+- `connect(ep, origin, via)`: yol/profil (`via`: REMOTE/TAILSCALE) ile güven niyeti (`origin`, ör. STORED_CONNECT `userInitiated=true`) ayrıldı; `userStartStored` artık origin'i değiştirmiyor, profil `via` ile taşınıyor, böylece kayıtlı güven ekranı döngüye girmez. Host Tailscale'de eşleşmeyi yine reddeder (0038 §5).
+- Testler: `PairTrustFlowTest` (iptal kilidi + retry, kayıtlı güven + retry), `ConnectPathTest.startIntentMaps...`. Tam `./scripts/check.sh` geçti.
+
+## Codex tur 2 (2 x P2)
+- `LocalPath.allows(ep, via)` tek yüklem: `connect()` başında Tailscale/`.ts.net` adresine yerel (REMOTE/TAILSCALE olmayan) her deneme reddedilir (keşif, rediscovery, SAVED_WIFI, PAIR vb.; log `local_tailscale_refused`). Doğrudan uyandırma hedefi `LocalPath.wakeTarget` ile süzülür.
+- "Varsayılanlara dön" seçimi değiştirirse `ChoiceChange.needsStop` ile `onStopClicked()` (segment dokunuşuyla aynı yol: remoteSession/tailscaleFull/pinned temizlenir, döngü durur). Mantık saf (`ChoiceChange`) ve testli; Activity bağlantısı birim testsiz.
+- Testler: `ConnectPathTest` (yerel yol hiçbir origin'de 100.x/ts.net'e gitmez, USB/LAN geçer, wakeTarget, ChoiceChange). Tam check.sh geçti.
+
 ## Open questions
+- Tailscale adresi alanı ayarlar listesinde değil giriş ekranında (yukarıdaki sapma). İstenirse ayrı bir kartla SettingsCatalog'a metin öğesi eklenir.
