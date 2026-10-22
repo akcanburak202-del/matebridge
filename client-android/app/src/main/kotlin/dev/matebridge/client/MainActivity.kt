@@ -115,6 +115,8 @@ import dev.matebridge.client.session.ConnectMode
 import dev.matebridge.client.session.ConnectPath
 import dev.matebridge.client.session.ConnectPlan
 import dev.matebridge.client.session.ConnectPlanner
+import dev.matebridge.client.session.ChoiceChange
+import dev.matebridge.client.session.LocalPath
 import dev.matebridge.client.session.StartIntent
 import dev.matebridge.client.session.WifiMemory
 import dev.matebridge.client.session.RemoteAddress
@@ -1227,9 +1229,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val audioWas = settings.audioEnabled()
         val scopeWas = settings.filesScope()
         // T-241/T-260: "Renk" lives outside Settings; reset before the STREAM_PREFS below.
+        val choiceWas = settings.connectChoice()
         val removed = settings.resetToDefaults() + (if (gameSettings.resetColour()) 1 else 0)
         pathViews?.show(settings.connectChoice()) // T-362: the path and "Veri tasarrufu" are settings too (the Tailscale address stays)
         applyPathVisibility()
+        // A changed choice ends the running attempt (clears remote / Tailscale session flags), as a tap on the segments does.
+        if (ChoiceChange.needsStop(connectGate.engaged, choiceWas, settings.connectChoice())) onStopClicked()
         audio?.forgetLearned() // takes effect at the next audio stream start
         MbLog.i("settings_reset", "keys=$removed")
         // Display: mode (a game layer is dropped and its values re-applied) and STREAM_PREFS with the default bit rate.
@@ -2670,9 +2675,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     /** The segment / switch changed: remembered at once. A running attempt is stopped (the new choice starts with "Bağlan"). */
     private fun onPathChosen(c: ConnectChoice) {
+        val before = settings.connectChoice()
         settings.setConnectChoice(c)
         applyPathVisibility()
-        if (connectGate.engaged) onStopClicked()
+        if (ChoiceChange.needsStop(connectGate.engaged, before, c)) onStopClicked()
     }
 
     private fun applyPathVisibility() {
@@ -2837,6 +2843,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
      * [ConnectOrigin.automatic] one to an endpoint that already answered PAIRING is skipped (returns false).
      */
     private fun connect(ep: Endpoint, origin: ConnectOrigin, via: ConnectOrigin = origin): Boolean {
+        if (!LocalPath.allows(ep, via)) { // T-362 (0042 section 2): the local path never connects to a Tailscale address
+            MbLog.i("local_tailscale_refused", "origin=${origin.logName}")
+            return false
+        }
         if (origin.automatic && !pairPick.allowsAuto(ep)) {
             MbLog.i("pair_auto_skip", "origin=${origin.logName}")
             return false
@@ -3017,7 +3027,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val ui = lastUi
         val idle = ui is SessionUi.Disconnected || ui == SessionUi.Idle || ui == SessionUi.Searching
         val transportOk = WakeConnect.transportAllows(mode, isOnUsb(), picking || fallbackPending) && !manualMode
-        val target = wolStore.wakeEndpoint()?.takeIf { pairPick.allowsAuto(it) } // T-151: not to an endpoint that asked to pair
+        val target = LocalPath.wakeTarget(wolStore.wakeEndpoint())?.takeIf { pairPick.allowsAuto(it) } // T-151: not to an endpoint that asked to pair
         when (val step = wakeConnect.update(now, episode, target, currentEndpoint, transportOk, idle)) {
             WakeConnect.Step.None -> Unit
             is WakeConnect.Step.Attempt -> {

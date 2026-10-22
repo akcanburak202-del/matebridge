@@ -178,4 +178,29 @@ class ConnectPathTest {
         assertFalse(StartIntent.retry(ConnectOrigin.STORED_CONNECT))
         assertFalse(ConnectOrigin.TAILSCALE.userInitiated) // retry intent is not permission to pair
     }
+
+    @Test fun localAttemptsNeverTargetATailscaleAddress() {
+        val lan = Endpoint("192.168.1.106", 47001)
+        for (o in ConnectOrigin.entries) {
+            assertTrue(o.name, LocalPath.allows(lan, o))
+            assertTrue(o.name, LocalPath.allows(ConnectMode.usbEndpoint, o))
+            if (o != ConnectOrigin.REMOTE && o != ConnectOrigin.TAILSCALE) {
+                assertFalse(o.name, LocalPath.allows(ts, o))
+                assertFalse(o.name, LocalPath.allows(Endpoint("mac.tail1.ts.net", 47001), o))
+            }
+        }
+        assertTrue(LocalPath.allows(ts, ConnectOrigin.TAILSCALE))
+        assertTrue(LocalPath.allows(ts, ConnectOrigin.REMOTE))
+        assertNull(LocalPath.wakeTarget(ts))
+        assertEquals(lan, LocalPath.wakeTarget(lan))
+        assertNull(LocalPath.wakeTarget(null))
+    }
+
+    @Test fun aChangedChoiceStopsARunningAttemptOnlyWhenEngaged() {
+        val a = ConnectChoice(ConnectPath.TAILSCALE, true)
+        val b = ConnectChoice.DEFAULT
+        assertTrue(ChoiceChange.needsStop(true, a, b))
+        assertFalse(ChoiceChange.needsStop(false, a, b))
+        assertFalse(ChoiceChange.needsStop(true, b, b)) // reset with nothing to change
+    }
 }

@@ -78,5 +78,10 @@ Tablette bakılacak:
 - `connect(ep, origin, via)`: yol/profil (`via`: REMOTE/TAILSCALE) ile güven niyeti (`origin`, ör. STORED_CONNECT `userInitiated=true`) ayrıldı; `userStartStored` artık origin'i değiştirmiyor, profil `via` ile taşınıyor, böylece kayıtlı güven ekranı döngüye girmez. Host Tailscale'de eşleşmeyi yine reddeder (0038 §5).
 - Testler: `PairTrustFlowTest` (iptal kilidi + retry, kayıtlı güven + retry), `ConnectPathTest.startIntentMaps...`. Tam `./scripts/check.sh` geçti.
 
+## Codex tur 2 (2 x P2)
+- `LocalPath.allows(ep, via)` tek yüklem: `connect()` başında Tailscale/`.ts.net` adresine yerel (REMOTE/TAILSCALE olmayan) her deneme reddedilir (keşif, rediscovery, SAVED_WIFI, PAIR vb.; log `local_tailscale_refused`). Doğrudan uyandırma hedefi `LocalPath.wakeTarget` ile süzülür.
+- "Varsayılanlara dön" seçimi değiştirirse `ChoiceChange.needsStop` ile `onStopClicked()` (segment dokunuşuyla aynı yol: remoteSession/tailscaleFull/pinned temizlenir, döngü durur). Mantık saf (`ChoiceChange`) ve testli; Activity bağlantısı birim testsiz.
+- Testler: `ConnectPathTest` (yerel yol hiçbir origin'de 100.x/ts.net'e gitmez, USB/LAN geçer, wakeTarget, ChoiceChange). Tam check.sh geçti.
+
 ## Open questions
 - Tailscale adresi alanı ayarlar listesinde değil giriş ekranında (yukarıdaki sapma). İstenirse ayrı bir kartla SettingsCatalog'a metin öğesi eklenir.

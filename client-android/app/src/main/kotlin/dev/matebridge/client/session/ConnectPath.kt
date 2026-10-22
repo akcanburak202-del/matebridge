@@ -81,6 +81,21 @@ object StartIntent {
     fun retry(origin: ConnectOrigin): Boolean = origin == ConnectOrigin.TAILSCALE || origin == ConnectOrigin.REMOTE
 }
 
+/** T-362: the one rule for what a local (non-Tailscale) connection attempt may target. */
+object LocalPath {
+    /** False for a Tailscale address when the attempt is not a Tailscale / remote start ([via]). USB loopback and LAN pass. */
+    fun allows(ep: Endpoint, via: ConnectOrigin): Boolean =
+        via == ConnectOrigin.REMOTE || via == ConnectOrigin.TAILSCALE || !WifiMemory.isTailscaleAddress(ep.host)
+
+    /** The direct-wake target (stored host) is a local attempt too. */
+    fun wakeTarget(ep: Endpoint?): Endpoint? = ep?.takeIf { !WifiMemory.isTailscaleAddress(it.host) }
+}
+
+/** T-362: a changed path / saver choice (panel tap or "Varsayılanlara dön") stops a running attempt. */
+object ChoiceChange {
+    fun needsStop(engaged: Boolean, before: ConnectChoice, after: ConnectChoice) = engaged && before != after
+}
+
 /** Decision 0042 section 2: which addresses may become `lastWifiEndpoint` (the local AUTO fallback target). */
 object WifiMemory {
     fun mayRemember(origin: ConnectOrigin, ep: Endpoint, pinnedSession: Boolean): Boolean =
