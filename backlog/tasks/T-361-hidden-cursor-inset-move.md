@@ -1,7 +1,7 @@
 ---
 id: T-361
 title: Host — gizli imleç kilitlenmesi; gizliyken de hareket et, kenardan içeride tut
-status: in_progress
+status: review
 phase: 7
 owner: mac-host-dev
 depends_on: [T-272]
@@ -36,6 +36,19 @@ Kanıt (host.log + canlı yakalama 2026-10-22 13:57):
 
 ## Plan
 
+1. Core: `DisplayGeometry.moved(_:dx:dy:inset:)` (normal clamp, then inset clamp; a display axis too small for the margin uses its center). `InjectionPlanner.hiddenCursorInset = 8`.
+2. Planner: gizli `.relative` yolu görünür yolla aynı (canlı imleç + delta, `remember`) ama `inset` ile sıkıştırılır; `hiddenCursorMoves` sayacı kalır. `adoptLiveCursor`taki T-272 gizli kolu kalkar (artık kendi gönderimlerimiz imleci oynatıyor, gecikme süzgeci gerekli).
+3. Host: yalnız yorum güncellemesi (örnekleme/log aynı). LOGGING.md cümlesi.
+4. Testler: HID-1/3/4/5/6/8 yeni davranışa göre, HID-1b (dört kenar), HID-1c (kenardaki imleç içeri), HID-2b (görünür kenara kadar).
+
 ## Handoff
+
+- Commit: son `T-361: ...` commit'i (branch `task/T-361-hidden-cursor-inset-move`).
+- Dosyalar: `host-mac/Sources/MateBridgeCore/Input/{InjectionPlanner,Geometry+Display,MacEvent}.swift`, `host-mac/Sources/MateBridgeHost/Input/InputController.swift` (yalnız yorum), `host-mac/Tests/MateBridgeCoreTests/Input/HiddenCursorTests.swift`, `docs/LOGGING.md`, bu kart.
+- Davranış: gizliyken `POINTER_REL` = canlı imleç + delta, 8 pt iç dikdörtgene sıkıştırılmış; delta ham, kesir taşınır. Görünür/ABS/kalem/dokunma/kaydırma değişmedi. Düğme yolu değişmedi (down/up kaybolmaz).
+- Değişen HID beklentileri: HID-1/3/4/5/6 (konum artık sabit değil, hareket eder ve içeri sıkışır; T-272 kabulü 1 bilerek tersine çevrildi). HID-8: gizli dal `adoptLiveCursor`tan kalktığı için, oyunun imleci tam son gönderilen konumlardan birine geri sıçratması "gecikme" sayılır (görünür moddaki bilinen ödünleşim, pencere kısa); test, oyunun başka bir yere ortalamasıyla çalışır. HID-2/7/9 değişmedi. Yeni: HID-1b, 1c, 2b.
+- Codex düzeltmesi (2 x P2): (1) gizliyken hedef canlı konuma eşit kalıyorsa (duvara itme) nonzero delta'lı eksende 1 pt içeri (ekran merkezine doğru) adım atılır; konum her olayda değişir (HID-1d, dört sınır + tekrarlı itme). (2) `adoptLiveCursor`'daki T-272 gizli kolu geri geldi (gizliyken canlı örnek doğrudan taban, `recentTargets` boşalır); önceki "gizli dal kalktı" notu ve HID-8 değişikliği geçersiz, HID-8 orijinal sahnesine döndü (başlangıç = ortalama noktası).
+- Varsayım: `mouseMoved` konumu değişince WindowServer gizli imleci yine gösterir (kanıt: kartın canlı yakalaması, +1 pt). Oyunlarda imleç delta ile 8 pt içeride gezer; GameController oyunları etkilenmez.
+- Gerçek donanımda EDİLMEDİ (CGEvent gönderilmedi): Safari/YouTube'da takılma düzeliyor mu; oyunda Dock/menü çubuğu hâlâ açılmıyor mu (Dock tetik bölgesi 8 pt'den dar olmalı, aksi halde inset artırılır); sol kenarda takılı imleç ilk harekette içeri geliyor mu.
 
 ## Open questions

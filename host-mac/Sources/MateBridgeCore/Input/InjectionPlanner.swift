@@ -66,7 +66,7 @@ public struct InjectionPlanner: Sendable {
         /// Live cursor samples within a point of an OLDER posted relative target: WindowServer had not applied our
         /// latest moves yet, so the sample was ignored and the planner's own cursor kept.
         public var liveCursorLagIgnored = 0
-        /// Relative moves made while the cursor was hidden (T-272): delta only, the cursor stayed where it was.
+        /// Relative moves made while the cursor was hidden (T-272/T-361): clamped inside `hiddenCursorInset`.
         public var hiddenCursorMoves = 0
         public init() {}
     }
@@ -126,6 +126,9 @@ public struct InjectionPlanner: Sendable {
     public var isScrollOpen: Bool { scrollOpen }
     public var isMagnifyOpen: Bool { magnifyOpen }
     public var heldKeyCodes: [UInt16] { heldKeys }
+
+    /// T-361: how far inside every display edge a hidden cursor is kept (points).
+    public static let hiddenCursorInset: Double = 8
 
     /// PLAN-*: plan one ordered action list. `now` is the host clock at the moment the message was received.
     public mutating func plan(_ actions: [InjectAction], environment env: InjectionEnvironment,
@@ -265,13 +268,20 @@ public struct InjectionPlanner: Sendable {
                 target = g.point(x: x, y: y)
                 if let c = validCursor { delta = DisplayPoint(x: target.x - c.x, y: target.y - c.y) }
             case .relative(let dx, let dy) where env.cursorHidden:
-                // T-272: a hidden cursor (a game) does not move; only the delta flows, like a physical mouse whose
-                // cursor the game detached. The position is the live cursor itself (what WindowServer holds, never
-                // behind our own posts since none moved it), else the last known one. Nothing is remembered as a
-                // target: no post of ours changes where the cursor is.
+                // T-361 (changes T-272): a hidden cursor moves like a visible one, but stays `hiddenCursorInset`
+                // points inside every display edge. Frozen (T-272) it never came back: web pages (`cursor: none`)
+                // show the cursor again only when its position really changes. Inside the margin it still never
+                // reaches the Dock or the menu bar; a live cursor resting at the edge is brought in by the first move.
                 let fx = dx.isFinite ? Double(dx) : 0, fy = dy.isFinite ? Double(dy) : 0
-                target = env.cursor.flatMap { g.onDisplay($0) } ?? validCursor ?? g.center
+                let base = validCursor ?? g.center
+                var t = g.moved(base, dx: fx, dy: fy, inset: Self.hiddenCursorInset)
+                // A move into the wall must still change the position, or a page never re-shows the cursor: step
+                // 1 pt inward (toward the display center) on each axis that moved but was clamped to no change.
+                if fx != 0, t.x == base.x { t.x += base.x < g.center.x ? 1 : -1 }
+                if fy != 0, t.y == base.y { t.y += base.y < g.center.y ? 1 : -1 }
+                target = t
                 delta = takeRelativeDelta(fx, fy)
+                remember(target, now: now)
                 counters.hiddenCursorMoves += 1
             case .relative(let dx, let dy):
                 // Starts at the live cursor (adopted in `plan`), else the last known position, else the display
@@ -540,10 +550,10 @@ public struct InjectionPlanner: Sendable {
         recentTargets.removeAll { now < $0.at || now - $0.at > lagWindowUs }
         guard let sample = env.cursor, let g = display, let live = g.onDisplay(sample) else { return }
         if env.cursorHidden {
-            // T-272: a hidden cursor is only moved by the game, never by our posts, so the sample is never behind
-            // them: it IS the position, for moves and for button-only messages alike (a click right after the game
-            // recentered the cursor must land there, not at the stale position of a visible-mode move). The cached
-            // fraction is kept when the sample is the position we hold (the system may round it).
+            // T-272: while hidden the sample is the base, for moves and button-only messages alike (a click right
+            // after the game recentered the cursor must land there, not at the stale position of a visible-mode
+            // move). The precision of an invisible cursor's base does not matter. The cached fraction is kept when
+            // the sample is the position we hold.
             if let c = cursor, g.contains(c), Self.near(c, live) {
                 counters.liveCursorCurrent += 1
             } else {

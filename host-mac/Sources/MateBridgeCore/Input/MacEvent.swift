@@ -182,8 +182,9 @@ public struct InjectionEnvironment: Equatable, Sendable {
     public var cursor: DisplayPoint?
     /// The Mac's cursor is hidden (`CGCursorIsVisible() == false`: a game hid it), sampled by the Host together with
     /// `cursor` for relative pointer messages; false when not sampled or unknown (the symbol is missing). A relative
-    /// move then reports its delta but leaves the cursor where it is, as a physical mouse does for a game that
-    /// detached the cursor (T-272): otherwise the invisible cursor runs into the Dock and the menu bar.
+    /// move then keeps the cursor `hiddenCursorInset` points inside the display edges (T-361; T-272 froze it, which
+    /// left web pages that hide the cursor unable to show it again): the invisible cursor must not reach the Dock or
+    /// the menu bar.
     public var cursorHidden: Bool
 
     public init(canInject: Bool, geometry: DisplayGeometry?, opensBlocked: Bool = false, capsLockOn: Bool? = nil,
