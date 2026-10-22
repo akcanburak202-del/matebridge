@@ -1,7 +1,7 @@
 ---
 id: T-361
 title: Host — gizli imleç kilitlenmesi; gizliyken de hareket et, kenardan içeride tut
-status: review
+status: done
 phase: 7
 owner: mac-host-dev
 depends_on: [T-272]
@@ -50,5 +50,7 @@ Kanıt (host.log + canlı yakalama 2026-10-22 13:57):
 - Codex düzeltmesi (2 x P2): (1) gizliyken hedef canlı konuma eşit kalıyorsa (duvara itme) nonzero delta'lı eksende 1 pt içeri (ekran merkezine doğru) adım atılır; konum her olayda değişir (HID-1d, dört sınır + tekrarlı itme). (2) `adoptLiveCursor`'daki T-272 gizli kolu geri geldi (gizliyken canlı örnek doğrudan taban, `recentTargets` boşalır); önceki "gizli dal kalktı" notu ve HID-8 değişikliği geçersiz, HID-8 orijinal sahnesine döndü (başlangıç = ortalama noktası).
 - Varsayım: `mouseMoved` konumu değişince WindowServer gizli imleci yine gösterir (kanıt: kartın canlı yakalaması, +1 pt). Oyunlarda imleç delta ile 8 pt içeride gezer; GameController oyunları etkilenmez.
 - Gerçek donanımda EDİLMEDİ (CGEvent gönderilmedi): Safari/YouTube'da takılma düzeliyor mu; oyunda Dock/menü çubuğu hâlâ açılmıyor mu (Dock tetik bölgesi 8 pt'den dar olmalı, aksi halde inset artırılır); sol kenarda takılı imleç ilk harekette içeri geliyor mu.
+
+- Orkestratör (Codex 2. tur P2, bilinçli kabul): gizliyken canlı örnek doğrudan taban olduğundan, WindowServer son gönderimi henüz uygulamadan gelen hareket bir adım kaybedebilir; gizli sürüklemede bırakma canlı (biraz geride) konuma inebilir. Kabul gerekçesi: imleç görünmez; oyunlar deltayı okur (bırakmada delta 0); web sayfasını uyandırmak için tek gerçek konum değişimi yeter (her olay canlıdan farklı konuma gider). Bekleyen hareket izlemeyi gizli modda geri getirmek 1. tur P2'yi (ortalama sonrası tıklama yanlış yerde) geri açar. Sahada sorun görülürse ayrı kart.
 
 ## Open questions
