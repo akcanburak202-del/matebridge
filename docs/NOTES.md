@@ -2015,3 +2015,10 @@ Kurulum: daily APK 253e1348, `hw_screen_freq=1`, servis "MateBridge 120 Hz" bağ
 - Karşılaştırma: `adb shell input touchscreen tap 60 60` (shell enjeksiyonu, parmak) overlay'e düşüyor (Mac'e gitmiyor) ve panel ~1 sn **120**'ye çıkıyor. Yani AGP overlay'deki dokunmayı sayıyor; engel yalnız erişilebilirlik jestinde.
 - Sonuç: 0041'in adb'siz yolu bu cihazda çalışmıyor. Kalan yol: overlay erişilebilirlik servisinden, basılı dokunma host'tan `adb shell input touchscreen motionevent DOWN/UP` (adb kablosuz bağlantısı yeniden başlatmada kaybolur). Kullanıcı kararı bekliyor.
 - Not: teşhis sırasında bir kez `input touchscreen tap 1400 1700` video yüzeyine düştü (Mac'e tek bir tıklama olarak gitti).
+
+## 2026-10-23 00:05 — Gizli imleç: Terminal "yazarken gizle" ve web sayfası gizlemesi farklı olayla açılıyor (T-361, T-363)
+
+- Web sayfası gizlemesi (YouTube, CSS `cursor: none`): yalnız konumu gerçekten değiştiren `mouseMoved` imleci geri gösteriyor. T-272'nin yerinde tutması (yalnız delta) burada kısır döngüydü (2026-10-22 13:57, +1 pt kaydırma anında açtı).
+- Terminal "yazarken gizle" (obscure): konumu değiştiren gönderilmiş olaylar açmıyor (T-361 sonrası canlı izleme: imleç yüzlerce pt gezdi, `CGCursorIsVisible` 0 kaldı, yalnız tıklama açtı). Yerinde, delta'lı olay açıyor.
+- T-363 (gizliyken iki olay: yerinde delta'lı + 8 pt iç sınırlı kaydırılmış delta 0) sonrası: host `pointer_hidden_mode` on→off 7–32 ms, yani ilk harekette açılıyor (10 deneme). Oyun (delta okuyan) çift olay davranışı cihazda denenmedi; kullanıcı oyunda çoğunlukla gamepad kullanıyor.
+- Arka plan işlemi `CGSObscureCursor` ile imleci gizleyemiyor (yalnız öndeki uygulama); bu yüzden döngü kullanıcı denemesi + 20 ms `CGCursorIsVisible`/konum izleyicisiyle kuruldu.
