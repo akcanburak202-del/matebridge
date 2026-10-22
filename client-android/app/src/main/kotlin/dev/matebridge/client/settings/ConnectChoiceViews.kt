@@ -53,7 +53,8 @@ class ConnectChoiceViews(
             LinearLayout.LayoutParams(dp(1), ViewGroup.LayoutParams.MATCH_PARENT),
         )
         outer.addView(tailscale, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
-        container.addView(outer, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        // Fixed height: with WRAP_CONTENT the MATCH_PARENT divider measures to the whole remaining screen height.
+        container.addView(outer, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(CONTROL_DP)))
 
         saverSwitch = Switch(context).apply {
             showText = false
