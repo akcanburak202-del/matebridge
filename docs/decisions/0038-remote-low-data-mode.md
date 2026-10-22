@@ -1,5 +1,7 @@
 # 0038 — Uzaktan bağlantı: "Uzaktan bağlan" düğmesi, en az veri profili, AAC ses, uzaktan eşleşme yok
 
+> 2026-10-22: §1 (giriş ekranı düğmesi ve ayrı adres alanları) karar 0042 ile değişti.
+
 - **Durum:** kabul (2026-10-11)
 - **Tarih:** 2026-10-11
 
