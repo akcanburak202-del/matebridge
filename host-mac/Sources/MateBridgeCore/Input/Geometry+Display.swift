@@ -85,6 +85,21 @@ public struct DisplayGeometry: Equatable, Sendable {
         clamped(DisplayPoint(x: p.x + dx, y: p.y + dy))
     }
 
+    /// T-361: like `moved`, but kept `inset` points inside every edge (a hidden cursor must not reach the Dock or the
+    /// menu bar). A cursor outside the inner rectangle is brought in. A display too small for the margin uses its center
+    /// on that axis.
+    public func moved(_ p: DisplayPoint, dx: Double, dy: Double, inset: Double) -> DisplayPoint {
+        let m = moved(p, dx: dx, dy: dy)
+        return DisplayPoint(x: Self.clampInset(m.x, origin: originX, extent: widthPt, scale: scale, inset: inset),
+                            y: Self.clampInset(m.y, origin: originY, extent: heightPt, scale: scale, inset: inset))
+    }
+
+    private static func clampInset(_ v: Double, origin: Double, extent: Double, scale: Double, inset: Double) -> Double {
+        let lower = origin + inset, upper = origin + extent - 1 / scale - inset
+        guard lower <= upper else { return origin + extent / 2 }
+        return Swift.min(Swift.max(v, lower), upper)
+    }
+
     private static func clamp(_ v: Double, origin: Double, extent: Double, scale: Double) -> Double {
         guard v.isFinite else { return origin }
         let upper = Swift.max(origin + extent - 1 / scale, origin)

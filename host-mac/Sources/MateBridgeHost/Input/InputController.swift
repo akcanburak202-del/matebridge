@@ -302,7 +302,7 @@ public final class InputController: @unchecked Sendable {
             }
             if case .pointerRel = message {
                 env.cursor = liveCursor()  // relative moves start where the cursor is
-                env.cursorHidden = sampleCursorHidden()  // T-272: and do not move a hidden one
+                env.cursorHidden = sampleCursorHidden()  // T-272/T-361: a hidden one stays inside the edge margin
             }
             pushActivity()  // the activity from BEFORE this message (T-163)
             // T-344: one write around the whole handling: the posts (which note their location) and, for a POINTER_REL
