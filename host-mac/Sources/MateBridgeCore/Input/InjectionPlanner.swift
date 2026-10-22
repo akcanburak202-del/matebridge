@@ -274,7 +274,12 @@ public struct InjectionPlanner: Sendable {
                 // reaches the Dock or the menu bar; a live cursor resting at the edge is brought in by the first move.
                 let fx = dx.isFinite ? Double(dx) : 0, fy = dy.isFinite ? Double(dy) : 0
                 let base = validCursor ?? g.center
-                target = g.moved(base, dx: fx, dy: fy, inset: Self.hiddenCursorInset)
+                var t = g.moved(base, dx: fx, dy: fy, inset: Self.hiddenCursorInset)
+                // A move into the wall must still change the position, or a page never re-shows the cursor: step
+                // 1 pt inward (toward the display center) on each axis that moved but was clamped to no change.
+                if fx != 0, t.x == base.x { t.x += base.x < g.center.x ? 1 : -1 }
+                if fy != 0, t.y == base.y { t.y += base.y < g.center.y ? 1 : -1 }
+                target = t
                 delta = takeRelativeDelta(fx, fy)
                 remember(target, now: now)
                 counters.hiddenCursorMoves += 1
@@ -544,6 +549,20 @@ public struct InjectionPlanner: Sendable {
     private mutating func adoptLiveCursor(_ env: InjectionEnvironment, now: UInt64) {
         recentTargets.removeAll { now < $0.at || now - $0.at > lagWindowUs }
         guard let sample = env.cursor, let g = display, let live = g.onDisplay(sample) else { return }
+        if env.cursorHidden {
+            // T-272: while hidden the sample is the base, for moves and button-only messages alike (a click right
+            // after the game recentered the cursor must land there, not at the stale position of a visible-mode
+            // move). The precision of an invisible cursor's base does not matter. The cached fraction is kept when
+            // the sample is the position we hold.
+            if let c = cursor, g.contains(c), Self.near(c, live) {
+                counters.liveCursorCurrent += 1
+            } else {
+                counters.liveCursorAdopted += 1
+                cursor = live
+            }
+            recentTargets.removeAll()
+            return
+        }
         if let c = cursor, g.contains(c), Self.near(c, live) {
             counters.liveCursorCurrent += 1
             // Caught up: older entries are retired. The current position stays, stamped now, so a sample that still
