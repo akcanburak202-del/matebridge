@@ -40,6 +40,10 @@ Arka plan (2026-10-22 logları): yerel yolda `origin=saved_wifi host=100.77.121.
 
 ## Plan
 
+Saf mantık `session/ConnectPath.kt` (birim testli): `ConnectPath` (LOCAL/TAILSCALE) + `ConnectChoice(path, saver)`, `ConnectPlanner.plan(choice, tailscaleAddr)` -> `Local | Tailscale(ep, saver) | NeedAddress`, `ConnectGate` (engaged: Bağlan'la açılır, Durdur/Bağlantıyı kes ile kapanır, süreç başında kapalı; `waitingOnStart`), `ConnectButton.label(engaged, ui)` (Durdur yalnız bağlanma sürerken), `WifiMemory.mayRemember(origin, ep, pinned)` (Tailscale/elle/100.64.0.0/10 adresleri asla `lastWifiEndpoint` olmaz), `TailscaleMigration` (eski `last_endpoint` -> Tailscale adresi ya da silinir). `Settings`: yeni anahtarlar `connect_path`, `connect_saver` (USER_KEYS'e girer, "Varsayılanlara dön" sıfırlar), `tailscaleEndpoint()` = bugünkü `remote_endpoint` anahtarı, `migrateManualEndpoint()` bir kez.
+
+MainActivity: `engaged` bayrağı. `onStart`: engaged ise bugünkü başlangıç (plana göre), değilse `userDisconnected = true` bekleme (hiç bağlanma/bulma/WoL yok). `userDisconnect` (Bağlantıyı kes + Durdur) engaged'i kapatır. "Bağlan": plana göre `startTailscale(ep, saver)` (saver: remoteSession=true, 0038 profili; değil: normal oturum, yalnız `pinnedSession`) ya da yerel `applyTransport`. Otomatik davranışları kapatan `remoteSession` kontrolleri `pinnedSession` (remote || Tailscale tam kalite) olur. Elle adres alanı ve düğmeleri giriş ekranından kalkar; Tailscale adres alanı (tek, `remote_endpoint`) Tailscale seçiliyken "Tailscale adresi" satırı ile açılır. Giriş ekranında segment + Switch (SettingsViews'teki biçim) kodla eklenir. Log `connect_path`, `connect_stop`; LOGGING.md.
+
 ## Handoff
 
 ## Open questions
