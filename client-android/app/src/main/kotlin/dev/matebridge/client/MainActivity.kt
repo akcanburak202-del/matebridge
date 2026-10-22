@@ -109,7 +109,13 @@ import dev.matebridge.client.video.VideoRenderer
 import dev.matebridge.client.stream.DisplayRateDebouncer
 import dev.matebridge.client.video.VsyncClock
 import dev.matebridge.client.video.VsyncIdleGate
+import dev.matebridge.client.session.ConnectButton
+import dev.matebridge.client.session.ConnectChoice
 import dev.matebridge.client.session.ConnectMode
+import dev.matebridge.client.session.ConnectPath
+import dev.matebridge.client.session.ConnectPlan
+import dev.matebridge.client.session.ConnectPlanner
+import dev.matebridge.client.session.WifiMemory
 import dev.matebridge.client.session.RemoteAddress
 import dev.matebridge.client.session.RemoteProfile
 import dev.matebridge.client.session.RemoteTimings
@@ -171,7 +177,6 @@ import kotlin.math.roundToInt
  */
 class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var status: TextView
-    private lateinit var endpointField: EditText
     private lateinit var settings: Settings
     private lateinit var controller: SessionController
     private var streamMode = StreamMode.DEFAULT
@@ -208,6 +213,15 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var sideSettings: SettingsViews? = null
     /** "Bağlantıyı kes" was used: no automatic (re)connect until "Bağlan", a transport choice or the next onStart. */
     private var userDisconnected = false
+    /** T-362 (decision 0042 section 6): "Bağlan" was pressed and not stopped; nothing connects by itself without it. */
+    private val connectGate = dev.matebridge.client.session.ConnectGate()
+    /** T-362: the idle text says "Bağlantı kesildi" only after "Durdur" / "Bağlantıyı kes", not on a fresh start. */
+    private var stopNotice = false
+    private var pathViews: dev.matebridge.client.settings.ConnectChoiceViews? = null
+    /** T-362: a Tailscale session without "Veri tasarrufu": a normal profile, but nothing automatic may move it (like a remote one). */
+    private var tailscaleFull = false
+    /** Automatic transport moves, discovery, Wake-on-LAN and rediscovery stay off for a remote or full-quality Tailscale session. */
+    private val pinnedSession get() = remoteSession || tailscaleFull
     /** T-095: `--ez audio false` turns audio off entirely (no AUDIO_PCM capability, no AUDIO_PREFS, no playback). */
     private var audioAllowed = true
     private var audio: AudioPlayout? = null
@@ -410,7 +424,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     // way of connecting ends it. The remote profile (bit rate, audio) lives in [settings]; the session machine sends it.
     @Volatile private var remoteSession = false // T-341: also read by the engine thread (onConnectionGen)
     private lateinit var remoteField: EditText
-    private lateinit var remoteConnectButton: Button
     private var trustButtons: List<TrustButton> = emptyList()
     private var lastUi: SessionUi = SessionUi.Searching
 
@@ -494,7 +507,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         video.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> updateViewport() }
         video.setOnLongClickListener { toggleStats(); true }
         root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> layoutVideo() }
-        endpointField = findViewById(R.id.endpoint)
         val prefs = getSharedPreferences("matebridge", Context.MODE_PRIVATE)
         val prefsStore = object : KeyValueStore {
             override fun getString(key: String) = prefs.getString(key, null)
@@ -509,8 +521,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         wolSender = WolSender(this)
         statsOn = settings.statsOverlay()
         applyStatsVisibility()
-        settings.lastEndpoint()?.let { endpointField.setText(it.toString()) }
-        setupManualEntry()
+        if (settings.migrateManualEndpoint()) MbLog.i("manual_endpoint_migrated") // T-362 (0042 section 7): once, the key is gone after it
+        setupConnectPath()
         connectButton = findViewById(R.id.connect)
         connectButton.setOnClickListener { onConnectClicked() }
         // T-151: the trust buttons sit right under the status text (built here: the layout is outside this task).
@@ -519,7 +531,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         wakeButton = findViewById(R.id.wake)
         wakeButton.setOnClickListener { onWakeClicked() }
         refreshWakeButton()
-        setupRemote() // T-339
 
         val pairKeys = EncryptedPairKeyStore(
             object : dev.matebridge.client.session.AtomicKeyValueStore {
@@ -1216,6 +1227,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val scopeWas = settings.filesScope()
         // T-241/T-260: "Renk" lives outside Settings; reset before the STREAM_PREFS below.
         val removed = settings.resetToDefaults() + (if (gameSettings.resetColour()) 1 else 0)
+        pathViews?.show(settings.connectChoice()) // T-362: the path and "Veri tasarrufu" are settings too (the Tailscale address stays)
+        applyPathVisibility()
         audio?.forgetLearned() // takes effect at the next audio stream start
         MbLog.i("settings_reset", "keys=$removed")
         // Display: mode (a game layer is dropped and its values re-applied) and STREAM_PREFS with the default bit rate.
@@ -1262,6 +1275,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun userDisconnect() {
         MbLog.i("user_disconnect")
         userDisconnected = true
+        connectGate.onStopped() // T-362: nothing connects by itself until "Bağlan"
+        stopNotice = true
         setRemoteSession(false) // T-339
         closeSettingsPanel(SettingsPanelState.Via.DISCONNECT, resync = false)
         discovery?.stop()
@@ -1499,40 +1514,15 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         Toast.makeText(this, SpeedRange.label(mouse, v), Toast.LENGTH_SHORT).show()
     }
 
-    // ---- manual address field (T-078) ----
+    // ---- Tailscale address field (T-078 HiWrite rule, T-362) ----
 
     /**
-     * The manual address field is hidden and disabled unless the user opens it with "Manuel adres". While an editable
-     * field is focused or visible, Huawei HiWrite (pen handwriting into text fields) adds a touchable system window over
-     * the top centre of the screen that outlives the panel and swallows pen events there once streaming starts.
+     * The address field is hidden and disabled unless the user opens it. While an editable field is focused or visible,
+     * Huawei HiWrite (pen handwriting into text fields) adds a touchable system window over the top centre of the
+     * screen that outlives the panel and swallows pen events there once streaming starts.
      */
-    private fun setupManualEntry() {
-        if (Build.VERSION.SDK_INT >= 33) endpointField.setAutoHandwritingEnabled(false) // no-op below API 33 (tablet: 31)
-        endpointField.setOnEditorActionListener { _, actionId, _ ->
-            if (actionId == EditorInfo.IME_ACTION_DONE) { onConnectClicked(); true } else false
-        }
-        findViewById<Button>(R.id.endpoint_toggle).setOnClickListener {
-            if (endpointField.visibility == View.VISIBLE) hideManualEntry() else showManualEntry()
-        }
-        hideManualEntry()
-    }
-
-    private fun showManualEntry() {
-        endpointField.isEnabled = true
-        endpointField.visibility = View.VISIBLE
-        endpointField.requestFocus()
-        (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
-            .showSoftInput(endpointField, InputMethodManager.SHOW_IMPLICIT)
-    }
-
-    /** Idempotent: no focus, no IME, gone and disabled (the typed text is kept for "Bağlan"). */
     private fun hideManualEntry() {
-        if (::remoteField.isInitialized) hideRemoteField() // T-339: the same HiWrite rule for the remote address field
-        if (endpointField.hasFocus()) endpointField.clearFocus()
-        (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
-            .hideSoftInputFromWindow(endpointField.windowToken, 0)
-        endpointField.visibility = View.GONE
-        endpointField.isEnabled = false
+        if (::remoteField.isInitialized) hideRemoteField()
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
@@ -2213,7 +2203,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         dev.matebridge.client.session.MbLog.i("activity_start")
         currentEndpoint = null
         manualMode = false
-        userDisconnected = false // T-105: a fresh start connects as usual
+        // T-362 (decision 0042 section 6): a start connects only after "Bağlan" in this process (and not "Durdur"); the
+        // background -> foreground return of a running attempt reconnects as before.
+        val waiting = connectGate.waitingOnStart()
+        userDisconnected = waiting
+        if (waiting) stopNotice = false
         forgetNotice = false
         forgetFailed = false
         if (hostSleep.clear()) MbLog.i("host_sleep_clear", "reason=${HostSleepGate.REASON_FOREGROUND}") // T-133
@@ -2225,7 +2219,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         refreshSettings()
         hostReached = false
         hideManualEntry() // T-078: every (re)start begins without an editable field on screen
-        render(SessionUi.Searching)
+        render(if (waiting) SessionUi.Idle else SessionUi.Searching)
         ui.removeCallbacks(ticker)
         ui.postDelayed(ticker, KEYFRAME_RETRY_MS)
         ui.removeCallbacks(inputTicker)
@@ -2233,7 +2227,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (::idle.isInitialized) idle.restart(SystemClock.uptimeMillis()) // T-234: back from screen-off at full brightness
         (getSystemService(Context.INPUT_SERVICE) as InputManager).registerInputDeviceListener(inputDeviceListener, ui)
         registerCableReceiver()
-        applyTransport()
+        if (!waiting) applyConnectPlan()
         ui.removeCallbacks(autoTicker)
         ui.postDelayed(autoTicker, AUTO_TICK_MS)
         refreshWakeButton()
@@ -2272,7 +2266,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         pairPick.clearSeen() // T-151: the new discovery run reports every service again
         discovery = MacDiscovery(this, onTxt = { host, wol, port -> onHostTxt(host, wol, port) }) { ep -> runOnUiThread { onDiscovered(ep) } }
             .also { it.start() }
-        if (mode == TransportMode.AUTO) lastWifiEndpoint?.let { connect(it, ConnectOrigin.SAVED_WIFI) }
+        if (mode == TransportMode.AUTO) lastWifiEndpoint?.takeUnless { WifiMemory.isTailscaleAddress(it.host) }?.let { connect(it, ConnectOrigin.SAVED_WIFI) } // T-362: never a Tailscale address
     }
 
     /**
@@ -2321,6 +2315,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     /** Stops the session and applies the selected transport again (T-096 logic). */
     private fun reconnectForMode() {
+        // T-362: a transport-mode choice is only remembered while waiting, on Tailscale (no USB/Bonjour there) or after "Durdur".
+        if (!connectGate.engaged || pinnedSession || connectChoice().path != ConnectPath.LOCAL) return
         userDisconnected = false
         if (hostSleep.clear()) MbLog.i("host_sleep_clear", "reason=${HostSleepGate.REASON_CONNECT}") // T-133: a mode choice is a user action
         currentEndpoint = null
@@ -2386,7 +2382,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private fun onProbeResult(gen: Int, r: ProbeResult, initial: Boolean) {
-        if (!probeGuard.isCurrent(gen) || !started || isDestroyed || mode != TransportMode.AUTO || remoteSession) return
+        if (!probeGuard.isCurrent(gen) || !started || isDestroyed || mode != TransportMode.AUTO || pinnedSession) return
         picking = false
         autoPolicy.onTryResult(AutoUsbPolicy.outcomeOf(r), SystemClock.elapsedRealtime())
         val usbBlocked = pairPick.isAsked(ConnectMode.usbEndpoint) // T-151: it answered PAIRING to an automatic connect
@@ -2417,7 +2413,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     /** Moves the accepted session to USB via takeover; the result comes back through [onMigrationResult]. */
     private fun startMigration(nowMs: Long) {
-        if (remoteSession) return // T-339: a remote session never changes its path
+        if (pinnedSession) return // T-339: a remote session never changes its path (T-362: nor a Tailscale one)
         autoPolicy.onTryStarted(nowMs)
         migrateEpoch = transportEpoch
         controller.migrate(ConnectMode.usbEndpoint) // real handshake: refused locally if no `adb reverse`
@@ -2432,7 +2428,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private fun autoStep() {
-        if (!started || isDestroyed || mode != TransportMode.AUTO || picking || fallbackPending || userDisconnected || hostSleep.asleep || remoteSession) return
+        if (!started || isDestroyed || mode != TransportMode.AUTO || picking || fallbackPending || userDisconnected || hostSleep.asleep || pinnedSession) return
         val now = SystemClock.elapsedRealtime()
         when (autoPolicy.next(isOnUsb(), AutoUsbPolicy.stageOf(lastUi), now, pairPick.isAsked(ConnectMode.usbEndpoint))) {
             AutoUsbPolicy.Step.MIGRATE -> startMigration(now)
@@ -2471,7 +2467,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
      */
     private fun onAskedCleared(cleared: List<Endpoint>) {
         MbLog.i("pair_asked_cleared", TrustUiText.askedClearedFields(cleared))
-        if (mode == TransportMode.AUTO && ConnectMode.usbEndpoint in cleared && !isOnUsb()) {
+        if (mode == TransportMode.AUTO && ConnectMode.usbEndpoint in cleared && !isOnUsb() && !pinnedSession) {
             autoPolicy.onUsbUnblocked(SystemClock.elapsedRealtime())
             ui.post { autoStep() } // posted: render() must not start a migration itself
         }
@@ -2480,7 +2476,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     /** AUTO on USB and the session dropped: go back to Wi-Fi (last Wi-Fi endpoint at once, plus discovery). */
     private fun fallBackToWifi() {
         fallbackPending = false
-        if (!started || isDestroyed || remoteSession || !AutoUsbPolicy.shouldFallBack(mode, isOnUsb(), lastUi)) return // T-151: also a pick prompt
+        if (!started || isDestroyed || pinnedSession || !AutoUsbPolicy.shouldFallBack(mode, isOnUsb(), lastUi)) return // T-151: also a pick prompt
         autoPolicy.onTryResult(AutoUsbPolicy.Outcome.HARD_FAIL, SystemClock.elapsedRealtime()) // back off before USB again
         logPick("wifi", AutoUsbPolicy.fallbackReason(lastUi)) // T-207: usb_asked for a PAIRING answer, else usb_lost
         probeGuard.bump()
@@ -2585,7 +2581,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
      * kes", not while the Mac said HOST_SLEEP). Only then may discovery be restarted or a candidate be left again.
      */
     private fun rediscoveryEligible(): Boolean =
-        started && !isDestroyed && discovery != null && !manualMode && !isOnUsb() && !userDisconnected && !hostSleep.asleep && !remoteSession
+        started && !isDestroyed && discovery != null && !manualMode && !isOnUsb() && !userDisconnected && !hostSleep.asleep && !pinnedSession
 
     /** T-227, from [wolTicker]: restart NSD discovery when the session's address keeps failing (next to its retries). */
     private fun rediscoveryStep() {
@@ -2628,7 +2624,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private fun onDiscovered(ep: Endpoint) {
-        if (!started || manualMode || userDisconnected || hostSleep.asleep || remoteSession) return
+        if (!started || manualMode || userDisconnected || hostSleep.asleep || pinnedSession) return
         // T-227: an address that answered as another host in this rediscovery episode is dropped before anything
         // remembers it (review #3: T-151's pick fallback must not pick it up either).
         // During an episode a new address is tried at once (CONNECT), also while the old one is still connecting.
@@ -2652,20 +2648,37 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (usual || pick == EndpointRediscovery.Pick.CONNECT) connect(ep, ConnectOrigin.DISCOVERY)
     }
 
-    // ---- T-339 (decision 0038): "Uzaktan bağlan" ----
+    // ---- T-362 (decision 0042): "Yerel ağ | Tailscale" path choice; T-339 (decision 0038): the remote session ----
 
-    private fun setupRemote() {
+    private fun setupConnectPath() {
+        pathViews = dev.matebridge.client.settings.ConnectChoiceViews(this, findViewById(R.id.path_container)) { c -> onPathChosen(c) }
+            .also { it.show(settings.connectChoice()) }
         remoteField = findViewById(R.id.remote_endpoint)
-        remoteConnectButton = findViewById(R.id.remote_connect)
-        if (Build.VERSION.SDK_INT >= 33) remoteField.setAutoHandwritingEnabled(false) // see setupManualEntry
+        if (Build.VERSION.SDK_INT >= 33) remoteField.setAutoHandwritingEnabled(false) // no-op below API 33 (tablet: 31)
         remoteField.setOnEditorActionListener { _, actionId, _ ->
-            if (actionId == EditorInfo.IME_ACTION_DONE) { onRemoteClicked(); true } else false
+            if (actionId == EditorInfo.IME_ACTION_DONE) { onConnectClicked(); true } else false
         }
-        remoteConnectButton.setOnClickListener { onRemoteClicked() }
         findViewById<Button>(R.id.remote_edit).setOnClickListener {
             if (remoteField.visibility == View.VISIBLE) hideRemoteField() else showRemoteField()
         }
         hideRemoteField()
+        applyPathVisibility()
+    }
+
+    private fun connectChoice() = settings.connectChoice()
+
+    /** The segment / switch changed: remembered at once. A running attempt is stopped (the new choice starts with "Bağlan"). */
+    private fun onPathChosen(c: ConnectChoice) {
+        settings.setConnectChoice(c)
+        applyPathVisibility()
+        if (connectGate.engaged) onStopClicked()
+    }
+
+    private fun applyPathVisibility() {
+        val tailscale = connectChoice().path == ConnectPath.TAILSCALE
+        findViewById<Button>(R.id.remote_edit).visibility = if (tailscale) View.VISIBLE else View.GONE
+        if (!tailscale) hideRemoteField()
+        refreshWakeButton()
     }
 
     private fun showRemoteField() {
@@ -2688,33 +2701,31 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         remoteField.isEnabled = false
     }
 
-    /**
-     * "Uzaktan bağlan": the first use asks for the address (the field opens; the second tap, or the keyboard's Done, saves it
-     * and connects); later taps connect to the stored address, "Uzak adres" edits it. Never part of the automatic ways.
-     */
-    private fun onRemoteClicked() {
-        val stored = settings.remoteEndpoint()
-        val fieldOpen = remoteField.visibility == View.VISIBLE
-        val ep: Endpoint
-        if (fieldOpen || stored == null) {
-            if (!fieldOpen) { showRemoteField(); return }
-            ep = RemoteAddress.parse(remoteField.text.toString()) ?: run {
-                Toast.makeText(this, R.string.invalid_remote_endpoint, Toast.LENGTH_SHORT).show()
-                return
+    /** "Durdur": ends the connection attempt, the retry loop, discovery-driven connects and Wake-on-LAN (decision 0042 section 6). */
+    private fun onStopClicked() {
+        MbLog.i("connect_stop")
+        userDisconnect()
+    }
+
+    /** The chosen path's start (at "Bağlan", and when the app returns from the background while it was running). */
+    private fun applyConnectPlan() {
+        when (val plan = ConnectPlanner.plan(connectChoice(), settings.tailscaleEndpoint())) {
+            ConnectPlan.Local -> applyTransport()
+            is ConnectPlan.Tailscale -> startTailscale(plan.endpoint, plan.saver)
+            ConnectPlan.NeedAddress -> { // the address was removed meanwhile: back to waiting
+                connectGate.onStopped()
+                userDisconnected = true
+                render(SessionUi.Idle)
             }
-            settings.saveRemoteEndpoint(ep)
-        } else {
-            ep = stored
         }
-        startRemote(ep)
     }
 
     /**
-     * Replaces whatever runs with a remote session to [ep]. Everything automatic is stopped first (discovery, USB probes,
+     * Replaces whatever runs with a Tailscale session to [ep] ([saver]: the 0038 remote session, else a normal one). Everything automatic is stopped first (discovery, USB probes,
      * AUTO migration, Wake-on-LAN, rediscovery): the remote address is the user's choice and nothing may move the session.
      */
-    private fun startRemote(ep: Endpoint) {
-        MbLog.i("remote_start")
+    private fun startTailscale(ep: Endpoint, saver: Boolean) {
+        if (saver) MbLog.i("remote_start")
         hideManualEntry()
         if (hostSleep.clear()) MbLog.i("host_sleep_clear", "reason=${HostSleepGate.REASON_CONNECT}") // a user action
         userDisconnected = false
@@ -2729,16 +2740,22 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         controller.cancelMigration()
         pairPick.dismiss()
         manualMode = true // no discovery-driven connect or rediscovery for this address
-        setRemoteSession(true)
+        setRemoteSession(saver)
+        tailscaleFull = !saver // T-362: the normal profile, but nothing automatic moves it (pinnedSession)
         wolStep() // the planner stops (remote counts like a user disconnect)
         remoteAddress = ep
-        connect(ep, ConnectOrigin.REMOTE)
+        connect(ep, if (saver) ConnectOrigin.REMOTE else ConnectOrigin.TAILSCALE)
     }
 
     /** The address of the running remote session (UI thread); forgotten when the session kind ends. */
     private var remoteAddress: Endpoint? = null
 
     private fun setRemoteSession(on: Boolean) {
+        if (!on && tailscaleFull) { // T-362: the full-quality Tailscale session ends with whatever replaces it
+            tailscaleFull = false
+            if (currentEndpoint != null && currentEndpoint == remoteAddress) currentEndpoint = null
+            remoteAddress = null
+        }
         if (remoteSession == on) return
         remoteSession = on
         syncPerfBoost() // T-350: never in a remote session
@@ -2761,44 +2778,47 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private fun onConnectClicked() {
-        val typed = endpointField.text.toString()
-        if (remoteSession && typed.isBlank()) { // T-339: "Bağlan" after a remote session is the usual way, not the remote address
-            setRemoteSession(false)
-            currentEndpoint = null
+        if (ConnectButton.isStop(connectGate.engaged, lastUi)) { onStopClicked(); return }
+        val choice = connectChoice()
+        var address = settings.tailscaleEndpoint()
+        if (choice.path == ConnectPath.TAILSCALE && remoteField.visibility == View.VISIBLE) { // an open field is a fresh choice
+            address = RemoteAddress.parse(remoteField.text.toString()) ?: run {
+                Toast.makeText(this, R.string.invalid_remote_endpoint, Toast.LENGTH_SHORT).show()
+                return
+            }
+            settings.saveRemoteEndpoint(address)
         }
+        val plan = ConnectPlanner.plan(choice, address)
+        if (plan == ConnectPlan.NeedAddress) { // Tailscale without an address: ask for it first
+            showRemoteField()
+            Toast.makeText(this, R.string.tailscale_need_address, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val wasEngaged = connectGate.engaged
+        connectGate.onConnectPressed()
+        stopNotice = false
+        MbLog.i("connect_path", "path=${choice.path.id} saver=${if (choice.path == ConnectPath.TAILSCALE && choice.saver) 1 else 0}")
         val wasAsleep = hostSleep.clear() // T-133: "Bağlan" is a user action; the normal flow (wake included) starts
         if (wasAsleep) MbLog.i("host_sleep_clear", "reason=${HostSleepGate.REASON_CONNECT}")
-        // T-134: while the Mac sleeps, "Bağlan" is "Mac'i uyandır" (wake episode + direct connect) unless an address was
-        // typed into the open manual field; a hidden field's remembered text does not count.
-        val typedNow = typed.isNotBlank() && (!wasAsleep || endpointField.visibility == View.VISIBLE)
-        // T-151: "Bağlan" is a user start for the pick gate; only a typed address in the open field may pair at once.
-        val origin = ConnectOrigin.forConnectButton(typed, endpointField.visibility == View.VISIBLE, lastUi)
+        // T-151: "Bağlan" is a user start for the pick gate.
+        val origin = ConnectOrigin.forConnectButton("", false, lastUi)
         if (origin.clearsGate) pairPick.onUserStart()
-        if ((userDisconnected || wasAsleep) && !typedNow) { // T-105: after "Bağlantıyı kes", connect the chosen mode's usual way
-            userDisconnected = false
-            hideManualEntry()
+        hideManualEntry() // T-078: no focused field once the stream may start
+        userDisconnected = false
+        if (plan is ConnectPlan.Tailscale) {
+            currentEndpoint = null
+            startTailscale(plan.endpoint, plan.saver)
+            return
+        }
+        // Local: after waiting / "Durdur" / a sleeping Mac (or from a Tailscale session) the usual way starts afresh;
+        // an engaged tap on a stuck screen (e.g. a cancelled pairing) reconnects the current endpoint as before.
+        val ep = currentEndpoint
+        if (!wasEngaged || wasAsleep || pinnedSession || ep == null) {
             restartUsualWay()
             if (wasAsleep) wolStep(manual = true) // T-134: the same path as "Mac'i uyandır"
             return
         }
-        userDisconnected = false
-        val ep = if (typed.isBlank()) currentEndpoint else Endpoint.parse(typed)
-        if (ep == null && typed.isBlank()) { // T-151: nothing chosen (e.g. after "Yoksay"): search the usual way again
-            hideManualEntry()
-            restartUsualWay()
-            return
-        }
-        if (ep == null) {
-            Toast.makeText(this, R.string.invalid_endpoint, Toast.LENGTH_SHORT).show()
-            return
-        }
-        if (typed.isNotBlank()) {
-            manualMode = true
-            settings.saveEndpoint(ep)
-        }
-        hideManualEntry() // T-078: no focused field once the stream may start
         connect(ep, origin)
-        if (wasAsleep) wolStep(manual = true) // T-134: a typed address while the Mac sleeps still gets a wake episode
     }
 
     /**
@@ -2808,7 +2828,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun restartUsualWay() {
         currentEndpoint = null
         render(SessionUi.Searching)
-        applyTransport()
+        applyConnectPlan()
     }
 
     /**
@@ -2820,7 +2840,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             MbLog.i("pair_auto_skip", "origin=${origin.logName}")
             return false
         }
-        if (origin != ConnectOrigin.REMOTE) setRemoteSession(false) // T-339: any other way of connecting is a normal session
+        if (origin != ConnectOrigin.REMOTE && origin != ConnectOrigin.TAILSCALE) setRemoteSession(false) // T-339: any other way of connecting is a normal session
         wakeConnect.disown() // T-134: an ordinary session from here, even to the same address
         // T-227: the user's choice ends a rediscovery episode; T-229: another Mac also drops the remembered identity.
         if (!origin.automatic) rediscovery.onUserStart(ep)
@@ -2828,7 +2848,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         forgetNotice = false
         forgetFailed = false
         transportEpoch++ // a migration started before this new session reports into nothing (onMigrationResult)
-        if (ConnectMode.transportOf(ep) == Transport.WIFI && origin != ConnectOrigin.REMOTE) lastWifiEndpoint = ep // T-339: never the remote address
+        if (ConnectMode.transportOf(ep) == Transport.WIFI && WifiMemory.mayRemember(origin, ep, pinnedSession)) lastWifiEndpoint = ep // T-339 / T-362: never a remote, Tailscale or typed address
         MbLog.i("transport", "transport=${ConnectMode.transportOf(ep).logName} origin=${origin.logName}")
         // T-227: during a rediscovery episode every automatic start (candidate, way back, T-151's pick fallback) may reach
         // only the host of the last authenticated session; the machine refuses any other one before HELLO_ACK.
@@ -2858,7 +2878,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }) // T-133
         if (TrustUiText.hostReached(state)) hostReached = true // terminal errors and prompts must not be replaced by the USB hint
         promptVisibility.onRender(state, started)?.let { controller.setConfirmPromptVisible(it) } // T-151: T-150's timer
-        if (!remoteSession && pairPick.onUi(state)) ui.post { tryNextAfterPick() } // T-151 (T-339: a remote session has no pick prompt): never parked on one answerer's prompt
+        if (!pinnedSession && pairPick.onUi(state)) ui.post { tryNextAfterPick() } // T-151 (T-339: a remote session has no pick prompt): never parked on one answerer's prompt
         onRediscoveryVerdict(rediscovery.onUi(state, currentEndpoint, SystemClock.elapsedRealtime())) // T-227
         pairPick.takeCleared().takeIf { it.isNotEmpty() }?.let { onAskedCleared(it) } // T-207: that Mac now trusts us
         forgetFlow.onUi(state, SystemClock.elapsedRealtime())?.let { onForgetResult(it) } // T-151: the forget's result
@@ -2882,17 +2902,18 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private fun applyStatusText(state: SessionUi) {
-        if (remoteSession && dev.matebridge.client.session.RemoteUi.pairingRefused(state)) {
+        if (pinnedSession && dev.matebridge.client.session.RemoteUi.pairingRefused(state)) {
             // T-339 (decision 0038 section 5): a new pairing is possible only at home or over USB; no retry, no trust buttons
             status.text = getString(R.string.remote_pairing_refused)
             renderTrustButtons(emptyList())
+            connectButton.setText(R.string.connect)
             return
         }
         val trust = TrustUiText.screen(state, pairPick.prompt) // T-151
         status.text = when (state) {
             SessionUi.Idle ->
                 if (forgetNotice) getString(R.string.forget_done)
-                else if (userDisconnected) USER_DISCONNECTED_TEXT else getString(R.string.state_idle)
+                else if (userDisconnected && stopNotice) USER_DISCONNECTED_TEXT else getString(R.string.state_idle)
             SessionUi.Searching -> getString(R.string.state_searching)
             is SessionUi.Connecting -> getString(R.string.state_connecting, state.endpoint.toString())
             is SessionUi.AwaitingApproval -> getString(R.string.state_awaiting_approval, state.hostName) // code: trust view
@@ -2918,6 +2939,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             status.text = getString(R.string.usb_missing)
         }
         if (wolPlanner.active && !WakePlanner.reached(state)) status.text = getString(R.string.wol_waking) // T-129
+        // T-362: "Durdur" while an attempt or retry runs, "Bağlan" otherwise.
+        connectButton.setText(if (ConnectButton.isStop(connectGate.engaged, state)) R.string.connect_stop else R.string.connect)
     }
 
     // ---- T-129 Wake-on-LAN ----
@@ -2932,7 +2955,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     private fun refreshWakeButton() {
         if (!::wakeButton.isInitialized) return
-        wakeButton.visibility = if (wolStore.hasMacs()) View.VISIBLE else View.GONE
+        wakeButton.visibility = if (wolStore.hasMacs() && settings.connectChoice().path == ConnectPath.LOCAL) View.VISIBLE else View.GONE // T-362: local only
     }
 
     /** Every [WOL_TICK_MS] while started: the planner decides whether to start, send or stop. */
@@ -2947,7 +2970,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     /** "Mac'i uyandır": after "Bağlantıyı kes" it also connects again the chosen mode's usual way (like "Bağlan"). */
     private fun onWakeClicked() {
-        if (remoteSession) return // T-339: no Wake-on-LAN for a remote session
+        if (pinnedSession || connectChoice().path != ConnectPath.LOCAL) return // T-339 / T-362: Wake-on-LAN belongs to the local path only
+        connectGate.onConnectPressed()
+        stopNotice = false
         MbLog.i("wol_manual", "active=${if (wolPlanner.active) 1 else 0}")
         val wasAsleep = hostSleep.clear() // T-133: wake + connect the usual way
         if (wasAsleep) MbLog.i("host_sleep_clear", "reason=${HostSleepGate.REASON_WAKE}")
@@ -2966,7 +2991,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val reached = WakePlanner.reached(lastUi)
         val wasActive = wolPlanner.active
         val steps = if (manual) wolPlanner.manual(now, reached, wolStore.hasMacs())
-        else wolPlanner.update(now, foreground, userDisconnected || remoteSession, reached, wolStore.hasMacs(), hostSleep.asleep) { // T-339: no WoL in a remote session
+        else wolPlanner.update(now, foreground, userDisconnected || pinnedSession, reached, wolStore.hasMacs(), hostSleep.asleep) { // T-339: no WoL in a remote session
             HomeNetwork.skipReason(wolStore.subnet(), wolSender.wifiSubnets()) // automatic wake only on the home Wi-Fi
         }
         for (step in steps) when (step) {
@@ -2986,7 +3011,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
      */
     private fun wakeConnectStep() {
         val now = SystemClock.elapsedRealtime()
-        val episode = wolPlanner.active && started && !isDestroyed && !userDisconnected && !hostSleep.asleep && !remoteSession
+        val episode = wolPlanner.active && started && !isDestroyed && !userDisconnected && !hostSleep.asleep && !pinnedSession
         val ui = lastUi
         val idle = ui is SessionUi.Disconnected || ui == SessionUi.Idle || ui == SessionUi.Searching
         val transportOk = WakeConnect.transportAllows(mode, isOnUsb(), picking || fallbackPending) && !manualMode
@@ -3193,12 +3218,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             return
         }
         userDisconnected = false
-        connect(ep, origin)
+        connect(ep, if (remoteSession) ConnectOrigin.REMOTE else if (tailscaleFull) ConnectOrigin.TAILSCALE else origin)
     }
 
     /** A pick prompt holds no connection: try another discovered Mac at once (never the one that asked to pair). */
     private fun tryNextAfterPick() {
-        if (!started || isDestroyed || manualMode || userDisconnected || hostSleep.asleep || discovery == null || remoteSession) return
+        if (!started || isDestroyed || manualMode || userDisconnected || hostSleep.asleep || discovery == null || pinnedSession) return
         if (lastUi !is SessionUi.PairingNeedsUser) return
         // T-227: never an address that answered as another host in this rediscovery episode (review #3).
         pairPick.nextAuto()?.takeUnless { rediscovery.isSkipped(it) }?.let { connect(it, ConnectOrigin.DISCOVERY) }

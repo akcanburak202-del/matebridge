@@ -713,3 +713,9 @@ Kamera görüntüsü hiçbir yerde loglanmaz ya da yazılmaz; yalnız sayaçlar 
 - `ev=camera state=link_up|link_down|retry|keyframe_request|switch|switched cam_id= [reason=…] [up_ms=…] [n=…]`: kamera bağlantısı. `link_down reason`: `closed`, `io`, `host_eof`, `rejected`, `ack_timeout`, `protocol`, `write_stall`, `keys_gone`; `retry n=1..3` (1 sn arayla), sonra `stop`.
 - `W ev=camera state=error reason=no_camera|permission|camera_access|camera_disconnected|camera_error_<n>|session|encoder|gl_<sınıf>|setup_<sınıf>`: kamera ya da kodlayıcı hatası; akış kapanır, yeni `START` beklenir.
 - `ev=camera_stats cam_id= encoded=<n> sent=<n> dropped=<n> avg_bytes=<n>`: 10 sn özeti (kodlanan, gönderilen, atılan kare; ortalama kodlanmış kare boyutu). Kapanışta bir kez de `final=1 total_encoded= total_sent= total_dropped=` ile.
+
+## Bağlantı yolu seçimi (tablet, `MB/session`, T-362, karar 0042)
+- `ev=connect_path path=local|tailscale saver=0|1`: "Bağlan"a basıldığında (`saver` yalnız Tailscale'de 1 olabilir). Adres yazılmaz.
+- `ev=connect_stop`: "Durdur" (bağlanma/yeniden bağlanma, bulma kaynaklı bağlanma ve Wake-on-LAN kesildi). Ardından her zamanki `ev=user_disconnect` gelir.
+- `ev=manual_endpoint_migrated`: eski elle adres anahtarı bulundu ve Tailscale adresine taşındı ya da silindi (anahtar gittiği için bir kez).
+- `ev=transport ... origin=tailscale`: veri tasarrufu kapalı Tailscale oturumu (`origin=remote`: tasarruf açık, 0038). Uygulama açılırken "Bağlan"a kadar hiçbir `transport`, `transport_pick`, `wol_*` ya da keşif satırı olmaz.

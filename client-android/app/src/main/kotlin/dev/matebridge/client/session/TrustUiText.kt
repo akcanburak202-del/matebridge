@@ -214,6 +214,8 @@ enum class ConnectOrigin(val logName: String, val userInitiated: Boolean, val au
      * remote path): not user-initiated, not automatic (the address is the user's choice), and no gate is touched.
      */
     REMOTE("remote", userInitiated = false, automatic = false, clearsGate = false),
+    /** T-362 (decision 0042): "Bağlan" on Tailscale without "Veri tasarrufu": a normal session to the Tailscale address (never pairs). */
+    TAILSCALE("tailscale", userInitiated = false, automatic = false, clearsGate = false),
     ;
 
     companion object {
