@@ -1,7 +1,7 @@
 ---
 id: T-363
 title: Host — gizli imleç: Terminal "yazarken gizle" T-361 ile açılmıyor; yerinde + kaydırılmış iki olay
-status: review
+status: done
 phase: 7
 owner: mac-host-dev
 depends_on: [T-361]
