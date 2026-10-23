@@ -1,7 +1,7 @@
 ---
 id: T-368
 title: Host — T-365 sonrası da IDR patlamasından sonra gate_wait 8–9 ms'de onlarca saniye kalıyor
-status: todo
+status: review
 phase: 7
 owner: mac-host-dev
 depends_on: [T-365]
@@ -32,8 +32,18 @@ Kanıt: NOTES 2026-10-23 akşam ("knob kapalı oyun oturumu"). Host b14c48d1 (T-
 
 ## Plan
 
-(ajan yazar)
+Kök neden (host.log'dan, kod okumasıyla): olay penceresinde `enc_in=enc_out=60`, `slot_wait`~0, yani kodlayıcı takılmadı; T-365 senaryosu (geç gönderim) bu olayda yok. Olan: ağ kuyruğu düşüşü -> `requestKeyframe(resubmitNow:)` -> `HEVCEncoder.resubmitLast` son tamponu `bypassGate: true`, damga `now + lead` ile ek kare olarak sunar (IDR 3+3+1 = 7 kez). `FramePacer.offer` bunu `submitted()` ile kabul edip `gate.accept(now)` çağırıyor: ızgara kaynak kadansının bir aralık önüne geçiyor, sonraki her gerçek kare yarım aralık (8,3 ms) bekliyor; ofset her kare bir aralık ilerleyip bir aralık sonra geldiği için sabit kalır, yalnız saat kaymasıyla erir (log: 8-9,5 ms, 10-95 sn). Ayrıca `noteLag` bypass karesinin `now - (now+lead)` negatif gecikmesiyle T-365 tabanını bozuyor.
+
+Düzeltme (`FramePacer`): bypass kareleri ızgarayı ilerletmez (ek kare, hız sınırından muaf; önceden de bekletilmiyordu), `lastSubmittedPtsUs` yine ilerler, `noteLag`'a girmez. Gerçek kareler için hız sınırı ve T-072/T-065/T-066 kuralları aynı. Decimation: bypass zaten ayrı yoldu; artık pts-ızgarasına `now` ile accept de yazmıyor.
 
 ## Handoff
+
+- Dal: task/T-368-gate-wait-after-idr-burst. Commit SHA: aşağıda (commit sonrası eklendi).
+- Dosyalar: host-mac/Sources/MateBridgeCore/Video/FrameGate.swift, host-mac/Tests/MateBridgeCoreTests/Video/FrameGateIdrBurstTests.swift (yeni), docs/LOGGING.md, bu kart.
+- **Kırmızı çıktı (düzeltme öncesi, yeni testler):** testRealFramesDoNotWaitAfterAnIdrBurst: son 60 gerçek karede en yüksek kapı beklemesi 9160 us, dizi [8454, 8788, 9122, ...] (> 1000); testSingleIdrResubmissionAtAnyPhaseKeepsWaitsLow: ofset 1000/4000/7000/10000 us'de 9080 us; testIdrBurstWithClockSkewKeepsWaitsLow: +50 ppm 8977, -50 ppm 9297; testBypassFrameDoesNotMoveGridOrLagBaseline: nextSlot 33332 != 16666. testRealFrameRateStaysCapped kırmızı değil (hız sınırı korunuyor). Cihaz logundaki 8-9,5 ms ile aynı büyüklük.
+- Düzeltme sonrası: swift test 695 test, 0 hata. Mevcut FrameGate/FramePacer/T-365 testlerinin beklentisi değişmedi.
+- Model-log uyumu: olay penceresinde enc_in=enc_out=60, overwritten 1-3 (kuyruk düşüşü ağ tarafında), IDR 3+3+1; yol `takePending`/sentetik/decimation değil, `offer(bypassGate:true)`. Doğrudan cihaz izi yok (log yalnız saniyelik ev=latency).
+- Varsayım: bypass kareleri hız sınırından muaf kalır (tasarım gereği; kuyruk düşüşü başına birkaç IDR).
+- Cihazda doğrulanacak: Wi-Fi kaybı/IDR patlamasından sonra Oyun 60 `gate_wait` p50 0,1 ms'de kalıyor mu (T-366 dummynet enjektörü ile önce/sonra); IDR yeniden gönderimi sırasında tablette kare sırası/gecikme değişikliği yok mu. Android timing testleri (T-367) check.sh sonucunda ayrıca belirtilir.
 
 ## Open questions
