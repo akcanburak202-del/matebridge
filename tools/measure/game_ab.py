@@ -26,6 +26,11 @@ window of EVENT_S seconds on the host's 1 Hz samples: samples whose time is in (
   not recovered in that time.
 - cwnd_kb / unacked_kb: `snd_cwnd` / `unacked_bytes` of the last video `ev=tcp` sample at most 2 s before the stall.
 Per arm: median (min-max) over the events of all its runs.
+
+IDR causes (T-371): the host's `net ev=stats` line carries `idr_cause_<cause>=<n>` (main stream, only non-zero ones),
+`idr_coalesced` and `idr_deferred`; they are summed per arm (metrics) and per event window (`idr_<cause>_5s` rows, only
+for causes that occur). A missing field counts as 0 when the arm has stats samples; a host older than T-371 therefore
+shows 0 everywhere. `video ev=idr_forced view=aux` lines (the auxiliary stream has no stats line) are counted per arm.
 """
 
 import argparse
@@ -37,6 +42,9 @@ sys.dont_write_bytecode = True  # no __pycache__ next to the tools
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import mblog  # noqa: E402
 import smoke  # noqa: E402
+
+# Order of the T-371 causes (KeyframeRequestCoalescer.IdrCause).
+IDR_CAUSES = ('queue_overflow', 'transport_refused', 'client_request', 'periodic', 'consumer', 'other')
 
 STALL_MS = 150.0
 EVENT_S = 5.0
@@ -103,6 +111,11 @@ def p(xs, q):
 
 def total(xs):
     return float(sum(xs)) if xs else None
+
+
+def cause_total(rs, cause):
+    """Sum of `idr_cause_<cause>` over stats samples (absent = 0); None without samples."""
+    return float(sum(r.num('idr_cause_' + cause) or 0 for r in rs)) if rs else None
 
 
 def last(rs):
@@ -235,6 +248,12 @@ def metrics(a):
     add('video srtt_ms p50', med(srtt))
     add('video srtt_ms p95', p(srtt, 95))
     add('keyframe_request', float(len(kf)) if a.h_win else None, 0)
+    for c in IDR_CAUSES:
+        add('idr_cause %s' % c, cause_total(hs, c), 0)
+    add('idr_coalesced (client)', float(sum(r.num('idr_coalesced') or 0 for r in hs)) if hs else None, 0)
+    add('idr_deferred (host drop)', float(sum(r.num('idr_deferred') or 0 for r in hs)) if hs else None, 0)
+    aux = a.sel(a.h_win, 'video', 'idr_forced', view='aux')
+    add('idr_forced aux lines', float(len(aux)) if a.h_win else None, 0)
     # tablet
     iv = sum(r.num('interval_ms') or 0 for r in td if r.num('recv') is not None)
     add('tablet recv_fps', sum(r.num('recv') or 0 for r in td) * 1000.0 / iv if iv else None)
@@ -309,6 +328,8 @@ def stall_events(a):
         cw = [r for r in cad if m0 < r.mono <= end]
         ev = {'n': st['n']}
         ev['idr_5s'] = total(vals(win, f('idr'))) if win else None
+        for c in IDR_CAUSES:
+            ev['idr_%s_5s' % c] = cause_total(win, c)
         ev['queue_drops_5s'] = total(vals(cw, f('queue_drops'))) if cw else None
         ev['overwritten_5s'] = total(vals(cw, f('overwritten'))) if cw else None
         caps = [(r.mono, r.num('cap_dec_ms')) for r in win if r.num('cap_dec_ms') is not None]
@@ -343,11 +364,29 @@ EVENT_ROWS = (('idr in 5 s', 'idr_5s', 0), ('queue_drops in 5 s', 'queue_drops_5
               ('unacked at stall (KB)', 'unacked_kb', 0))
 
 
+def cause_rows(arms):
+    """One row per IDR cause that occurs in any event of any arm."""
+    rows = []
+    for c in IDR_CAUSES:
+        key = 'idr_%s_5s' % c
+        if any((ev.get(key) or 0) > 0 for _n, e in arms for ev in e):
+            rows.append(('  idr %s' % c, key, 0))
+    return rows
+
+
+def cause_text(ev):
+    """'queue_overflow=3,client_request=1' for the per-event table; '-' when none."""
+    parts = ['%s=%d' % (c, ev['idr_%s_5s' % c]) for c in IDR_CAUSES if (ev.get('idr_%s_5s' % c) or 0) > 0]
+    return ','.join(parts) or '-'
+
+
 def event_lines(arms, name_w=26, colw=22):
     """Median (min-max) rows over events; `arms` = [(column name, events)] side by side."""
     out = ['%-*s ' % (name_w, 'stall metric') + ' '.join('%-*s' % (colw, n) for n, _e in arms)]
     out.append('%-*s ' % (name_w, 'stall events') + ' '.join('%-*d' % (colw, len(e)) for _n, e in arms))
-    for label, key, nd in EVENT_ROWS:
+    rows = list(EVENT_ROWS)
+    rows[1:1] = cause_rows(arms)
+    for label, key, nd in rows:
         row = []
         for _n, e in arms:
             row.append('%-*s' % (colw, spread([ev[key] for ev in e if ev.get(key) is not None], nd)))
@@ -383,13 +422,13 @@ def cmd_arm(a, runs):
     ev = stall_events(a)
     if ev:
         out += ['', '-- injected stalls (stalls.txt): %d, event window %d s after each start --' % (len(ev), EVENT_S)]
-        out.append('%-4s %6s %8s %8s %12s %10s %9s %11s' % ('n', 'idr', 'q_drops', 'overwr', 'cap_dec_max', 'recover_s',
-                                                          'cwnd_kb', 'unacked_kb'))
+        out.append('%-4s %6s %8s %8s %12s %10s %9s %11s  %s' % ('n', 'idr', 'q_drops', 'overwr', 'cap_dec_max',
+                                                              'recover_s', 'cwnd_kb', 'unacked_kb', 'idr causes'))
         for e in ev:
-            out.append('%-4d %6s %8s %8s %12s %10s %9s %11s' % (
+            out.append('%-4d %6s %8s %8s %12s %10s %9s %11s  %s' % (
                 e['n'], mblog.fmt(e['idr_5s'], 0), mblog.fmt(e['queue_drops_5s'], 0), mblog.fmt(e['overwritten_5s'], 0),
                 mblog.fmt(e['cap_dec_max_ms'], 0), mblog.fmt(e['recover_s'], 1), mblog.fmt(e['cwnd_kb'], 0),
-                mblog.fmt(e['unacked_kb'], 0)))
+                mblog.fmt(e['unacked_kb'], 0), cause_text(e)))
         out += event_lines([('median (min-max)', ev)])
     if not a.t_win:
         out.append('note: no tablet window (no adb device, or no client stats lines: static screen writes none)')

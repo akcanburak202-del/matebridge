@@ -75,6 +75,68 @@ public struct KeyframeRequestCoalescer: Sendable {
         public var logFields: String { "idr=\(count) idr_bytes_max=\(bytesMax)" }
     }
 
+    /// Why a keyframe was forced (T-371, observation only). `periodic` is a keyframe written that nobody forced: the
+    /// session's long safety-net interval or an encoder start, not a host decision.
+    public enum IdrCause: String, CaseIterable, Sendable {
+        case queueOverflow = "queue_overflow"
+        case transportRefused = "transport_refused"
+        case clientRequest = "client_request"
+        case periodic
+        case consumer
+        case other
+    }
+
+    /// One recorded force, for the `video ev=idr_forced` line.
+    public struct ForceNote: Equatable, Sendable {
+        public var cause: IdrCause
+        /// Time since the previous recorded force of this stream; nil for the first.
+        public var sinceLastMs: UInt64?
+
+        public init(cause: IdrCause, sinceLastMs: UInt64?) {
+            self.cause = cause
+            self.sinceLastMs = sinceLastMs
+        }
+
+        /// `cause=<c> since_last_ms=<n>|-` (the caller prepends `view=`).
+        public var logFields: String { "cause=\(cause.rawValue) since_last_ms=\(sinceLastMs.map { String($0) } ?? "-")" }
+    }
+
+    /// Forces by cause and the requests that were swallowed, since the last `takeCauses()`.
+    public struct CauseWindow: Equatable, Sendable {
+        public var forced: [IdrCause: Int] = [:]
+        /// Client requests that did not force (a keyframe was on its way or just written).
+        public var coalesced = 0
+        /// Host-side queue drops whose force was deferred (a keyframe covered them for now).
+        public var deferred = 0
+
+        public init(forced: [IdrCause: Int] = [:], coalesced: Int = 0, deferred: Int = 0) {
+            self.forced = forced
+            self.coalesced = coalesced
+            self.deferred = deferred
+        }
+
+        /// ` idr_cause_<cause>=<n> ...`, only non-zero ones (nothing when the window is quiet), then
+        /// ` idr_coalesced=<n> idr_deferred=<n>` when non-zero. Leading space included.
+        public var logFields: String {
+            var out = ""
+            for c in IdrCause.allCases { if let n = forced[c], n > 0 { out += " idr_cause_\(c.rawValue)=\(n)" } }
+            if coalesced > 0 { out += " idr_coalesced=\(coalesced)" }
+            if deferred > 0 { out += " idr_deferred=\(deferred)" }
+            return out
+        }
+    }
+
+    /// `takeWindow()` and `takeCauses()` together, for the stats line.
+    public struct StatsWindow: Equatable, Sendable {
+        public var window: Window
+        public var causes: CauseWindow
+        public init(window: Window, causes: CauseWindow) {
+            self.window = window
+            self.causes = causes
+        }
+        public var logFields: String { window.logFields + causes.logFields }
+    }
+
     private struct Pending: Sendable {
         var sinceUs: UInt64
         /// Queue push count when the keyframe was forced: unchanged means the keyframe is still in the encoder.
@@ -118,6 +180,13 @@ public struct KeyframeRequestCoalescer: Sendable {
     /// Host-side drops that forced a keyframe (at once or deferred), and drops that were deferred.
     public private(set) var hostForcedTotal = 0
     public private(set) var hostDeferredTotal = 0
+    /// T-371 bookkeeping: forces by cause in the open window, the swallowed totals at the last `takeCauses()`, the
+    /// previous force time, and notes not yet logged (bounded; the owner drains them with `takeForceNotes()`).
+    private var causeCounts: [IdrCause: Int] = [:]
+    private var coalescedAtTake = 0
+    private var deferredAtTake = 0
+    private var lastForceUs: UInt64?
+    private var forceNotes: [ForceNote] = []
 
     public init(windowUs: UInt64 = defaultWindowUs, pendingTimeoutUs: UInt64 = defaultPendingTimeoutUs,
                 pollUs: UInt64 = defaultPollUs) {
@@ -138,6 +207,7 @@ public struct KeyframeRequestCoalescer: Sendable {
             if stillInEncoder { coalescedTotal += 1 } else {
                 pending = Pending(sinceUs: nowUs, keyframesPushed: keyframesPushed)
                 noteForce(nowUs: nowUs)
+                recordForce(.clientRequest, nowUs: nowUs)
             }
             return Decision(action: configResent ? .configResent : (stillInEncoder ? .coalesced : .forced),
                             forceKeyframe: !stillInEncoder, sinceIdrUs: since)
@@ -150,14 +220,16 @@ public struct KeyframeRequestCoalescer: Sendable {
         }
         pending = Pending(sinceUs: nowUs, keyframesPushed: keyframesPushed)
         noteForce(nowUs: nowUs)
+        recordForce(.clientRequest, nowUs: nowUs)
         return Decision(action: .forced, forceKeyframe: true, sinceIdrUs: since)
     }
 
     /// The host forced a keyframe on its own, outside `hostDrop` (the sender's transport refused a frame). Always
     /// forced by the caller; recorded so that client requests caused by the same hiccup coalesce with it.
-    public mutating func internalForce(nowUs: UInt64, keyframesPushed: UInt64) {
+    public mutating func internalForce(nowUs: UInt64, keyframesPushed: UInt64, cause: IdrCause = .other) {
         pending = Pending(sinceUs: nowUs, keyframesPushed: keyframesPushed)
         noteForce(nowUs: nowUs)
+        recordForce(cause, nowUs: nowUs)
     }
 
     /// The bounded queue dropped a delta and now awaits a keyframe (T-176). Forces one only when none is on its way
@@ -186,15 +258,42 @@ public struct KeyframeRequestCoalescer: Sendable {
         pending = Pending(sinceUs: nowUs, keyframesPushed: keyframesPushed)
         hostDeferral = nil
         keyframeAheadSinceUs = nil
+        recordForce(.consumer, nowUs: nowUs)
     }
 
-    /// The write of a keyframe (any origin) completed.
+    /// The write of a keyframe (any origin) completed. One nobody forced (`pending` empty) is recorded as `periodic`.
     public mutating func keyframeWritten(nowUs: UInt64, bytes: Int) {
+        if pending == nil { recordForce(.periodic, nowUs: nowUs) }
         pending = nil
         keyframeAheadSinceUs = nil
         lastWrittenUs = nowUs
         window.count += 1
         window.bytesMax = max(window.bytesMax, bytes)
+    }
+
+    /// Forces by cause and swallowed requests since the previous call (for the per-second stats line).
+    public mutating func takeCauses() -> CauseWindow {
+        defer {
+            causeCounts = [:]
+            coalescedAtTake = coalescedTotal
+            deferredAtTake = hostDeferredTotal
+        }
+        return CauseWindow(forced: causeCounts, coalesced: coalescedTotal - coalescedAtTake,
+                           deferred: hostDeferredTotal - deferredAtTake)
+    }
+
+    /// Forces recorded since the previous call, oldest first (for `video ev=idr_forced`).
+    public mutating func takeForceNotes() -> [ForceNote] {
+        defer { forceNotes = [] }
+        return forceNotes
+    }
+
+    private mutating func recordForce(_ cause: IdrCause, nowUs: UInt64) {
+        let since = lastForceUs.map { nowUs >= $0 ? (nowUs - $0) / 1000 : 0 }
+        lastForceUs = nowUs
+        causeCounts[cause, default: 0] += 1
+        forceNotes.append(ForceNote(cause: cause, sinceLastMs: since))
+        if forceNotes.count > 32 { forceNotes.removeFirst(forceNotes.count - 32) }
     }
 
     /// Keyframes written since the previous call (for the per-second stats line).
@@ -218,6 +317,7 @@ public struct KeyframeRequestCoalescer: Sendable {
         pending = Pending(sinceUs: nowUs, keyframesPushed: queue.keyframesPushed)
         hostDeferral = HostDeferral(sinceUs: nowUs, keyframesPushed: queue.keyframesPushed)
         hostForcedTotal += 1
+        recordForce(.queueOverflow, nowUs: nowUs)
         // Watched further: should this keyframe never reach the queue, it is forced again after the timeout.
         return HostDecision(forceKeyframe: true, recheckAtUs: nowUs &+ pendingTimeoutUs)
     }

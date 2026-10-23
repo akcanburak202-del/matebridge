@@ -141,6 +141,20 @@ Yalnız ölçüm; davranışı değiştirmez. Etkin oturumun kontrol bağlantıs
   - Eski ayrı `ev=codec_config_resent` satırı yerine `action=config_resent`.
 - `net ev=stats` satırının sonuna: `idr=<n> idr_bytes_max=<n>`: önceki stats satırından bu yana yazımı biten keyframe sayısı ve en büyüğünün `VIDEO_FRAME` yük boyutu (bayt).
 
+### IDR neden günlüğü (Mac, `video`, T-371)
+
+Yalnız gözlem; hiçbir karar değişmedi. Host kodlayıcıya `ForceKeyFrame` gönderen her karar (birleştirilenler ve ertelenenler hariç) nedeniyle kaydedilir.
+
+- `video ev=idr_forced view=main|aux cause=<neden> since_last_ms=<n>|-` (info, `sid=0 gen=0`): zorlama başına bir satır. `since_last_ms`: aynı akışta bir önceki kayıttan bu yana (ilkinde `-`). Akış başına en çok 10 satır/sn; fazlası satır olmaz ama aşağıdaki sayaçlara girer.
+  - `queue_overflow`: ana ya da yardımcı kuyruk delta düşürdü ve koalesör (`hostDrop` / `checkDeferred`) IDR'ye karar verdi. Ertelenen zorlama, süresi dolunca bu nedenle çıkar.
+  - `transport_refused`: gönderici aktarımın reddettiği ya da düşürdüğü kare için zorladı (en sık 500 ms'de bir; `VideoSender`).
+  - `client_request`: istemcinin `KEYFRAME_REQUEST`'i zorladı (`action=forced`, ya da config yeniden gönderilirken kodlayıcıda bekleyen yoksa).
+  - `consumer`: yeni tüketici bağlandı (`prepareForNewConsumer`).
+  - `periodic`: kimsenin zorlamadığı bir keyframe'in yazımı bitti: oturumun uzun güvenlik aralığı (300 sn) ya da kodlayıcı başlangıcı. Bu bir host kararı değildir, yalnız yazım anında kaydedilir.
+  - `other`: yukarıdakilerden hiçbiri (şu an kullanılmıyor, yeni yol eklenirse varsayılan).
+- `net ev=stats` satırının sonuna (yalnız ana akış, yalnız sıfırdan büyük olanlar, önceki stats satırından bu yana): `idr_cause_<neden>=<n>`; `idr_coalesced=<n>` (zorlamayan, birleştirilen istemci istekleri); `idr_deferred=<n>` (ertelenen kuyruk düşüşleri). Sayaçlar satır hız sınırından etkilenmez. Yardımcı akışın stats satırı yok; onun zorlamaları yalnız `idr_forced view=aux` satırlarıyla görünür.
+- `tools/measure/game_ab.py`: kol özetinde nedene göre toplamlar, olay penceresinde `idr_<neden>_5s` satırları (yalnız görülen nedenler) ve olay tablosunda `idr causes` sütunu. `mblog.py` `cause` değerini yalnız yukarıdaki altı addan biri ise tutar.
+
 ## Ses gönderim zamanlaması (Mac, `audio`, T-116)
 
 Yalnız ölçüm; davranışı değiştirmez. Değerler oturum kuyruğunda (`dev.matebridge.session`) toplanır.

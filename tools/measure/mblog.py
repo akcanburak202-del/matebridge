@@ -63,6 +63,7 @@ _ID = {
     'using_hw': r'[01]|unknown',
     'action': r'enter|exit|forced|coalesced|config_resent|aux_only',
     'view': r'main|aux|both',
+    'cause': r'queue_overflow|transport_refused|client_request|periodic|consumer|other',   # T-371
     'conn': r'control|video',
     'requested': r'[a-z0-9_]{1,16}',
     'applied': r'[a-z0-9_]{1,16}',
@@ -94,6 +95,7 @@ ALLOWED = {
     ('H', 'net', 'stats'): set(),
     ('H', 'net', 'tcp'): {'conn', 'transport'},                      # T-364: retx / srtt per socket
     ('H', 'net', 'keyframe_request'): {'action', 'view'},            # T-364
+    ('H', 'video', 'idr_forced'): {'view', 'cause'},                 # T-371: one line per forced IDR
     ('H', 'encoder', 'chroma_config'): {'requested', 'applied'},     # T-364: the chroma mode the host applied
     ('H', 'video', 'chroma_stats'): {'mode'},                        # T-364
     ('H', 'net', 'display_rate'): set(),
