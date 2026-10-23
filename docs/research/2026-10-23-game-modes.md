@@ -89,6 +89,13 @@ Kol başına kaydedilenler: gönderilen Mbps, video TCP yeniden gönderim (topla
 - **A3:** 2240 kollarında `skip_pct` 1848'den ≤ 1 puan kötü ve çözme p95 < 16,7 ms ise ve kullanıcı fark görüyorsa → varsayılanı tartışmaya aç. Fark görmüyorsa varsayılan 1848 kalır; yalnız Ö3 (liste sadeleşmesi) kullanıcıya sorulur.
 - **A4:** kalem ve dokunma koordinatları doğru, `skip_pct` makul ise "(deneysel)" etiketi kalkar; değilse 2800'ü listeden çıkarmak kullanıcıya sorulur.
 
+## Oyun seçimi (2026-10-23)
+
+Kullanıcı: **TotK** (Astris emülatörü, `--proc Astris`; eden de kurulu, oturumda hangisinin çalıştığına bakılır). Dikkat edilecekler:
+- TotK kendi hızını sık sık 60'ın altına indiriyor (2026-10-20: tablette <50 fps olan saniyelerin çoğunda oyun Mac'te zaten <55 fps çiziyordu). Bu yüzden kollar **aynı yerde, aynı kamera hareketiyle** alınır (ör. bir köyde dur, kumandayla kamerayı yavaşça 360° çevir), ve tablet sayıları host `cap_fps` ile birlikte okunur.
+- Emülatör iç çözünürlüğünü kendi ayarı belirler. A3'te (1848 ↔ 2240) Mac'te değişen esas olarak çıktı ölçeklemesi ve akış boyutu olur, oyunun çizim yükü az değişir. Mac GPU farkı küçük çıkarsa bu yüzdendir; A3'ün ağırlığı tablet çözme/akıcılık ve kullanıcının netlik notunda.
+- Emülatör ses cızırtısı kaynak tarafında (NOTES 2026-10-09); ölçümle ilgisi yok.
+
 ## Açık
 
 - Öneriler kod değil; karar eki (0014/0029/0030) ve kartlar ölçümden sonra yazılır.
