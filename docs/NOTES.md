@@ -2048,3 +2048,11 @@ Kaynak: `~/.cache/matebridge-tools/data/2026-10-23-gameab/A1` (filtreli host 1 H
 - Düzeltme: 30 Mbps analizindeki "geç gelen kaynak karesi" çıkarımı yanlıştı; geç olan, kodlayıcı yuvası doluyken bekleyen karenin gönderim anı (`takePending`). Yeniden demirleme artık karenin olağan teslim gecikmesine göre en fazla yarım aralık geri alıyor. Birim testi: 30 ms yuva doluluğu sonrası en kötü kapı beklemesi 5,7 ms → ≤ 1 ms. Codex temiz.
 - Android `DecoderWaitTest`/`OutputParkTest` (uyanma sayısı) yük altında `main`'de de kırmızı; T-365 ile ilgisiz.
 - Cihazda doğrulanacak: host yeniden başlatılınca Oyun 60'ta `gate_wait` p50 aksaklık sonrası ~0,1 ms'de kalmalı.
+
+## 2026-10-23 akşam — `MATEBRIDGE_WIFI_ADAPT=1` ilk cihaz denemesi: oyunda çöküş döngüsü (ev Wi-Fi, TotK, Oyun 60, 60 Mbps, 1848)
+
+- Kullanıcı: "oyun fps 20 üzerine çıkmıyor, çok kötü bir deneyimdi"; oyunu ölçümden önce kapattı. Aynı gün knob kapalıyken aynı ayarda 0 takılma, ~60 fps (A1 b60).
+- İyi: `video ev=bitrate_set avg_status=0 limits_status=0`; VideoToolbox `fast` profili canlı bit hızını kabul ediyor (T-177/T-328 açık sorusu kapandı). Durağan ekranda tavana dönüş çalışıyor.
+- Kötü (host.log saniyelik): ağ temizken (video srtt 10–13 ms, retx 0) oyun sahnesi başlayınca `adapt_step trigger=queue_delay` 1–2 sn içinde 60 → 12 Mbps tabana iniyor. Sonra kendini besleyen döngü: kapı saniyede ~400 ms kapalı (`blocked_ms`), `queue_drops` ~12/s, her düşüş IDR zorluyor → saniyede 4 IDR, srtt kendi IDR patlamalarımızla 40–70 ms'ye çıkıyor (= yeni `queue_delay` kanıtı), tablet 13–20 fps, `cap_dec_ms` 60–200. 40 sn'lik bölümde hedef 12 Mbps'ten hiç kalkmadı; döngü ancak sahne sakinleyince kırıldı.
+- Yorum: `srttExcessTriggerMs = 20` ve 20 ms bütçe, oyunun anlık bit hızı patlamalarını (büyük P/I kareleri) tıkanıklık sanıyor; kapı reddi → kuyruk düşüşü → zorunlu IDR zinciri (bkz. "30 Mbps neden kötü göründü") denetleyicinin kendi tetikleyicisini besliyor. `queueDropped` bastırması ve 400 ms send-buffer kuralı yetmiyor; döngünün ana kolu srtt ve IDR.
+- Sonuç: knob **kapalı kalır**, varsayılan açılmaz. Yeniden denemeden önce tasarım düzeltmesi gerekir (en az: kapı kaynaklı düşüşte IDR zorlamama / P-kare kurtarma, srtt tetikleyicisinin kendi patlamalarımızı ayırt etmesi, tabanda kapı gevşemesi). Ham saniyelik tablo bu oturumda; host.log'da `ev=adapt` satırları.
