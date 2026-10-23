@@ -1,7 +1,7 @@
 ---
 id: T-369
 title: Tasarım — Wi-Fi kaybından sonra zorunlu IDR zinciri (0,2–0,4 sn donma) yerine daha ucuz toparlanma
-status: todo
+status: done
 phase: 7
 owner: orchestrator
 depends_on: []
