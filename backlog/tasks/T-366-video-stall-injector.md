@@ -1,7 +1,7 @@
 ---
 id: T-366
 title: Ölçüm — video bağlantısına yapay takılma (dummynet) ve 30 ↔ 60 Mbps IDR zinciri A/B'si
-status: review
+status: done
 phase: 7
 owner: mac-host-dev
 depends_on: [T-364]

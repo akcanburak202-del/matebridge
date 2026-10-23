@@ -33,7 +33,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-333](tasks/T-333-game-encoder-peaks.md) | Oyun 60 — kodlayıcı kare boyutu tepeleri (LLRC/ConstantBitRate, kısa rate penceresi, MaxAllowedFrameQP) EncodeBench karşılaştırması | 7 | mac-host-dev | [T-330] |
 | [T-334](tasks/T-334-dav-copy-put-concurrency.md) | WebDAV — eşzamanlı COPY/MOVE geri alması başka bağlantının başarılı PUT'unu silmesin | 7 | android-client-dev | [T-288] |
 | [T-335](tasks/T-335-host-pipeline-stop-join.md) | Host — pipeline teardown sürerken ikinci stop çağıranı beklesin; hata zamanı teardown'dan önce alınsın | 7 | mac-host-dev | [T-325, T-293] |
-| [T-366](tasks/T-366-video-stall-injector.md) | Ölçüm — video bağlantısına yapay takılma (dummynet) ve 30 ↔ 60 Mbps IDR zinciri A/B'si | 7 | mac-host-dev | [T-364] |
+| [T-367](tasks/T-367-android-timing-tests-flaky.md) | Android — zamanlama testleri yük altında kırmızı (DecoderWaitTest, OutputParkTest, AacDecodeWorkerTest) | 7 | android-client-dev | [] |
 
 ## done
 
@@ -376,3 +376,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-363](tasks/T-363-hidden-cursor-unobscure.md) | Host — gizli imleç: Terminal "yazarken gizle" T-361 ile açılmıyor; yerinde + kaydırılmış iki olay | 7 | mac-host-dev | [T-361] |
 | [T-364](tasks/T-364-game-ab-measure.md) | Ölçüm — oyun modu A/B kaydı (bit hızı, renk, çözünürlük): game-ab.sh + game_ab.py | 7 | mac-host-dev | [T-173] |
 | [T-365](tasks/T-365-frame-gate-reanchor.md) | Host — FrameGate geç kareden sonra yeniden demirlenince zamanında gelen kareleri dakikalarca bekletiyor | 7 | mac-host-dev | [] |
+| [T-366](tasks/T-366-video-stall-injector.md) | Ölçüm — video bağlantısına yapay takılma (dummynet) ve 30 ↔ 60 Mbps IDR zinciri A/B'si | 7 | mac-host-dev | [T-364] |
