@@ -27,10 +27,31 @@ private final class BPBackend: CompressionBackend, @unchecked Sendable {
     private var _encoded: [Int] = []
     weak var order: EncoderSubmitOrder<BPBackend>?
     var queue: VideoFrameQueue!
+    /// Packed full colour: every submit also starts an auxiliary encode that completes on its own (`completeAux`).
+    var auxQueue: VideoFrameQueue?
+    private var auxPending: [(Bool, UInt64)] = []
 
     var encoded: [Int] { lock.withLock { _encoded } }
+    var auxInFlight: Int { lock.withLock { auxPending.count } }
     func encode(_ frame: BPFrame, keyframe: Bool, token: EncoderSubmitToken) {
-        lock.withLock { _encoded.append(frame.stamp); outstanding.append((token, keyframe, frame.gateUs)) }
+        lock.withLock {
+            _encoded.append(frame.stamp); outstanding.append((token, keyframe, frame.gateUs))
+            if auxQueue != nil { auxPending.append((keyframe, frame.gateUs)) }
+        }
+    }
+
+    /// The oldest `count` auxiliary encodes finish and reach the auxiliary queue.
+    func completeAux(_ count: Int = .max) {
+        let batch = lock.withLock { () -> [(Bool, UInt64)] in
+            let n = min(count, auxPending.count)
+            defer { auxPending.removeFirst(n) }
+            return Array(auxPending.prefix(n))
+        }
+        for (key, us) in batch {
+            var f = EncodedVideoFrame(flags: key ? [.keyframe] : [], captureTimeUs: us, data: [4, 5])
+            f.view = 1
+            auxQueue?.push(f)
+        }
     }
     func completeAndInvalidate() {}
 
@@ -74,7 +95,7 @@ final class EncoderBackPressureTests: XCTestCase {
             nowUs: { [clock = rig.clock] in clock.now },
             scheduleFlush: { [unowned rig] _, fire in rig.flushLock.withLock { rig.flushes.append(fire) } },
             pacerCounts: { [unowned rig] o, _, _ in rig.overwritten += o },
-            downstreamLoad: { queue.queuedCount },
+            downstreamLoad: { queue.queuedCount + $0 },
             downstreamCapacity: backPressure ? BoundedFrameQueue.defaultCapacity : .max)
         rig.backend.order = rig.order
         return rig
@@ -119,6 +140,59 @@ final class EncoderBackPressureTests: XCTestCase {
         XCTAssertEqual(rig.needed, 0)
         for _ in 0..<3 { tick(rig, transportOpen: true) }
         XCTAssertGreaterThanOrEqual(rig.backend.encoded.count - before, 4, "about one encoded frame per tick again")
+    }
+
+    /// The auxiliary session finishes later than the main one: an auxiliary frame still encoding will land in the
+    /// auxiliary queue, so it counts against its capacity even though the main slot was released.
+    func testAuxiliaryFramesStillEncodingCountAgainstTheAuxiliaryQueue() {
+        let backend = BPBackend()
+        let clock = BPClock()
+        let flushLock = NSLock()
+        nonisolated(unsafe) var flushes: [@Sendable () -> Void] = []
+        let counter = NSLock()
+        nonisolated(unsafe) var needed = 0
+        let main = VideoFrameQueue(keyframeNeeded: {})
+        let aux = VideoFrameQueue(keyframeNeeded: { counter.withLock { needed += 1 } })
+        backend.queue = main
+        backend.auxQueue = aux
+        let order = EncoderSubmitOrder<BPBackend>(
+            backend: backend, streamFps: 60, maxInFlight: 2, initialBitrateKbps: 60_000,
+            nowUs: { clock.now },
+            scheduleFlush: { _, fire in flushLock.withLock { flushes.append(fire) } },
+            downstreamLoad: { [weak backend] mainInFlight in
+                DownstreamBudget.projected(mainInFlight: mainInFlight, mainQueued: main.queuedCount,
+                                           auxInFlight: backend?.auxInFlight ?? 0, auxQueued: aux.queuedCount)
+            },
+            downstreamCapacity: BoundedFrameQueue.defaultCapacity)
+        backend.order = order
+        func offer(_ n: Int) {
+            clock.advance(16_667)
+            order.offer(bypassGate: false) { _ in BPFrame(stamp: n, gateUs: clock.now) }
+            let s = DispatchSemaphore(value: 0)
+            order.afterQueued { s.signal() }
+            _ = s.wait(timeout: .now() + 5)
+            backend.complete()                       // main output is immediate and drained by the sender
+            while main.tryPop() != nil {}
+        }
+        offer(1)                                     // keyframe; its auxiliary encode stays pending
+        backend.completeAux(1)                       // aux keyframe queued (transport stalled: nobody pops)
+        offer(2)                                     // aux A: encoding, aux queue holds 1
+        offer(3)                                     // B: projected 1 queued + 1 encoding = 2 -> must be held
+        XCTAssertEqual(backend.encoded.count, 2, "B waits: A is still encoding and the queue already holds one")
+        backend.completeAux()                        // A (and nothing else) lands
+        XCTAssertEqual(counter.withLock { needed }, 0, "no auxiliary overflow")
+        XCTAssertEqual(aux.discardedCount, 0)
+    }
+
+    func testAuxInFlightTrackerResolvesAndForgetsStaleEntries() {
+        var t = AuxInFlightTracker()
+        t.began(captureTimeUs: 1_000); t.began(captureTimeUs: 2_000)
+        XCTAssertEqual(t.count(nowUs: 3_000), 2)
+        t.ended(captureTimeUs: 1_000)
+        XCTAssertEqual(t.count(nowUs: 3_000), 1)
+        t.ended(captureTimeUs: 9_999)   // unknown: ignored
+        XCTAssertEqual(t.count(nowUs: 3_000), 1)
+        XCTAssertEqual(t.count(nowUs: 2_000 + AuxInFlightTracker.maxAgeUs + 1), 0, "a missed resolution never holds captures for good")
     }
 
     func testHealthyFastTransportNeverHoldsOrDropsACapture() {

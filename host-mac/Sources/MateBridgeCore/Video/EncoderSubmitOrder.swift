@@ -165,8 +165,8 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
     private let scheduleFlush: FlushScheduler
     private let pacerCounts: PacerCounts
     private let log: LogSink
-    /// T-370: encoded frames waiting downstream (the output queue), read under the lock.
-    private let downstreamLoad: @Sendable () -> Int
+    /// T-370: occupancy downstream would reach with one more frame admitted (`DownstreamBudget.projected`).
+    private let downstreamLoad: @Sendable (_ mainInFlight: Int) -> Int
     /// T-370: how many encoded frames downstream can hold (`BoundedFrameQueue.capacity`); `Int.max` = no back pressure.
     private let downstreamCapacity: Int
     /// Test seam: runs right before `backend.encode`, on the owner queue.
@@ -211,7 +211,7 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
                 scheduleFlush: @escaping FlushScheduler = EncoderSubmitOrder.defaultFlushScheduler(),
                 pacerCounts: @escaping PacerCounts = { _, _, _ in },
                 log: @escaping LogSink = { _, _, _ in },
-                downstreamLoad: @escaping @Sendable () -> Int = { 0 },
+                downstreamLoad: @escaping @Sendable (_ mainInFlight: Int) -> Int = { $0 },
                 downstreamCapacity: Int = .max,
                 queueLabel: String = "matebridge.encoder.submit",
                 beforeSubmit: (@Sendable (Frame) -> Void)? = nil,
@@ -479,7 +479,7 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
     /// as frames arrive) keeps the queue near empty, so nothing is held there.
     private func downstreamHasRoomLocked() -> Bool {
         guard downstreamCapacity < .max, !forceKeyframe else { return true }
-        return inFlight + downstreamLoad() < downstreamCapacity
+        return downstreamLoad(inFlight) < downstreamCapacity
     }
 
     /// Must hold `lock`. A frame is waiting only for downstream room (an encoder slot is free): returns the delay of
@@ -510,5 +510,33 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
     private func noteInFlightLocked() {
         stats.minInFlight = min(stats.minInFlight, inFlight)
         stats.maxInFlight = max(stats.maxInFlight, inFlight)
+    }
+}
+
+/// T-370: how full each output queue will be once every frame already admitted has landed in it. A stream's frames
+/// reach its queue from its own encoder session, so the main and the packed auxiliary stream (decision 0034) are
+/// counted separately; an overflow of either queue drops an encoded delta and forces an IDR. The result is compared
+/// with the queue capacity by `EncoderSubmitOrder`.
+/// Auxiliary encodes accepted and not yet resolved (queued, lost or discarded), by capture time. The auxiliary session
+/// reports through callbacks the encoder does not own, so a missed resolution must never hold captures for good: an
+/// entry older than `maxAgeUs` is forgotten. Not thread-safe; the owner guards it.
+public struct AuxInFlightTracker: Sendable {
+    public static let maxAgeUs: UInt64 = 250_000
+    private var captures: [UInt64] = []
+    public init() {}
+
+    public mutating func began(captureTimeUs: UInt64) { captures.append(captureTimeUs) }
+    public mutating func ended(captureTimeUs: UInt64) {
+        if let i = captures.firstIndex(of: captureTimeUs) { captures.remove(at: i) }
+    }
+    public mutating func count(nowUs: UInt64) -> Int {
+        captures.removeAll { nowUs > $0 && nowUs - $0 > Self.maxAgeUs }
+        return captures.count
+    }
+}
+
+public enum DownstreamBudget {
+    public static func projected(mainInFlight: Int, mainQueued: Int, auxInFlight: Int, auxQueued: Int) -> Int {
+        max(mainInFlight + mainQueued, auxInFlight + auxQueued)
     }
 }

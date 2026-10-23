@@ -47,3 +47,8 @@ files:
 
 
 ## Open questions
+
+### Codex P2 düzeltmesi (yardımcı akış uçuştaki kareler)
+- Kırmızı (düzeltme öncesi, testAuxiliaryFramesStillEncodingCountAgainstTheAuxiliaryQueue): `("3") is not equal to ("2") - B waits: A is still encoding...`; `needed ("1") != 0`; `discardedCount ("2") != 0` (B kabul edildi, A ve B yardımcı kuyruğu taşırdı).
+- Düzeltme: `DownstreamBudget.projected` = max(ana uçuş + ana kuyruk, yardımcı uçuş + yardımcı kuyruk); `EncoderSubmitOrder` kapısı artık `downstreamLoad(mainInFlight)` ile bu doluluğu kapasiteyle karşılaştırır. Yardımcı uçuş sayısını `AuxInFlightTracker` (Core) tutar: HEVCEncoder submit öncesi `began`, yardımcı çıktı/kayıp/ret'te `ended`; çözülmeyen kayıt 250 ms sonra unutulur (sayaç kayması yakalamayı kalıcı tutamaz). `PackedAuxEncoder.swift` dosya listesi dışı olduğu için dokunulmadı. `HEVCEncoder.downstreamLoad` parametresi `queuedFrames` (ana, yardımcı) oldu; VideoPipeline'da aynı tek ifade.
+- swift test: 711 test, 0 hata. Kod commit SHA: bkz. git log (`T-370: count auxiliary frames in flight`).

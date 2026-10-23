@@ -139,6 +139,13 @@ final class HEVCEncoder: @unchecked Sendable {
     /// Auxiliary keyframe wanted (the next real auxiliary frame is an IDR) and the packed path's counters, `lock`.
     private var auxKeyframePending = false  // guarded by auxFlagLock (also read where `lock` is held)
     private let auxFlagLock = NSLock()
+    /// T-370: auxiliary encodes submitted and not yet queued or lost (guarded by `auxFlagLock`).
+    private var auxInFlight = AuxInFlightTracker()
+
+    /// Auxiliary frames that will still land in the auxiliary queue (`DownstreamBudget`). Called under the order's lock.
+    fileprivate func auxInFlightCount() -> Int {
+        auxFlagLock.withLock { auxInFlight.count(nowUs: HostClock.nowUs()) }
+    }
     private var packedStats: PackedChromaStatsWindow?
     private var auxOffered = 0
     private var auxLost = 0
@@ -176,12 +183,12 @@ final class HEVCEncoder: @unchecked Sendable {
     ///   - logSink: where `ev=encoder_config` / `ev=profile` go (the benches print them instead).
     ///   - refine: still-screen refinement (T-253); `.disabled` (default) keeps the encoder exactly as before.
     ///   - refineReady: whether the output queue can take another refinement frame (`VideoFrameQueue.isReadyForRefine`).
-    ///   - downstreamLoad: encoded frames waiting in the output queue(s) (T-370); with it, a capture is not encoded
+    ///   - queuedFrames: encoded frames waiting in the main and auxiliary output queues (T-370); with it, a capture is not encoded
     ///     while the queue could not take the result (`EncoderSubmitOrder`). nil: no back pressure.
     init(settings: VideoSettings, meter: CadenceMeter? = nil, knobs: EncoderKnobs? = nil,
          logSink: @escaping LogSink = HEVCEncoder.hostLog, refine: StillRefineConfig = .disabled,
          refineReady: @escaping @Sendable () -> Bool = { true },
-         downstreamLoad: (@Sendable () -> Int)? = nil, output: @escaping Output,
+         queuedFrames: (@Sendable () -> (main: Int, aux: Int))? = nil, output: @escaping Output,
          auxOutput: Output? = nil, onPackedError: @escaping @Sendable (String) -> Void = { _ in },
          onFailure: @escaping @Sendable (Error) -> Void = { _ in }) throws {
         self.packedError = onPackedError
@@ -219,8 +226,13 @@ final class HEVCEncoder: @unchecked Sendable {
                 for _ in 0..<deferred { meter?.recordDeferred() }
             },
             log: logSink,
-            downstreamLoad: downstreamLoad ?? { 0 },
-            downstreamCapacity: downstreamLoad == nil ? .max : BoundedFrameQueue.defaultCapacity,
+            downstreamLoad: { [weak self] mainInFlight in
+                guard let queuedFrames else { return mainInFlight }
+                let q = queuedFrames()
+                return DownstreamBudget.projected(mainInFlight: mainInFlight, mainQueued: q.main,
+                                                  auxInFlight: self?.auxInFlightCount() ?? 0, auxQueued: q.aux)
+            },
+            downstreamCapacity: queuedFrames == nil ? .max : BoundedFrameQueue.defaultCapacity,
             onSkipped: { [weak self] frame in self?.refineSkipped(frame) })
         backend.encoder = self
 
@@ -333,6 +345,7 @@ final class HEVCEncoder: @unchecked Sendable {
                     }
                 }
                 auxOutput(frame, encodeUs)
+                if !frame.isCodecConfig, let self { self.auxFlagLock.withLock { self.auxInFlight.ended(captureTimeUs: frame.captureTimeUs) } }
                 // After the frame is queued: a refinement train continues only once both streams' frames are in their
                 // queues, so it never decides on a queue the auxiliary frame is about to overflow.
                 if !frame.isCodecConfig, !frame.data.isEmpty {
@@ -844,8 +857,11 @@ final class HEVCEncoder: @unchecked Sendable {
                     refinePairs[frame.captureTimeUs] = RefinePair(train: train, main: nil, aux: nil)
                 }
             }
+            // Registered before the submit: the completion may run before `encode` returns.
+            auxFlagLock.withLock { auxInFlight.began(captureTimeUs: frame.captureTimeUs) }
             if !aux.encode(auxBuffer, presentationTime: frame.pts, captureTimeUs: frame.captureTimeUs, pairID: pairID,
                               keyframe: wantKey) {
+                auxFlagLock.withLock { auxInFlight.ended(captureTimeUs: frame.captureTimeUs) }
                 // The auxiliary stream lost a frame: its chain has a hole, so the next one is an IDR.
                 lock.withLock { auxLost += 1; packedStats?.recordAuxLost() }
                 auxFlagLock.withLock { auxKeyframePending = true }
@@ -939,6 +955,7 @@ final class HEVCEncoder: @unchecked Sendable {
     /// The auxiliary session lost a frame it had accepted (callback failure, or discarded after a lost one): counted
     /// for the fallback rule, the next auxiliary frame is an IDR, and a refinement pair waiting for it fails.
     private func auxLostAfterSubmit(captureTimeUs: UInt64) {
+        auxFlagLock.withLock { auxInFlight.ended(captureTimeUs: captureTimeUs) }
         lock.withLock { auxLost += 1; packedStats?.recordAuxLost() }
         auxFlagLock.withLock { auxKeyframePending = true }
         refinePairResolved(captureTimeUs: captureTimeUs, aux: .some(nil))
