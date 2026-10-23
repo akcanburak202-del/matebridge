@@ -1,7 +1,7 @@
 ---
 id: T-368
 title: Host — T-365 sonrası da IDR patlamasından sonra gate_wait 8–9 ms'de onlarca saniye kalıyor
-status: review
+status: done
 phase: 7
 owner: mac-host-dev
 depends_on: [T-365]
