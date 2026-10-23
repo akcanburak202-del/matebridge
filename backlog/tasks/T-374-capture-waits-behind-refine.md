@@ -1,7 +1,7 @@
 ---
 id: T-374
 title: Host — durağan ekran iyileştirme (refine) treni sırasında gelen gerçek kare 10–12 ms bekliyor (Oyun modunda masaüstü imleç takılması)
-status: review
+status: done
 phase: 7
 owner: mac-host-dev
 depends_on: [T-370]
