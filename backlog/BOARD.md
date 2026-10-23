@@ -34,6 +34,8 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-334](tasks/T-334-dav-copy-put-concurrency.md) | WebDAV — eşzamanlı COPY/MOVE geri alması başka bağlantının başarılı PUT'unu silmesin | 7 | android-client-dev | [T-288] |
 | [T-335](tasks/T-335-host-pipeline-stop-join.md) | Host — pipeline teardown sürerken ikinci stop çağıranı beklesin; hata zamanı teardown'dan önce alınsın | 7 | mac-host-dev | [T-325, T-293] |
 | [T-367](tasks/T-367-android-timing-tests-flaky.md) | Android — zamanlama testleri yük altında kırmızı (DecoderWaitTest, OutputParkTest, AacDecodeWorkerTest) | 7 | android-client-dev | [] |
+| [T-368](tasks/T-368-gate-wait-after-idr-burst.md) | Host — T-365 sonrası da IDR patlamasından sonra gate_wait 8–9 ms'de onlarca saniye kalıyor | 7 | mac-host-dev | [T-365] |
+| [T-369](tasks/T-369-forced-idr-chain-design.md) | Tasarım — Wi-Fi kaybından sonra zorunlu IDR zinciri (0,2–0,4 sn donma) yerine daha ucuz toparlanma | 7 | orchestrator | [] |
 
 ## done
 
