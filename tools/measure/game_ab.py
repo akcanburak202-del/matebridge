@@ -15,6 +15,17 @@ Definitions (docs/research/2026-10-23-game-modes.md "Olcum plani"):
 - "median of windows" rows (gpu_ms, cap_to_sent_ms, enc_ms) take the median over the host's 1 s latency windows of
   that window's p50 (or p95) value, not a percentile over frames.
 - retx_pct_s = share of video-socket `ev=tcp` seconds with retx_pkts_delta > 0.
+
+Injected stalls (T-366): an arm directory may also hold stalls.txt, written by tools/measure/stall-inject.sh
+(`stall n= epoch_ms= mono_ms= end_mono_ms= ms= port=`; mono_ms is the host.log clock). Each stall gets an event
+window of EVENT_S seconds on the host's 1 Hz samples: samples whose time is in (mono_ms, mono_ms + 5 s]. Per event:
+- idr_5s: sum of `idr` of the `net ev=stats` samples; queue_drops_5s / overwritten_5s: sums of those fields of
+  the `video ev=cadence` samples (both are per-second values); cap_dec_max_ms: largest `cap_dec_ms`.
+- recover_s: seconds from the stall start to the first 1 Hz sample at or after the worst one whose cap_dec_ms is
+  below RECOVER_MS (0 when the worst sample is already below); looked for until the next stall or 30 s. None =
+  not recovered in that time.
+- cwnd_kb / unacked_kb: `snd_cwnd` / `unacked_bytes` of the last video `ev=tcp` sample at most 2 s before the stall.
+Per arm: median (min-max) over the events of all its runs.
 """
 
 import argparse
@@ -28,6 +39,9 @@ import mblog  # noqa: E402
 import smoke  # noqa: E402
 
 STALL_MS = 150.0
+EVENT_S = 5.0
+RECOVER_MS = 30.0
+RECOVER_HORIZON_S = 30.0
 CHROMA_ALIAS = {'normal': '420', 'sharp': 'sharp_nearest', 'full': 'packed444'}
 # Mac process columns of macmon.sh that are not "the game".
 MAC_KNOWN = ('cpu_user', 'cpu_sys', 'cpu_idle', 'cpu_MateBridgeApp', 'cpu_WindowServer', 'cpu_kernel_task')
@@ -60,8 +74,9 @@ class Arm:
         self.t_win = recs(os.path.join(self.path, 'tablet.txt'), 'T')
         self.h_ident = recs(os.path.join(self.path, 'host_ident.txt'), 'H')
         self.h_win = recs(os.path.join(self.path, 'host.txt'), 'H')
+        self.stalls = read_stalls(os.path.join(self.path, 'stalls.txt'))
         self.mac = []
-        mp = os.path.join(self.path, 'mac.txt')
+        mp =os.path.join(self.path, 'mac.txt')
         if os.path.exists(mp):
             with open(mp, errors='replace') as fh:
                 self.mac = [d for d in map(mblog.parse_kv_line, fh) if d and 'ep' in d]
@@ -263,6 +278,85 @@ def metrics(a):
     return m
 
 
+def read_stalls(path):
+    """stalls.txt of stall-inject.sh -> [{'n','mono','ms'}] sorted by mono; [] when absent."""
+    out = []
+    if not os.path.exists(path):
+        return out
+    with open(path, errors='replace') as fh:
+        for line in fh:
+            d = mblog.parse_kv_line(line)
+            if d and mblog.fnum(d, 'mono_ms') is not None:
+                out.append({'n': int(mblog.fnum(d, 'n') or len(out) + 1), 'mono': mblog.fnum(d, 'mono_ms'),
+                            'ms': mblog.fnum(d, 'ms')})
+    out.sort(key=lambda e: e['mono'])
+    return out
+
+
+def stall_events(a):
+    """One dict per injected stall: see the module docstring. Empty without stalls.txt."""
+    if not a.stalls:
+        return []
+    stats = [r for r in a.sel(a.h_win, 'net', 'stats') if r.mono is not None]
+    cad = [r for r in a.sel(a.h_win, 'video', 'cadence') if r.mono is not None]
+    tcp = [r for r in a.sel(a.h_win, 'net', 'tcp', conn='video') if r.mono is not None]
+    out = []
+    for i, st in enumerate(a.stalls):
+        m0 = st['mono']
+        end = m0 + EVENT_S * 1000
+        nxt = a.stalls[i + 1]['mono'] if i + 1 < len(a.stalls) else float('inf')
+        win = [r for r in stats if m0 < r.mono <= end]
+        cw = [r for r in cad if m0 < r.mono <= end]
+        ev = {'n': st['n']}
+        ev['idr_5s'] = total(vals(win, f('idr'))) if win else None
+        ev['queue_drops_5s'] = total(vals(cw, f('queue_drops'))) if cw else None
+        ev['overwritten_5s'] = total(vals(cw, f('overwritten'))) if cw else None
+        caps = [(r.mono, r.num('cap_dec_ms')) for r in win if r.num('cap_dec_ms') is not None]
+        ev['cap_dec_max_ms'] = max(v for _t, v in caps) if caps else None
+        rec = None
+        if caps:
+            peak_t, peak_v = max(caps, key=lambda x: x[1])
+            if peak_v < RECOVER_MS:
+                rec = 0.0
+            else:
+                lim = min(nxt, m0 + RECOVER_HORIZON_S * 1000)
+                for r in stats:
+                    v = r.num('cap_dec_ms')
+                    if peak_t <= r.mono < lim and v is not None and v < RECOVER_MS:
+                        rec = (r.mono - m0) / 1000.0
+                        break
+        ev['recover_s'] = rec
+        before = [r for r in tcp if m0 - 2000 <= r.mono <= m0]
+        last_tcp = before[-1] if before else None
+        cwnd = last_tcp.num('snd_cwnd') if last_tcp else None
+        unacked = last_tcp.num('unacked_bytes') if last_tcp else None
+        ev['cwnd_kb'] = cwnd / 1000.0 if cwnd is not None else None
+        ev['unacked_kb'] = unacked / 1000.0 if unacked is not None else None
+        out.append(ev)
+    return out
+
+
+# (label, event key, digits)
+EVENT_ROWS = (('idr in 5 s', 'idr_5s', 0), ('queue_drops in 5 s', 'queue_drops_5s', 0),
+              ('overwritten in 5 s', 'overwritten_5s', 0), ('cap_dec_ms max in 5 s', 'cap_dec_max_ms', 0),
+              ('recover to <30 ms (s)', 'recover_s', 1), ('snd_cwnd at stall (KB)', 'cwnd_kb', 0),
+              ('unacked at stall (KB)', 'unacked_kb', 0))
+
+
+def event_lines(arms, name_w=26, colw=22):
+    """Median (min-max) rows over events; `arms` = [(column name, events)] side by side."""
+    out = ['%-*s ' % (name_w, 'stall metric') + ' '.join('%-*s' % (colw, n) for n, _e in arms)]
+    out.append('%-*s ' % (name_w, 'stall events') + ' '.join('%-*d' % (colw, len(e)) for _n, e in arms))
+    for label, key, nd in EVENT_ROWS:
+        row = []
+        for _n, e in arms:
+            row.append('%-*s' % (colw, spread([ev[key] for ev in e if ev.get(key) is not None], nd)))
+        out.append('%-*s ' % (name_w, label) + ' '.join(row))
+    rec = ['%-*s' % (colw, '%d/%d' % (sum(1 for ev in e if ev.get('recover_s') is not None), len(e))) for _n, e in arms]
+    out.append('%-*s ' % (name_w, 'recovered (of events)') + ' '.join(rec))
+    return out
+
+
 def arm_header(a, runs):
     ns = argparse.Namespace(macos=a.meta.get('macos'), harmonyos=a.meta.get('harmonyos'),
                             apk_version_code=a.meta.get('apk_version_code'), seconds=a.meta.get('seconds'),
@@ -286,6 +380,17 @@ def cmd_arm(a, runs):
         if note:
             notes.append('note: %s: %s' % (name, note))
     out += notes
+    ev = stall_events(a)
+    if ev:
+        out += ['', '-- injected stalls (stalls.txt): %d, event window %d s after each start --' % (len(ev), EVENT_S)]
+        out.append('%-4s %6s %8s %8s %12s %10s %9s %11s' % ('n', 'idr', 'q_drops', 'overwr', 'cap_dec_max', 'recover_s',
+                                                          'cwnd_kb', 'unacked_kb'))
+        for e in ev:
+            out.append('%-4d %6s %8s %8s %12s %10s %9s %11s' % (
+                e['n'], mblog.fmt(e['idr_5s'], 0), mblog.fmt(e['queue_drops_5s'], 0), mblog.fmt(e['overwritten_5s'], 0),
+                mblog.fmt(e['cap_dec_max_ms'], 0), mblog.fmt(e['recover_s'], 1), mblog.fmt(e['cwnd_kb'], 0),
+                mblog.fmt(e['unacked_kb'], 0)))
+        out += event_lines([('median (min-max)', ev)])
     if not a.t_win:
         out.append('note: no tablet window (no adb device, or no client stats lines: static screen writes none)')
     return out
@@ -349,6 +454,12 @@ def cmd_summary(label_dir):
                 xs.append(v)
             row.append('%-*s' % (colw, spread(xs, nd)))
         out.append('%-*s ' % (width, n) + ' '.join(row))
+    if any(a.stalls for a in arms):
+        out += ['', '-- injected stalls: events of all runs of an arm pooled, median (min-max) --']
+        out += event_lines([(n, [e for a in runs_of[n] for e in stall_events(a)]) for n in order], width, colw)
+        out.append('recover: seconds from the stall start to the first 1 Hz sample with cap_dec_ms < %d after the '
+                   'worst one; "recovered" counts events that got there before the next stall or within %d s.' % (
+                       RECOVER_MS, RECOVER_HORIZON_S))
     srcs = {per[a.name]['stalls >150 ms'][2] for a in arms if per[a.name].get('stalls >150 ms')}
     out.append('')
     out.append('stalls source: %s' % ' | '.join(sorted(s for s in srcs if s)))
