@@ -1,0 +1,47 @@
+---
+id: T-364
+title: Ölçüm — oyun modu A/B kaydı (bit hızı, renk, çözünürlük): game-ab.sh + game_ab.py
+status: todo
+phase: 7
+owner: mac-host-dev
+depends_on: [T-173]
+decisions: []
+files:
+  - tools/measure/game-ab.sh
+  - tools/measure/game_ab.py
+  - tools/measure/mblog.py
+  - tools/measure/selftest.sh
+  - tools/measure/testdata/
+  - tools/measure/README.md
+  - backlog/tasks/T-364-game-ab-measure.md
+---
+
+## Amaç
+
+`docs/research/2026-10-23-game-modes.md` → "Ölçüm planı": Oyun 60'ta dönüşümlü A/B (A1 bit hızı 60 ↔ 30 Mbps, A2 renk Keskin ↔ Normal, A3 1848 ↔ 2240, A4 2800 tek kol). Kullanıcı ayarı panelden değiştirir, orkestratör her kolu tek komutla kaydeder. Bu kart yalnız **araç**; cihaz oturumunu orkestratör kullanıcıyla yapar.
+
+Mevcut kit (`tools/measure/README.md`, T-173) yeniden kullanılır: `mblog.py filter` (gizlilik), `macmon.sh` (Mac CPU/GPU), sonuç başlığı kuralı. Yeni bir şey icat etme; eksik olan kol başına kayıt + karşılaştırma tablosu.
+
+## Kabul
+
+1. `tools/measure/game-ab.sh LABEL --arm ARM --seconds N --out DIR [--proc "Oyun adı"] [--content TEXT]`:
+   - Aynı anda: tablet logcat (filtreli, `mblog.py filter --side tablet`), `macmon.sh` (5 sn, `--proc` ile oyun süreci), host.log'un pencere dilimi (başlangıç/bitiş bayt konumu; dilim de filtreden geçer). N sn sonra hepsini durdurur, `DIR/LABEL/ARM-<k>/` altına yalnız filtreli dosyalar yazar (`k` aynı kolun kaçıncı tekrarı, kendiliğinden artar).
+   - Salt okur: kurulum yapmaz, ayar değiştirmez, uygulama başlatmaz/durdurmaz (README "Recipes" kuralı). Tablet yoksa ya da HUAWEI değilse tablet kısmını atlar ve söyler.
+   - Kolun gerçekten uygulandığını loglardan doğrular ve özetin başına yazar: uygulanan bit hızı (`stream_config`/host `encoder profile`), renk (host'un uyguladığı chroma; hangi satırda olduğu bulunur), ekran boyutu, kare hızı, taşıma. Uyuşmazlık `arm_check: MISMATCH (...)` olarak görünür; kayıt yine tutulur.
+2. `tools/measure/game_ab.py summary DIR/LABEL` kol başına şu satırları verir (değer yoksa `-`):
+   - host: gönderilen Mbps, `cap_fps` p50, `enc_ms` p50, `gpu_ms` p50/p95 (`ev=latency`), `cap_to_sent` p50/p95, video bağlantısı `ev=tcp conn=video` `retx_pkts_delta` toplamı ve >0 olan saniyelerin yüzdesi, `srtt_ms` p50/p95, `keyframe_request` sayısı;
+   - tablet: alınan fps, `skip_pct` ortanca, çözme p50/p95, yakalama→çözme (ya da en yakın uçtan uca alan) p50/p95/p99, **takılma sayısı** (>150 ms). Takılmanın tanımı kartın Plan bölümüne yazılır: 2026-10-20 TotK analizinde hangi alan kullanıldıysa (NOTES 2026-10-20 22:30 "cap_dec_ms > 150"), o. Yalnız 10 sn pencere varsa en büyük değerden sayılır ve özet bunu söyler;
+   - Mac: `gpu_dev` p50, MateBridgeApp / WindowServer / VTEncoderXPCService / oyun CPU p50.
+   - Son blok: aynı LABEL'daki kollar yan yana (ARM başına tüm tekrarların ortancası **ve** min–max yayılımı), README sonuç başlığıyla. "3 kol altı" koşullar `claim_ok: no` ile işaretlenir.
+3. Gizlilik: `mblog.py filter` allowlist'ine yalnız gereken satırlar eklenir (host `net ev=tcp`, `video ev=latency` alanları zaten sayısal; renk/bit hızı kimlik anahtarları sıkı desenle). README'deki gizlilik grep'i çıktılarda boş döner.
+4. `selftest.sh`: sentetik `testdata/` ile iki kol × iki tekrar → beklenen özet; MISMATCH durumu; gizlilik grep'i. Cihaza dokunmaz.
+5. README'ye "5. Oyun A/B (T-364)" tarifi: kol sırası A B A B A B, kol başına 90–120 sn, ayar değişiminden sonra ~10 sn bekleme (yakalama/kodlayıcı yeniden başlar; çözünürlükte ekran yeniden kurulur, oyun kendi çözünürlüğünü yeniden seçmek zorunda kalabilir).
+6. `./scripts/check.sh` geçer (selftest dahilse).
+
+## Plan
+
+(ajan doldurur)
+
+## Handoff
+
+## Open questions
