@@ -9,7 +9,7 @@ decisions: []
 files:
   - host-mac/Sources/MateBridgeCore/Video/FrameGate.swift
   - host-mac/Sources/MateBridgeCore/Video/EncoderSubmitOrder.swift
-  - host-mac/Sources/MateBridgeCore/Video/StillRefinePolicy.swift
+  - host-mac/Sources/MateBridgeCore/Video/StillRefine.swift
   - host-mac/Sources/MateBridgeHost/Video/HEVCEncoder.swift
   - host-mac/Tests/MateBridgeCoreTests/
   - docs/LOGGING.md
