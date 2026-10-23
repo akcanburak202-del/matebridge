@@ -61,7 +61,11 @@ _ID = {
     'audio_out': r'auto|aaudio|track',
     'knobs': r'[A-Za-z0-9_:;.,-]{1,240}',
     'using_hw': r'[01]|unknown',
-    'action': r'enter|exit',
+    'action': r'enter|exit|forced|coalesced|config_resent|aux_only',
+    'view': r'main|aux|both',
+    'conn': r'control|video',
+    'requested': r'[a-z0-9_]{1,16}',
+    'applied': r'[a-z0-9_]{1,16}',
     'jitter': r'adaptive|-?\d{1,2}',
     'fingers': r'all|gestures|off',
     'overrides': r'[a-z,]{1,64}',
@@ -88,6 +92,10 @@ ALLOWED = {
     ('H', 'video', 'latency'): set(),
     ('H', 'video', 'cadence'): set(),
     ('H', 'net', 'stats'): set(),
+    ('H', 'net', 'tcp'): {'conn', 'transport'},                      # T-364: retx / srtt per socket
+    ('H', 'net', 'keyframe_request'): {'action', 'view'},            # T-364
+    ('H', 'encoder', 'chroma_config'): {'requested', 'applied'},     # T-364: the chroma mode the host applied
+    ('H', 'video', 'chroma_stats'): {'mode'},                        # T-364
     ('H', 'net', 'display_rate'): set(),
 }
 
