@@ -2022,3 +2022,8 @@ Kurulum: daily APK 253e1348, `hw_screen_freq=1`, servis "MateBridge 120 Hz" bağ
 - Terminal "yazarken gizle" (obscure): konumu değiştiren gönderilmiş olaylar açmıyor (T-361 sonrası canlı izleme: imleç yüzlerce pt gezdi, `CGCursorIsVisible` 0 kaldı, yalnız tıklama açtı). Yerinde, delta'lı olay açıyor.
 - T-363 (gizliyken iki olay: yerinde delta'lı + 8 pt iç sınırlı kaydırılmış delta 0) sonrası: host `pointer_hidden_mode` on→off 7–32 ms, yani ilk harekette açılıyor (10 deneme). Oyun (delta okuyan) çift olay davranışı cihazda denenmedi; kullanıcı oyunda çoğunlukla gamepad kullanıyor.
 - Arka plan işlemi `CGSObscureCursor` ile imleci gizleyemiyor (yalnız öndeki uygulama); bu yüzden döngü kullanıcı denemesi + 20 ms `CGCursorIsVisible`/konum izleyicisiyle kuruldu.
+
+## 2026-10-23 — Düzeltme: TotK Mac'e yerel uygulama
+
+- Kullanıcı: TotK Mac'te kendi uygulaması olarak kurulu, emülatör değil. 2026-10-09 16:50 notundaki "Astris (TotK) … emulator source" ifadesi bu bilgiyle okunmalı (cızırtı kaynak taraflı bulgusu değişmez; "emülatör" nitelemesi yanlış). Ölçüm ve kararlarda emülatörler kapsam dışı.
+- T-364 A/B ölçümü TotK ile yapılacak (`docs/research/2026-10-23-game-modes.md`). Uygulama 2026-10-23'te yeniden derleniyor; oturuma kadar ona dokunulmaz.
