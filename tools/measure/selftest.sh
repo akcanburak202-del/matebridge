@@ -19,7 +19,7 @@ expect() {
 }
 
 echo "==> syntax"
-for f in "$ROOT/scripts/device-smoke.sh" "$HERE/macmon.sh" "$HERE/game-ab.sh" "$HERE/selftest.sh" "$ROOT"/tools/soak/*.sh; do
+for f in "$ROOT/scripts/device-smoke.sh" "$HERE/macmon.sh" "$HERE/game-ab.sh" "$HERE/stall-inject.sh" "$HERE/selftest.sh" "$ROOT"/tools/soak/*.sh; do
   bash -n "$f" && ok "bash -n ${f#$ROOT/}" || bad "bash -n ${f#$ROOT/}"
 done
 sh -n "$HERE/mbmon.sh" && ok "sh -n tools/measure/mbmon.sh" || bad "sh -n mbmon.sh"
@@ -334,6 +334,52 @@ PATH="$BA:$PATH" ADB="$AB/no-such-adb" MB_HOST_LOG_DIR="$AB/logs" MB_MAC_INTERVA
   bash "$HERE/game-ab.sh" N1 --arm solo --seconds 1 --out "$AB/out" >"$AB/n1.txt" 2>"$AB/n1.err"
 expect "no tablet: skipped, said so" "$AB/n1.err" "tablet part skipped"
 expect "no tablet: no-window note" "$AB/n1.txt" "note: no tablet window"
+
+echo "==> stall-inject.sh (dry run only) + game_ab.py stall events (T-366)"
+SL="$tmp/stlogs"; mkdir -p "$SL"
+echo '5000 I session sid=77 gen=1 ev=session_started conn=6 config_id=3 video_port=47012 transport=wifi' >"$SL/host.log"
+MB_HOST_LOG_DIR="$SL" "$HERE/stall-inject.sh" --dry-run --stall-ms 60 --every-s 10 --count 9 --dir "$tmp" >"$tmp/stall_dry.txt" 2>&1
+expect "stall: port read from host.log and printed" "$tmp/stall_dry.txt" "video port 47012 (from host.log)"
+expect "stall: own anchor" "$tmp/stall_dry.txt" "pfctl -a com.apple/matebridge-stall -f -"
+expect "stall: rule is outgoing, source port only" "$tmp/stall_dry.txt" "dummynet out proto tcp from any port 47012 to any pipe 4700"
+expect "stall: stall bandwidth" "$tmp/stall_dry.txt" "dnctl pipe 4700 config bw 8Kbit/s"
+expect "stall: release" "$tmp/stall_dry.txt" "dnctl pipe 4700 config bw 0"
+expect "stall: pf reference" "$tmp/stall_dry.txt" "pfctl -E"
+expect "stall: dry run says so" "$tmp/stall_dry.txt" "DRY RUN, nothing is executed"
+expect "stall: sleep with a dot decimal" "$tmp/stall_dry.txt" "+ sleep 0.060"
+expect "stall: stall times file" "$tmp/stall_dry.txt" "stalls.txt"
+if grep -q -F "control" "$tmp/stall_dry.txt" || grep -q "47001" "$tmp/stall_dry.txt"; then bad "stall: control port must not appear"; else ok "stall: control port not shaped"; fi
+MB_HOST_LOG_DIR="$SL" "$HERE/stall-inject.sh" --dry-run --stall-ms 60 --every-s 10 --count 1 --port 47099 >"$tmp/stall_port.txt" 2>&1
+expect "stall: --port wins, mismatch warned" "$tmp/stall_port.txt" "WARNING host.log says the video port is 47012"
+expect "stall: --port used in the rule" "$tmp/stall_port.txt" "from any port 47099 to any pipe 4700"
+MB_HOST_LOG_DIR="$tmp/nolog" "$HERE/stall-inject.sh" --dry-run --stall-ms 60 --every-s 10 --count 1 >"$tmp/stall_def.txt" 2>&1
+expect "stall: default port without host.log" "$tmp/stall_def.txt" "video port 47002 (default;"
+"$HERE/stall-inject.sh" --dry-run --stall-ms 20000 --every-s 10 --count 1 >"$tmp/stall_bad.txt" 2>&1 && bad "stall: stall longer than the period accepted" || expect "stall: stall longer than the period rejected" "$tmp/stall_bad.txt" "--stall-ms must be shorter than --every-s"
+"$HERE/stall-inject.sh" --dry-run --cleanup >"$tmp/stall_clean.txt" 2>&1
+expect "stall: cleanup removes anchor and pipe" "$tmp/stall_clean.txt" "pfctl -a com.apple/matebridge-stall -F all"
+expect "stall: cleanup deletes the pipe" "$tmp/stall_clean.txt" "dnctl pipe delete 4700"
+"$HERE/stall-inject.sh" --dry-run --status >"$tmp/stall_status.txt" 2>&1
+expect "stall: status shows the anchor" "$tmp/stall_status.txt" "pfctl -a com.apple/matebridge-stall -s rules"
+# without root the real mode refuses before touching anything (never run as root in this test)
+if [ "$(id -u)" -ne 0 ]; then
+  "$HERE/stall-inject.sh" --stall-ms 60 --every-s 10 --count 1 >"$tmp/stall_root.txt" 2>&1 && bad "stall: ran without root" || expect "stall: refuses without root" "$tmp/stall_root.txt" "needs root. Nothing was changed."
+else
+  ok "stall: root refusal not testable as root (skipped on purpose)"
+fi
+ST="$TD/game_ab_stall"
+python3 "$HERE/game_ab.py" arm "$ST/b30-1" >"$tmp/stall_arm.txt"
+expect "events: per-event row 1" "$tmp/stall_arm.txt" "1 6 22 10 240 4.0 600 400"
+expect "events: per-event row 2" "$tmp/stall_arm.txt" "2 1 2 1 60 2.0 800 100"
+expect "events: idr median (min-max)" "$tmp/stall_arm.txt" "idr in 5 s 3.5 (1-6)"
+python3 "$HERE/game_ab.py" summary "$ST" >"$tmp/stall_sum.txt"
+expect "events: arms side by side" "$tmp/stall_sum.txt" "stall metric b30 b60"
+expect "events: queue_drops per arm" "$tmp/stall_sum.txt" "queue_drops in 5 s 12 (2-22) 0 (0-0)"
+expect "events: recovery per arm" "$tmp/stall_sum.txt" "recover to <30 ms (s) 3.0 (2.0-4.0) 2.0 (2.0-2.0)"
+expect "events: cwnd at the stall" "$tmp/stall_sum.txt" "snd_cwnd at stall (KB) 700 (600-800) 1465 (1465-1465)"
+expect "events: unrecovered event counted" "$tmp/stall_sum.txt" "recovered (of events) 2/2 1/2"
+# an arm without stalls.txt prints no event section
+python3 "$HERE/game_ab.py" arm "$AB/out/A1/b60-1" >"$tmp/stall_none.txt"
+if grep -q "injected stalls" "$tmp/stall_none.txt"; then bad "stall: event section without stalls.txt"; else ok "stall: no event section without stalls.txt"; fi
 
 echo "==> no clipboard, key, text, path, address or serial content in any output"
 # The README documents the same grep for real runs.

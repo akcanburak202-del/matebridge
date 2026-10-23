@@ -1,0 +1,9 @@
+arm=b30
+k=1
+label=S1
+seconds=45
+start_ep=1791200000
+expect=
+content=synthetic
+tablet=0
+host=1

@@ -173,6 +173,45 @@ python3 tools/measure/game_ab.py summary ~/mb-measure/A1
 - The tablet part is skipped with a message when no HUAWEI device is on adb; the host and Mac parts still record.
 - Privacy: only `mblog.py filter` output is stored. Run the grep from "Privacy" over `OUT/LABEL` before pasting.
 
+### 6. Injected video stalls, 30 vs 60 Mbps (T-366)
+
+Question (NOTES 2026-10-23 "30 Mbps neden kotu gorundu"): does the same stall cost more at 30 than at 60 Mbps
+(forced-IDR chain, H2 relative IDR size, H3 `snd_cwnd`)? `stall-inject.sh` makes the Mac -> tablet video socket
+stall on demand, so the answer does not depend on a natural Wi-Fi hiccup.
+
+```bash
+tools/measure/stall-inject.sh --dry-run --stall-ms 60 --every-s 10 --count 9   # look first (no sudo needed)
+# terminal 1: record the arm (recipe 5), e.g. 100 s
+tools/measure/game-ab.sh S1 --arm b60 --seconds 100 --out ~/mb-measure --expect bitrate_kbps=60000 --runs 3
+# terminal 2, started 2-3 s after game-ab.sh printed "recording ...": into the folder it is filling
+sudo tools/measure/stall-inject.sh --stall-ms 60 --every-s 10 --count 9 --dir ~/mb-measure/S1/b60-1
+python3 tools/measure/game_ab.py summary ~/mb-measure/S1
+sudo tools/measure/stall-inject.sh --status            # must say "status: clean" at the end of the session
+```
+
+- Session order: 60 / 30 alternating (b60, b30, b60, b30, b60, b30), 100 s per arm, a stall of 60 ms every 10 s
+  = about 9 events per arm and ~27 per bitrate over 3 repeats. The injector's first stall comes `--every-s`
+  after its start, the last one `count * every-s` later: keep `count * every-s` below the arm's `--seconds`.
+- What it does: a dummynet pipe (4700) in its own pf anchor `com.apple/matebridge-stall`
+  (the stock macOS pf.conf already evaluates `com.apple/*`, so no existing rule is edited), rule
+  `dummynet out proto tcp from any port <video_port> to any pipe 4700`. A stall = pipe bandwidth 8 Kbit/s for
+  `--stall-ms`, then unlimited again. Only the video socket's outgoing direction; control (47001) and audio are
+  not matched. The video port is read from the last `session_started video_port=` in host.log and printed.
+  The pipe queue is 100 packets: a long stall also drops packets (like a real Wi-Fi hole); 60 ms mostly queues.
+- Safety: root only (it refuses otherwise and changes nothing); the anchor, the pipe and the `pfctl -E`
+  reference are removed on exit, Ctrl+C, TERM, HUP and on errors; `--cleanup` removes leftovers (it also removes
+  the state file `/var/tmp/matebridge-stall.state`); `--status` must print `status: clean` after the session.
+  pf goes back to its earlier on/off state because `pfctl -E` / `-X` are reference counted.
+- Output `DIR/stalls.txt`: `stall n= epoch_ms= mono_ms= end_mono_ms= ms= port=`. `mono_ms` is the host.log clock
+  (DispatchTime uptime), so `game_ab.py` places each stall on the host's 1 Hz samples; the host log has no wall clock.
+  `game_ab.py arm|summary` print the "injected stalls" section only when `stalls.txt` is in the arm folder.
+- Event window: the 5 s after each stall start. Rows: IDRs written (`net ev=stats idr`), `queue_drops` and
+  `overwritten` (`video ev=cadence`, summed), worst `cap_dec_ms`, seconds until `cap_dec_ms` is below 30 ms again
+  ("recovered" counts the events that got there before the next stall or within 30 s), and `snd_cwnd` /
+  `unacked_bytes` of the last video `ev=tcp` line at most 2 s before the stall. The summary pools the events of
+  all repeats of an arm: median (min-max). Read it as in recipe 5: a spread wider than the difference is "uncertain".
+- Wi-Fi only: over USB the video socket runs through `adb reverse` on the loopback, not through this rule.
+
 ## Not verified on the device yet
 
 Written from NOTES and LOGGING.md, tested only offline (`selftest.sh`): the `lcd_fps_scence` node path and format,
@@ -182,3 +221,6 @@ count, not an exact instance count), `logcat -e` on HarmonyOS 4.3, and `run-as` 
 
 - T-364 (`game-ab.sh`): `top` cutting `VTEncoderXPCService` at 16 characters (`VTEncoderXPCServ`, seen on this Mac), the game's
   `top` name, and the `ev=chroma_stats mode=` value for plain 4:2:0 (assumed `420`) are checked only offline.
+- T-366 (`stall-inject.sh`): only `--dry-run` and the no-root refusal were run. Not checked on a Mac: the pf/dummynet
+  syntax (`dummynet out ... pipe N` inside `com.apple/matebridge-stall`), `pfctl -E` printing `Token : <n>`,
+  `dnctl list` pipe format (`04700:`), `bw 0` meaning unlimited, and that the shaped stall really is a stall.
