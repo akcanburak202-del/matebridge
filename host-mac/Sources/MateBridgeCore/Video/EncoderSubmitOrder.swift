@@ -268,7 +268,7 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
         var delay: UInt64?
         // The pacer decides: send now, hold as the single pending frame (newest wins), or drop a stale one.
         // T-370: with the output queue full a capture is held (and replaced by the next one) instead of encoded.
-        let slotFree = encoderFree && (bypassGate || downstreamHasRoomLocked())
+        let slotFree = encoderFree && (bypassGate || downstreamHasRoomLocked(synthetic: frame.isSynthetic))
         switch pacer.offer(frame, ptsUs: frame.gateUs, nowUs: nowUs(), slotFree: slotFree, bypassGate: bypassGate,
                          synthetic: frame.isSynthetic) {
         case .submit(let f): reserveOrSkipLocked(f)
@@ -494,7 +494,7 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
             if !pacer.hasPending { pendingBypass = false }
             reportPacerLocked()
         }
-        switch pacer.takePending(nowUs: nowUs(), slotFree: inFlight < maxInFlight && downstreamHasRoomLocked()) {
+        switch pacer.takePending(nowUs: nowUs(), slotFree: inFlight < maxInFlight && downstreamHasRoomLocked(synthetic: pacer.pendingIsSynthetic)) {
         case .submit(let f): reserveOrSkipLocked(f); return nil
         case .retry(let wait): return scheduleFlushLocked(afterUs: wait)
         case .none: return backPressureRetryLocked()
@@ -511,21 +511,28 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
     /// overflows the same congested link again), whereas a capture dropped here, before encoding, leaves the chain
     /// intact. A pending keyframe request is never held back: its frame is the recovery. Healthy flow (the sender pops
     /// as frames arrive) keeps the queue near empty, so nothing is held there.
-    private func downstreamHasRoomLocked() -> Bool {
+    ///
+    /// T-374: `synthetic` (a still-screen refinement frame) is admitted only into an empty downstream (load 0), not
+    /// merely below capacity. Otherwise a train frame on top of the previous one's unsent output made the load reach
+    /// the capacity and held the real capture that followed (Wi-Fi with a slow sender); with load 0 a refine frame
+    /// adds at most 1, so a real capture always still fits. A refine frame that waits is replaced by the capture.
+    private func downstreamHasRoomLocked(synthetic: Bool = false) -> Bool {
         guard downstreamCapacity < .max, !forceKeyframe, !pendingBypass else { return true }
         // Order matters: the in-flight counts are read first, the queue counts (inside `downstreamLoad`) second. An
         // encoder output is pushed to its queue before its slot / owed entry is released, so a frame landing between
         // the two reads is counted in both (over-count, safe) and never in neither. Main: `completed` pushes, then
         // `release`; auxiliary: the output wrapper pushes, then `auxResolved`.
         let aux = auxOutstanding.count
-        return downstreamLoad(inFlight, aux) < downstreamCapacity
+        let load = downstreamLoad(inFlight, aux)
+        return synthetic ? load == 0 : load < downstreamCapacity
     }
 
     /// Must hold `lock`. A frame is waiting only for downstream room (an encoder slot is free): returns the delay of
     /// the poll that retries it, nil when none is needed or one is already scheduled. While the encoder is full a
     /// slot release does the retry.
     private func backPressureRetryLocked() -> UInt64? {
-        guard !stopped, pacer.hasPending, inFlight < maxInFlight, !downstreamHasRoomLocked() else { return nil }
+        guard !stopped, pacer.hasPending, inFlight < maxInFlight,
+              !downstreamHasRoomLocked(synthetic: pacer.pendingIsSynthetic) else { return nil }
         stats.backPressureHolds += 1
         return scheduleFlushLocked(afterUs: Self.backPressurePollUs)
     }

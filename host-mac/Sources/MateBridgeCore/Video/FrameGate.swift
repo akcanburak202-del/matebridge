@@ -33,6 +33,9 @@ public struct FrameGate: Sendable {
         return nowUs >= open ? 0 : open - nowUs
     }
 
+    /// Forgets the grid position: the next frame is accepted at once and anchors a new grid (T-374).
+    public mutating func resetGrid() { nextSlotUs = nil }
+
     /// A frame was submitted at `nowUs`. `phaseCreditUs` (T-365): how much later than its own source cadence the
     /// frame went out (submit time minus capture time minus the usual delivery lag). A re-anchor takes up to half an
     /// interval of it back, so the grid follows the source phase instead of the late submit time; otherwise every
@@ -81,6 +84,9 @@ public struct FramePacer<Frame: Sendable>: Sendable {
     private var overwrittenCount = 0
     /// Slowly rising minimum of (arrival - capture time) over real frames: the usual delivery lag (T-365).
     private var lagBaselineUs: Int64?
+    /// T-374: the grid's current slot was set by a synthetic (refinement) frame, not by the source cadence. A synthetic
+    /// frame uses its slot up to the tolerance early, so the slot it leaves is up to one interval past the source.
+    private var syntheticOwnsGate = false
 
     public init(streamFps: Int, toleranceUs: UInt64 = FrameGate.defaultToleranceUs) {
         self.streamFps = streamFps
@@ -128,6 +134,8 @@ public struct FramePacer<Frame: Sendable>: Sendable {
     var holdGraceUs: UInt64 { 1_000_000 / UInt64(max(1, streamFps)) / 2 }
 
     public var hasPending: Bool { pending != nil }
+    /// The pending frame is a synthetic (refinement) one (T-374).
+    public var pendingIsSynthetic: Bool { pending?.synthetic ?? false }
 
     /// Frames discarded since the last call (replaced pending frames and stale ones).
     public mutating func takeOverwritten() -> Int {
@@ -152,6 +160,7 @@ public struct FramePacer<Frame: Sendable>: Sendable {
         // A bypassed frame is a keyframe re-submission stamped `now + lead` (T-368): its lag is meaningless.
         if !synthetic, !bypassGate { noteLag(ptsUs: ptsUs, nowUs: nowUs) }
         if decimating, !bypassGate {
+            releaseGateFromSynthetic(real: !synthetic)
             // The grid is on capture timestamps (one host clock). A frame before its slot is held (newest wins) and
             // goes out at slot + grace unless a grid frame replaces it first (T-066): the newest capture must
             // reach the encoder even when the content changed once and then stopped.
@@ -171,6 +180,7 @@ public struct FramePacer<Frame: Sendable>: Sendable {
                 return .hold(retryAfterUs: slotFree && deferred ? (readyAt > nowUs ? readyAt - nowUs : 0) : nil)
             }
             gate.accept(nowUs: ptsUs)
+            syntheticOwnsGate = synthetic
             if slotFree {
                 if pending != nil { pending = nil; decimatedCount += 1 }
                 if !synthetic { lastSubmittedPtsUs = ptsUs }
@@ -180,6 +190,7 @@ public struct FramePacer<Frame: Sendable>: Sendable {
             pending = (frame, ptsUs, 0, false, synthetic)
             return .hold(retryAfterUs: nil)   // the next slot release submits it
         }
+        releaseGateFromSynthetic(real: !synthetic && !bypassGate)
         let wait = gate.waitUs(nowUs: nowUs)
         if slotFree, bypassGate || wait == 0 {
             // A newer frame goes out directly: whatever was waiting is older and must never follow it.
@@ -202,12 +213,14 @@ public struct FramePacer<Frame: Sendable>: Sendable {
         }
         // A decimated frame that passed the grid goes out as soon as a slot is free; one held before its slot waits
         // for slot + grace (a stale timer must not flush a newer pending frame early) and then advances the grid.
+        releaseGateFromSynthetic(real: !p.synthetic)
         let wait: UInt64
         if decimating { wait = p.readyAtUs > nowUs ? p.readyAtUs - nowUs : 0 } else { wait = gate.waitUs(nowUs: nowUs) }
         if wait > 0 { return .retry(afterUs: wait) }
         pending = nil
         if decimating {
             if p.deferred { gate.accept(nowUs: p.ptsUs); deferredCount += 1 }
+            syntheticOwnsGate = p.synthetic
             if !p.synthetic { lastSubmittedPtsUs = p.ptsUs }
         } else { submitted(ptsUs: p.ptsUs, nowUs: nowUs, synthetic: p.synthetic) }
         return .submit(p.frame)
@@ -219,6 +232,16 @@ public struct FramePacer<Frame: Sendable>: Sendable {
     }
 
     /// How late this frame goes out relative to the source cadence (0 for synthetic frames or without a baseline).
+    /// T-374: a real frame is about to be judged by a grid that a refinement frame positioned: forget that position
+    /// (the next accept anchors the grid on the real frame). Without it the first real frame after a train waited for
+    /// the last refine frame's slot, up to a whole interval, although the screen had been still. The rate cap holds:
+    /// at most one extra frame (the train's last) precedes the re-anchored grid within one interval.
+    private mutating func releaseGateFromSynthetic(real: Bool) {
+        guard real, syntheticOwnsGate else { return }
+        syntheticOwnsGate = false
+        gate.resetGrid()
+    }
+
     private func phaseCredit(ptsUs: UInt64, nowUs: UInt64, synthetic: Bool) -> UInt64 {
         guard !synthetic, let base = lagBaselineUs else { return 0 }
         let lag = Int64(truncatingIfNeeded: nowUs) &- Int64(truncatingIfNeeded: ptsUs)
@@ -235,6 +258,7 @@ public struct FramePacer<Frame: Sendable>: Sendable {
             return
         }
         gate.accept(nowUs: nowUs, phaseCreditUs: phaseCredit(ptsUs: ptsUs, nowUs: nowUs, synthetic: synthetic))
+        syntheticOwnsGate = synthetic
         if !synthetic { lastSubmittedPtsUs = ptsUs }
     }
 }
