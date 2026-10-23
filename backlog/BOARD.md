@@ -35,7 +35,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-335](tasks/T-335-host-pipeline-stop-join.md) | Host — pipeline teardown sürerken ikinci stop çağıranı beklesin; hata zamanı teardown'dan önce alınsın | 7 | mac-host-dev | [T-325, T-293] |
 | [T-367](tasks/T-367-android-timing-tests-flaky.md) | Android — zamanlama testleri yük altında kırmızı (DecoderWaitTest, OutputParkTest, AacDecodeWorkerTest) | 7 | android-client-dev | [] |
 | [T-370](tasks/T-370-encoder-input-backpressure.md) | Host — kodlayıcı girişinde geri basınç: kuyruk/aktarım doluyken yakalamayı VT'ye verme (zorunlu IDR zincirini kes) | 7 | mac-host-dev | [T-368, T-369] |
-| [T-371](tasks/T-371-idr-cause-log.md) | Host — her zorunlu IDR için neden günlüğü (ev=idr_forced cause=...) | 7 | mac-host-dev | [T-369] |
 
 ## done
 
@@ -381,3 +380,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-366](tasks/T-366-video-stall-injector.md) | Ölçüm — video bağlantısına yapay takılma (dummynet) ve 30 ↔ 60 Mbps IDR zinciri A/B'si | 7 | mac-host-dev | [T-364] |
 | [T-368](tasks/T-368-gate-wait-after-idr-burst.md) | Host — T-365 sonrası da IDR patlamasından sonra gate_wait 8–9 ms'de onlarca saniye kalıyor | 7 | mac-host-dev | [T-365] |
 | [T-369](tasks/T-369-forced-idr-chain-design.md) | Tasarım — Wi-Fi kaybından sonra zorunlu IDR zinciri (0,2–0,4 sn donma) yerine daha ucuz toparlanma | 7 | orchestrator | [] |
+| [T-371](tasks/T-371-idr-cause-log.md) | Host — her zorunlu IDR için neden günlüğü (ev=idr_forced cause=...) | 7 | mac-host-dev | [T-369] |

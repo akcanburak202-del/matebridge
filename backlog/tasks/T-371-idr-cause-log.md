@@ -1,7 +1,7 @@
 ---
 id: T-371
 title: Host — her zorunlu IDR için neden günlüğü (ev=idr_forced cause=...)
-status: review
+status: done
 phase: 7
 owner: mac-host-dev
 depends_on: [T-369]
