@@ -2065,3 +2065,20 @@ Kullanıcı ~20 dk oynadı (host.log 114012–115223 s mono). İnternet yolu yok
 - **T-365 cihazda yetmedi:** her olaydan sonra `gate_wait` p50 8–9,5 ms'ye sıçrayıp 10–95 sn kalıyor; 1212 latency penceresinin 470'inde (%39) p50 ≥ 2 ms. O sürelerde `cap_dec_ms` ~21 ms (diğer zamanlar ~13). Birim testindeki senaryo (tek geç gönderim) cihazdaki IDR sonrası birikmeyi kapsamıyor.
 - Ayrı ve açıklanmamış: 3 kısa bölümde (114049–53, 114863–67, 115166–69) tablet `dropped` 13–23/s, `decode_ms` ~11, cap_dec düşük, retx yok, IDR yok → ağ değil; istemci tarafı.
 - Kartlar: T-368 (gate_wait IDR sonrası), T-369 (zorunlu IDR zinciri tasarımı).
+
+## 2026-10-23 22:00 — T-370/T-371 cihaz doğrulaması (host 40dac735, TotK, Oyun 60, Wi-Fi)
+
+Aynı akşam, aynı oyun; yalnız yayının aktığı saniyeler (`sent_kbps` ≥ 1000), host.log'dan:
+
+| | b14c48d1 (19:06–20:25, 75 dk) | 40dac735 (20:30–22:00, 80 dk) |
+|---|---|---|
+| takılma (`cap_dec_ms` > 150) | 23 (0,31/dk) | 2 (0,03/dk) |
+| `cap_dec_ms` > 100 | 43 | 12 |
+| IDR | 303 (4/dk) | 20 (0,25/dk; 14 periodic, 5 transport_refused, 1 client, 1 consumer, 0 queue_overflow) |
+| `queue_drops` | 863 | 0 |
+| `overwritten` (kodlama öncesi ezme) | 184 | 1350 |
+| `cap_dec_ms` p50/p95/p99 | 15,6/30,5/93,6 | 14,0/30,8/60,4 |
+| video retx saniyesi | %33 | %41 |
+| srtt p50/p95 | 8/12 | 7/12 |
+
+Wi-Fi kaybı azalmadı (retx saniyesi daha da çok), ama artık zorunlu IDR zincirine dönmüyor: kuyruk düşüşü yerine kodlama öncesi tek kare ezmesi. T-370 cihazda amacına ulaştı. T-374 bu ölçümde yok (henüz kurulmadı).
