@@ -49,4 +49,12 @@ Mevcut kit (`tools/measure/README.md`, T-173) yeniden kullanılır: `mblog.py fi
 
 ## Handoff
 
+- Commit: c8520d31 (branch `task/T-364-game-ab-measure`; bu Handoff ayrı bir küçük commit). `./scripts/check.sh` ALL OK (selftest dahil).
+- Dosyalar: `tools/measure/game-ab.sh`, `game_ab.py` (yeni), `mblog.py` (izin listesi), `selftest.sh`, `README.md` (tarif 5), `testdata/game_ab/*` (sentetik), bu kart. Kart ana çalışma ağacında izlenmiyordu; dala kopyalandı.
+- Varsayımlar: (1) takılma = host `net ev=stats` 1 Hz `cap_dec_ms` > 150 (NOTES 2026-10-20 22:30); alan yoksa tablet 10 sn `cap_dec_max_us` > 150000 pencere sayısı. (2) Tablet decode p95 loglanmıyor (`dec_p50_us` var, p95 yok): "çözme p50/p95" host'un 1 Hz `decode_ms` örneklerinden; 10 sn satırı yalnız p50. (3) Yakalama→çözme p99 de 1 Hz örneklerden; tablet 10 sn p50/p95 ayrı satır. (4) `gpu_ms`/`enc_ms`/`cap_to_sent_ms` satırları 1 sn host pencerelerinin p50/p95 değerlerinin ortancası. (5) Düz 4:2:0 için `chroma_stats mode=420` varsayıldı (LOGGING "420'de dönüşüm yok" diyor, satırın yazılıp yazılmadığı gerçek logda görülmedi); yoksa son `chroma_config applied` kullanılır. (6) `top` komut adını 16 karaktere keser (bu Mac'te `VTEncoderXPCServ` görüldü); script `--proc` adlarını da keser. (7) Kol sırası `start_ep` ile belirlenir (komut bitiş saati - süre).
+- Gizlilik: allowlist'e yalnız `net tcp` (conn, transport), `net keyframe_request` (action, view), `encoder chroma_config` (requested, applied), `video chroma_stats` (mode); `action` deseni genişledi (forced|coalesced|config_resent|aux_only). Gerçek host.log'a yalnız okuma bakışı; ham satır depoya girmedi.
+- Test edilmedi / cihazda doğrulanacak: gerçek tabletle `logcat` akışı ve `session ev=profile` alanlarının (size/bitrate/transport) çalışan uygulamada beklenen biçimde olması; oyun sürecinin `top` adı; `--expect chroma=...` karşılaştırmasının gerçek `chroma_stats mode` değerleriyle (özellikle Normal kolunda); Wi-Fi'de video `ev=tcp` satırlarının gerçekten geldiği; 100 sn'lik gerçek pencerede macmon örnek sayısı (5 sn x 20). Hiçbir cihaza dokunulmadı.
+
 ## Open questions
+
+- Tablet tarafı decode p95'i loglamıyor; A3 karar kuralı ("çözme p95 < 16,7 ms") için 1 Hz `decode_ms` p95 kullanılıyor. Tablet kodunda `dec_p95_us` istenirse ayrı kart.
