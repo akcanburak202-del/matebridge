@@ -33,7 +33,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-333](tasks/T-333-game-encoder-peaks.md) | Oyun 60 — kodlayıcı kare boyutu tepeleri (LLRC/ConstantBitRate, kısa rate penceresi, MaxAllowedFrameQP) EncodeBench karşılaştırması | 7 | mac-host-dev | [T-330] |
 | [T-334](tasks/T-334-dav-copy-put-concurrency.md) | WebDAV — eşzamanlı COPY/MOVE geri alması başka bağlantının başarılı PUT'unu silmesin | 7 | android-client-dev | [T-288] |
 | [T-335](tasks/T-335-host-pipeline-stop-join.md) | Host — pipeline teardown sürerken ikinci stop çağıranı beklesin; hata zamanı teardown'dan önce alınsın | 7 | mac-host-dev | [T-325, T-293] |
-| [T-364](tasks/T-364-game-ab-measure.md) | Ölçüm — oyun modu A/B kaydı (bit hızı, renk, çözünürlük): game-ab.sh + game_ab.py | 7 | mac-host-dev | [T-173] |
 
 ## done
 
@@ -374,3 +373,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-361](tasks/T-361-hidden-cursor-inset-move.md) | Host — gizli imleç kilitlenmesi; gizliyken de hareket et, kenardan içeride tut | 7 | mac-host-dev | [T-272] |
 | [T-362](tasks/T-362-client-connect-path-choice.md) | İstemci — bağlantı ekranı "Yerel ağ | Tailscale" + veri tasarrufu, Bağlan/Durdur, açılışta bağlanma yok | 7 | android-client-dev | [T-352] |
 | [T-363](tasks/T-363-hidden-cursor-unobscure.md) | Host — gizli imleç: Terminal "yazarken gizle" T-361 ile açılmıyor; yerinde + kaydırılmış iki olay | 7 | mac-host-dev | [T-361] |
+| [T-364](tasks/T-364-game-ab-measure.md) | Ölçüm — oyun modu A/B kaydı (bit hızı, renk, çözünürlük): game-ab.sh + game_ab.py | 7 | mac-host-dev | [T-173] |
