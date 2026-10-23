@@ -147,7 +147,9 @@ public final class VideoPipeline: @unchecked Sendable {
                                           refineReady: { [auxFrames, packed = settings.packedChroma] in
                                               RefineReadiness.ready(mainReady: frames.isReadyForRefine,
                                                                     auxReady: auxFrames.isReadyForRefine, packed: packed)
-                                          }, output: { frame, encodeUs in
+                                          },
+                                          downstreamLoad: { [auxFrames] in max(frames.queuedCount, auxFrames.queuedCount) },
+                                          output: { frame, encodeUs in
                 var frame = frame
                 frame.trace.enqueuedUs = HostClock.nowUs()
                 frames.push(frame)

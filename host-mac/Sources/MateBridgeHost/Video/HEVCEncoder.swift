@@ -176,9 +176,12 @@ final class HEVCEncoder: @unchecked Sendable {
     ///   - logSink: where `ev=encoder_config` / `ev=profile` go (the benches print them instead).
     ///   - refine: still-screen refinement (T-253); `.disabled` (default) keeps the encoder exactly as before.
     ///   - refineReady: whether the output queue can take another refinement frame (`VideoFrameQueue.isReadyForRefine`).
+    ///   - downstreamLoad: encoded frames waiting in the output queue(s) (T-370); with it, a capture is not encoded
+    ///     while the queue could not take the result (`EncoderSubmitOrder`). nil: no back pressure.
     init(settings: VideoSettings, meter: CadenceMeter? = nil, knobs: EncoderKnobs? = nil,
          logSink: @escaping LogSink = HEVCEncoder.hostLog, refine: StillRefineConfig = .disabled,
-         refineReady: @escaping @Sendable () -> Bool = { true }, output: @escaping Output,
+         refineReady: @escaping @Sendable () -> Bool = { true },
+         downstreamLoad: (@Sendable () -> Int)? = nil, output: @escaping Output,
          auxOutput: Output? = nil, onPackedError: @escaping @Sendable (String) -> Void = { _ in },
          onFailure: @escaping @Sendable (Error) -> Void = { _ in }) throws {
         self.packedError = onPackedError
@@ -216,6 +219,8 @@ final class HEVCEncoder: @unchecked Sendable {
                 for _ in 0..<deferred { meter?.recordDeferred() }
             },
             log: logSink,
+            downstreamLoad: downstreamLoad ?? { 0 },
+            downstreamCapacity: downstreamLoad == nil ? .max : BoundedFrameQueue.defaultCapacity,
             onSkipped: { [weak self] frame in self?.refineSkipped(frame) })
         backend.encoder = self
 
