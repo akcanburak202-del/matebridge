@@ -121,7 +121,7 @@ public final class VideoPipeline: @unchecked Sendable {
         box.frames = frames
         // An auxiliary overflow only breaks the auxiliary chain: an auxiliary keyframe, no coalescing needed (the
         // queue refuses auxiliary deltas until it arrives, so one request per hole).
-        let auxGate = KeyframeGate()
+        let auxGate = KeyframeGate(auxiliary: true)
         auxKeyframes = auxGate
         let auxBox = EncoderBox(keyframes: auxGate, view: .auxiliary)
         self.auxBox = auxBox
@@ -333,14 +333,14 @@ public final class VideoPipeline: @unchecked Sendable {
     /// requests caused by the same hiccup coalesce with it.
     public func requestKeyframe() {
         let pushed = frames.keyframesPushed
-        keyframes.update { $0.internalForce(nowUs: HostClock.nowUs(), keyframesPushed: pushed) }
+        keyframes.update { $0.internalForce(nowUs: HostClock.nowUs(), keyframesPushed: pushed, cause: .transportRefused) }
         box.encoder?.requestKeyframe(resubmitNow: true, view: .main)
     }
 
     /// The sender dropped or refused an auxiliary frame (packed full colour): the next auxiliary frame is an IDR.
     public func requestAuxKeyframe() {
         let pushed = auxFrames.keyframesPushed
-        auxKeyframes.update { $0.internalForce(nowUs: HostClock.nowUs(), keyframesPushed: pushed) }
+        auxKeyframes.update { $0.internalForce(nowUs: HostClock.nowUs(), keyframesPushed: pushed, cause: .transportRefused) }
         box.encoder?.requestKeyframe(resubmitNow: true, view: .auxiliary)
     }
 
@@ -400,8 +400,11 @@ public final class VideoPipeline: @unchecked Sendable {
         return decision
     }
 
-    /// Keyframes written since the previous call: `idr=` / `idr_bytes_max=` of the stats line (T-122).
-    public func takeKeyframeWindow() -> KeyframeRequestCoalescer.Window { keyframes.update { $0.takeWindow() } }
+    /// Keyframes written since the previous call: `idr=` / `idr_bytes_max=` of the stats line (T-122), followed by
+    /// the non-zero `idr_cause_*` / `idr_coalesced` / `idr_deferred` counts of the main stream (T-371).
+    public func takeKeyframeWindow() -> KeyframeRequestCoalescer.StatsWindow {
+        keyframes.update { KeyframeRequestCoalescer.StatsWindow(window: $0.takeWindow(), causes: $0.takeCauses()) }
+    }
 
     /// Call when a new consumer attaches: the queue is reset to hold only [CODEC_CONFIG], stale delta frames are
     /// refused, and a keyframe is forced (also on a static screen, by re-encoding the last captured buffer). The
@@ -593,10 +596,38 @@ private final class EncoderBox: @unchecked Sendable {
 }
 
 /// Serialises the keyframe request coalescer (T-122). Never calls out while holding its lock.
+///
+/// T-371: every force the coalescer records is logged as `video ev=idr_forced view=main|aux cause=... since_last_ms=`
+/// after the lock is released. At most `maxLinesPerSecond` lines per second per stream; the per-second counts on the
+/// stats line (`idr_cause_*`) stay exact regardless. Normal rates are a few per second (the coalescer's 250 ms window).
 private final class KeyframeGate: @unchecked Sendable {
+    private static let logger = SessionLogger(component: "video")
+    private static let maxLinesPerSecond = 10
     private let lock = NSLock()
     private var coalescer = KeyframeRequestCoalescer()
-    func update<T>(_ body: (inout KeyframeRequestCoalescer) -> T) -> T { lock.withLock { body(&coalescer) } }
+    private let viewName: String
+    private var lineWindowStartUs: UInt64 = 0
+    private var linesInWindow = 0
+
+    init(auxiliary: Bool = false) { viewName = auxiliary ? "aux" : "main" }
+
+    func update<T>(_ body: (inout KeyframeRequestCoalescer) -> T) -> T {
+        let (result, lines): (T, [KeyframeRequestCoalescer.ForceNote]) = lock.withLock {
+            let r = body(&coalescer)
+            let now = HostClock.nowUs()
+            if now &- lineWindowStartUs >= 1_000_000 { lineWindowStartUs = now; linesInWindow = 0 }
+            var out: [KeyframeRequestCoalescer.ForceNote] = []
+            for n in coalescer.takeForceNotes() where linesInWindow < Self.maxLinesPerSecond {
+                linesInWindow += 1
+                out.append(n)
+            }
+            return (r, out)
+        }
+        for n in lines {
+            Self.logger.log(.info, "idr_forced", sessionID: 0, generation: 0, fields: "view=\(viewName) \(n.logFields)")
+        }
+        return result
+    }
 }
 
 /// The auxiliary loss rule's state, with the cumulative drop counters it turns into per-window deltas (T-258).

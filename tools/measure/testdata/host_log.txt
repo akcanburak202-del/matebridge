@@ -14,3 +14,5 @@
 4003000 I video sid=77 gen=1 ev=latency frames=119 enc_ms_p50_95_99_max=7.4/8.4/9.4/9.9 write_ms_p50_95_99_max=0.3/0.4/0.5/0.7 cap_to_sent_ms_p50_95_99_max=7.9/8.9/9.9/10.4 pts_vs_deliv_ms_p1_50_99=6.2/6.8/7.2 no_display=0
 4003001 I net sid=77 gen=1 ev=stats fps=119.0 kbps=49000 decode_ms=9.2 dropped=0 cap_dec_ms=10.8 latency_ms=10.8 sent_frames=119 sent_kbps=49000 rejected=0 send_failures=0 idr=0 idr_bytes_max=0
 4003500 I video sid=77 gen=1 ev=pipeline_retry
+4003500 I video sid=0 gen=0 ev=idr_forced view=main cause=queue_overflow since_last_ms=250
+4003501 I video sid=0 gen=0 ev=idr_forced view=aux cause=secret-reason since_last_ms=10

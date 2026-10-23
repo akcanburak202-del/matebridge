@@ -31,13 +31,13 @@
 1010000 I net sid=77 gen=1 ev=stats fps=60.0 kbps=30000 decode_ms=10.0 dropped=0 cap_dec_ms=20.0 latency_ms=20.0 sent_frames=60 sent_kbps=30000 idr=0 idr_bytes_max=0
 1010002 I video sid=77 gen=1 ev=cadence target_ms=16.7 cap=60 cap_fps=60.0 enc_fps=60.0 overwritten=0 decimated=0 deferred=0 queue_drops=0 sent=60 sent_fps=60.0
 1010001 I net sid=77 gen=1 ev=tcp conn=video conn_id=6 retx_pkts_delta=0 srtt_ms=9 snd_cwnd=1465637 unacked_bytes=50000 notsent_bytes=0 transport=wifi
-1011000 I net sid=77 gen=1 ev=stats fps=60.0 kbps=30000 decode_ms=10.0 dropped=0 cap_dec_ms=180.0 latency_ms=20.0 sent_frames=60 sent_kbps=30000 idr=2 idr_bytes_max=200000
+1011000 I net sid=77 gen=1 ev=stats fps=60.0 kbps=30000 decode_ms=10.0 dropped=0 cap_dec_ms=180.0 latency_ms=20.0 sent_frames=60 sent_kbps=30000 idr=2 idr_bytes_max=200000 idr_cause_queue_overflow=2 idr_coalesced=3
 1011002 I video sid=77 gen=1 ev=cadence target_ms=16.7 cap=60 cap_fps=60.0 enc_fps=60.0 overwritten=4 decimated=0 deferred=0 queue_drops=7 sent=60 sent_fps=60.0
 1011001 I net sid=77 gen=1 ev=tcp conn=video conn_id=6 retx_pkts_delta=0 srtt_ms=9 snd_cwnd=1465637 unacked_bytes=50000 notsent_bytes=0 transport=wifi
-1012000 I net sid=77 gen=1 ev=stats fps=60.0 kbps=30000 decode_ms=10.0 dropped=0 cap_dec_ms=240.0 latency_ms=20.0 sent_frames=60 sent_kbps=30000 idr=3 idr_bytes_max=200000
+1012000 I net sid=77 gen=1 ev=stats fps=60.0 kbps=30000 decode_ms=10.0 dropped=0 cap_dec_ms=240.0 latency_ms=20.0 sent_frames=60 sent_kbps=30000 idr=3 idr_bytes_max=200000 idr_cause_queue_overflow=2 idr_cause_transport_refused=1 idr_deferred=2
 1012002 I video sid=77 gen=1 ev=cadence target_ms=16.7 cap=60 cap_fps=60.0 enc_fps=60.0 overwritten=6 decimated=0 deferred=0 queue_drops=12 sent=60 sent_fps=60.0
 1012001 I net sid=77 gen=1 ev=tcp conn=video conn_id=6 retx_pkts_delta=0 srtt_ms=9 snd_cwnd=1465637 unacked_bytes=50000 notsent_bytes=0 transport=wifi
-1013000 I net sid=77 gen=1 ev=stats fps=60.0 kbps=30000 decode_ms=10.0 dropped=0 cap_dec_ms=90.0 latency_ms=20.0 sent_frames=60 sent_kbps=30000 idr=1 idr_bytes_max=200000
+1013000 I net sid=77 gen=1 ev=stats fps=60.0 kbps=30000 decode_ms=10.0 dropped=0 cap_dec_ms=90.0 latency_ms=20.0 sent_frames=60 sent_kbps=30000 idr=1 idr_bytes_max=200000 idr_cause_client_request=1
 1013002 I video sid=77 gen=1 ev=cadence target_ms=16.7 cap=60 cap_fps=60.0 enc_fps=60.0 overwritten=0 decimated=0 deferred=0 queue_drops=3 sent=60 sent_fps=60.0
 1013001 I net sid=77 gen=1 ev=tcp conn=video conn_id=6 retx_pkts_delta=0 srtt_ms=9 snd_cwnd=1465637 unacked_bytes=50000 notsent_bytes=0 transport=wifi
 1014000 I net sid=77 gen=1 ev=stats fps=60.0 kbps=30000 decode_ms=10.0 dropped=0 cap_dec_ms=25.0 latency_ms=20.0 sent_frames=60 sent_kbps=30000 idr=0 idr_bytes_max=0
@@ -137,3 +137,5 @@
 1045002 I video sid=77 gen=1 ev=cadence target_ms=16.7 cap=60 cap_fps=60.0 enc_fps=60.0 overwritten=0 decimated=0 deferred=0 queue_drops=0 sent=60 sent_fps=60.0
 1045001 I net sid=77 gen=1 ev=tcp conn=video conn_id=6 retx_pkts_delta=0 srtt_ms=9 snd_cwnd=1465637 unacked_bytes=50000 notsent_bytes=0 transport=wifi
 1005000 I kbd sid=77 gen=1 ev=key keycode=12 down=1
+1011100 I video sid=0 gen=0 ev=idr_forced view=aux cause=transport_refused since_last_ms=-
+1011200 I video sid=0 gen=0 ev=idr_forced view=main cause=queue_overflow since_last_ms=250
