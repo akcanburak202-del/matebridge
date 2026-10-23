@@ -2027,3 +2027,9 @@ Kurulum: daily APK 253e1348, `hw_screen_freq=1`, servis "MateBridge 120 Hz" bağ
 
 - Kullanıcı: TotK Mac'te kendi uygulaması olarak kurulu, emülatör değil. 2026-10-09 16:50 notundaki "Astris (TotK) … emulator source" ifadesi bu bilgiyle okunmalı (cızırtı kaynak taraflı bulgusu değişmez; "emülatör" nitelemesi yanlış). Ölçüm ve kararlarda emülatörler kapsam dışı.
 - T-364 A/B ölçümü TotK ile yapılacak (`docs/research/2026-10-23-game-modes.md`). Uygulama 2026-10-23'te yeniden derleniyor; oturuma kadar ona dokunulmaz.
+
+## 2026-10-23 öğlen — Oyun modu A/B (T-364, TotK, Wi-Fi)
+
+- Sonuçlar ve tablolar: `docs/research/2026-10-23-game-modes.md` "Sonuçlar". Kısaca: 60 ↔ 30 Mbps'te takılma yok, 30 daha iyi değil (bugün WLAN sağlıklı); Keskin renk 1848'de ~0,5 ms GPU, Mac GPU farkı yok; 2240 (artış açık) çözme p95 20,5 ms, `skip_pct` 6,4 vs 0,8 → varsayılan 1848 kalır, kullanıcı 2240'ı görsel olarak daha iyi buldu.
+- TotK Mac GPU'yu her kolda %94–95 dolduruyor; MateBridge payı küçük (MateBridgeApp %7–10).
+- Kablosuz adb: tablet IP'si değişmişti (orkestratör eski adresi denedi); doğru adres LAN'da 5555 portu açık olan cihazdı. Önce `arp` + port taraması.

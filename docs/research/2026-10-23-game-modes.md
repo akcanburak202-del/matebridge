@@ -99,3 +99,56 @@ Kullanıcı: **TotK, Mac'e yerel uygulama** (emülatör değil; emülatörler bu
 
 - Öneriler kod değil; karar eki (0014/0029/0030) ve kartlar ölçümden sonra yazılır.
 - 120 fps için ölçekleme (Ö1) ayrıca düşünülmeli: kareler arası benzerlik arttığı için bit hızı fps ile doğrusal artmaz. [Çıkarım.]
+
+## Sonuçlar (2026-10-23 öğlen, cihaz oturumu)
+
+Kurulum: TotK (Mac'e yerel, `totk-native`), Oyun 60, Wi-Fi (Mac Ethernet), host `67553f99`, APK versionCode 424606, aynı köy noktası, kumandayla yavaş kamera çevirme; kol başına 100 sn, `tools/measure/game-ab.sh`. Her kolda `arm_check: ok` (bit hızı ve renk loglardan doğrulandı; ekran boyutu host `display=` satırından). Veri repo dışında (`~/.cache/matebridge-tools/data/2026-10-23-gameab/`). Tablo değerleri kol ortancası (min–maks).
+
+**Genel:** Mac GPU her kolda %94–95 (TotK GPU'yu dolduruyor); TotK ~%130–137 CPU; MateBridgeApp %7–10, WindowServer %9–12, VTEncoder ~%2–3. MateBridge'in Mac payı her ayarda küçük kaldı.
+
+### A1 bit hızı (1848, Normal renk, 3+3 kol)
+
+| | 60 Mbps | 30 Mbps |
+|---|---|---|
+| >150 ms takılma | 0 (0–0) | 0 (0–0) |
+| yeniden gönderimli saniye | %5,0 (3,4–6,7) | %9,2 (6,7–11,8) |
+| `skip_pct` | 0,0 (0–6,7) | 8,4 (0–21,9) |
+| çözme p50 | 10,8 ms | 9,4 ms |
+| `cap_dec` p95 / p99 | 14,4 / 15,1 ms | 16,9 / 121 ms |
+| Mac GPU | %95 | %94,5 |
+
+Karar kuralı: 30 Mbps yeniden gönderimde 60'tan kötü → **Ö1 geçmedi.** Bugün WLAN sağlıklıydı (60 Mbps'te takılma yok); 2026-10-08/20'deki sorun WLAN'ın kötü olduğu anlara ait ve o durum bu oturumda yoktu. Ö1 "kötü gün" verisi olmadan yeniden açılmaz; o yöndeki karşılık `MATEBRIDGE_WIFI_ADAPT` (0023 eki, kapalı) ya da kullanıcının elle seçimi.
+
+### A2 renk (60 Mbps, 1848, 1+1 kol — kullanıcı isteğiyle kısaltıldı)
+
+| | Keskin | Normal |
+|---|---|---|
+| `gpu_ms` p50 / p95 | 0,5 / 0,6 ms | 0 |
+| Mac GPU | %94 | %94 |
+| MateBridgeApp CPU | %10,1 | %8,6 |
+
+Karar kuralı: GPU farkı < 3 puan ve `gpu_ms` < 1 ms → **Ö2 geçmedi; Keskin oyunda da kalabilir.** 2800'deki 2,5–4 ms geçiş maliyeti 1848'de ~0,5 ms. Tek çift olmasına rağmen sinyal eşiğin çok altında. Renk tercihi görsel.
+
+### A3 çözünürlük (Performans artışı açık, 60 Mbps, Normal, 2+2 kol — kullanıcı isteğiyle kısaltıldı)
+
+| | 1848×1214 | 2240×1472 |
+|---|---|---|
+| `skip_pct` | 0,8 (0–1,6) | 6,4 (1,1–11,7) |
+| çözme p50 / p95 | 11,1 / 11,4 ms | 12,7 / **20,5 (13,1–27,8)** ms |
+| `cap_dec` p50 / p95 / p99 | 14,2 / 19,4 / 24,7 ms | 18,1 / 35,0 / 171 ms |
+| >150 ms takılma | 0,5 (0–1) | 1,5 (1–2) |
+| yeniden gönderimli saniye | %13,9 (7,4–20,3) | %41 (10,7–71,3) |
+| kodlama p50 | 4,3 ms | 5,3 ms |
+| Mac GPU / TotK CPU | %95 / %130 | %94 / %132 |
+
+Kullanıcı: "2240'ta iyileşme var" (görsel). Karar kuralı: `skip_pct` 1848'den > 1 puan kötü ve çözme p95 > 16,7 ms → **varsayılan 1848 kalır.** 2240 seçenek olarak kalır (görüntü daha iyi; bedeli kare atlaması ve ara sıra gecikme sıçraması). Mac yükü iki boyutta aynı (TotK GPU'yu her durumda dolduruyor).
+
+### Yan gözlemler
+
+- Host `cap_to_sent` aynı ayarda zamanla 4,7 → 12 ms oynadı (A1 60 Mbps kolları ile A2 Normal kolu). Bu yüzden 30 Mbps (10,8) ve Keskin (18,2) kollarındaki artışlar bu kaymanın içinde; ayara bağlanmadı. GPU %94–95 doluyken yakalama/kodlama sırası beklemesi olası [çıkarım]; ayrı bakılabilir.
+- A3'teki yeniden gönderim artışı (2240'ta %41) aynı bit hızında; büyük karelerin daha patlamalı gitmesi ya da WLAN'ın o dakikalarda kötüleşmesi olabilir (A3 1848 kolları da A1'den yüksek, %13,9) [çıkarım].
+- Tablet decode p95 loglamıyor; değerler host'un 1 Hz `decode_ms` örneklerinden.
+
+### Sonuç
+
+Üç önerinin hiçbiri bugünkü veriyle geçmedi: bugünkü varsayılanlar (60 Mbps, Keskin, 1848) yerinde. Kalan tek öneri Ö3'ün sadeleştirme kısmı (2100×1380'i listeden çıkarmak) ve 2800'ün doğrulanması; ikisi de kullanıcı kararı. Oyunda Mac yükünü belirleyen MateBridge değil oyunun kendisi.
