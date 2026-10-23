@@ -27,30 +27,31 @@ private final class BPBackend: CompressionBackend, @unchecked Sendable {
     private var _encoded: [Int] = []
     weak var order: EncoderSubmitOrder<BPBackend>?
     var queue: VideoFrameQueue!
-    /// Packed full colour: every submit also starts an auxiliary encode that completes on its own (`completeAux`).
+    /// Packed full colour: every submit owes an auxiliary frame, finished by `completeAux`.
     var auxQueue: VideoFrameQueue?
-    private var auxPending: [(Bool, UInt64)] = []
+    private var auxPending: [(EncoderSubmitToken, Bool, UInt64)] = []
 
     var encoded: [Int] { lock.withLock { _encoded } }
-    var auxInFlight: Int { lock.withLock { auxPending.count } }
     func encode(_ frame: BPFrame, keyframe: Bool, token: EncoderSubmitToken) {
         lock.withLock {
             _encoded.append(frame.stamp); outstanding.append((token, keyframe, frame.gateUs))
-            if auxQueue != nil { auxPending.append((keyframe, frame.gateUs)) }
+            if auxQueue != nil { auxPending.append((token, keyframe, frame.gateUs)) }
         }
     }
 
-    /// The oldest `count` auxiliary encodes finish and reach the auxiliary queue.
+    /// The oldest `count` auxiliary encodes finish: pushed to the auxiliary queue first, then resolved (the order the
+    /// real encoder uses).
     func completeAux(_ count: Int = .max) {
-        let batch = lock.withLock { () -> [(Bool, UInt64)] in
+        let batch = lock.withLock { () -> [(EncoderSubmitToken, Bool, UInt64)] in
             let n = min(count, auxPending.count)
             defer { auxPending.removeFirst(n) }
             return Array(auxPending.prefix(n))
         }
-        for (key, us) in batch {
+        for (token, key, us) in batch {
             var f = EncodedVideoFrame(flags: key ? [.keyframe] : [], captureTimeUs: us, data: [4, 5])
             f.view = 1
             auxQueue?.push(f)
+            order?.auxResolved(token)
         }
     }
     func completeAndInvalidate() {}
@@ -95,7 +96,7 @@ final class EncoderBackPressureTests: XCTestCase {
             nowUs: { [clock = rig.clock] in clock.now },
             scheduleFlush: { [unowned rig] _, fire in rig.flushLock.withLock { rig.flushes.append(fire) } },
             pacerCounts: { [unowned rig] o, _, _ in rig.overwritten += o },
-            downstreamLoad: { queue.queuedCount + $0 },
+            downstreamLoad: { m, _ in queue.queuedCount + m },
             downstreamCapacity: backPressure ? BoundedFrameQueue.defaultCapacity : .max)
         rig.backend.order = rig.order
         return rig
@@ -142,57 +143,141 @@ final class EncoderBackPressureTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(rig.backend.encoded.count - before, 4, "about one encoded frame per tick again")
     }
 
-    /// The auxiliary session finishes later than the main one: an auxiliary frame still encoding will land in the
-    /// auxiliary queue, so it counts against its capacity even though the main slot was released.
-    func testAuxiliaryFramesStillEncodingCountAgainstTheAuxiliaryQueue() {
-        let backend = BPBackend()
+    // MARK: - Packed full colour (auxiliary stream)
+
+    private final class PackedRig: @unchecked Sendable {
         let clock = BPClock()
-        let flushLock = NSLock()
-        nonisolated(unsafe) var flushes: [@Sendable () -> Void] = []
-        let counter = NSLock()
-        nonisolated(unsafe) var needed = 0
+        let backend = BPBackend()
         let main = VideoFrameQueue(keyframeNeeded: {})
-        let aux = VideoFrameQueue(keyframeNeeded: { counter.withLock { needed += 1 } })
-        backend.queue = main
-        backend.auxQueue = aux
-        let order = EncoderSubmitOrder<BPBackend>(
-            backend: backend, streamFps: 60, maxInFlight: 2, initialBitrateKbps: 60_000,
-            nowUs: { clock.now },
-            scheduleFlush: { _, fire in flushLock.withLock { flushes.append(fire) } },
-            downstreamLoad: { [weak backend] mainInFlight in
-                DownstreamBudget.projected(mainInFlight: mainInFlight, mainQueued: main.queuedCount,
-                                           auxInFlight: backend?.auxInFlight ?? 0, auxQueued: aux.queuedCount)
-            },
-            downstreamCapacity: BoundedFrameQueue.defaultCapacity)
-        backend.order = order
-        func offer(_ n: Int) {
+        let aux = VideoFrameQueue(keyframeNeeded: {})
+        var order: EncoderSubmitOrder<BPBackend>!
+        let lock = NSLock()
+        var flushes: [@Sendable () -> Void] = []
+        /// Runs inside the budget snapshot, between the in-flight read and the queue read.
+        var duringSnapshot: (@Sendable () -> Void)?
+        var stamp = 0
+        let gate = DispatchSemaphore(value: 0)
+        var blockFirstSubmit = false
+        private var blocked = false
+
+        func hook() {
+            let block = lock.withLock { () -> Bool in
+                guard blockFirstSubmit, !blocked else { return false }
+                blocked = true
+                return true
+            }
+            if block { gate.wait() }
+        }
+        func fireFlushes() {
+            let fires = lock.withLock { () -> [@Sendable () -> Void] in defer { flushes = [] }; return flushes }
+            fires.forEach { $0() }
+        }
+        func offer() {
+            stamp += 1
             clock.advance(16_667)
-            order.offer(bypassGate: false) { _ in BPFrame(stamp: n, gateUs: clock.now) }
+            order.offer(bypassGate: false) { [stamp, clock] _ in BPFrame(stamp: stamp, gateUs: clock.now) }
+        }
+        func settle() {
             let s = DispatchSemaphore(value: 0)
             order.afterQueued { s.signal() }
-            _ = s.wait(timeout: .now() + 5)
-            backend.complete()                       // main output is immediate and drained by the sender
-            while main.tryPop() != nil {}
+            XCTAssertEqual(s.wait(timeout: .now() + 5), .success)
         }
-        offer(1)                                     // keyframe; its auxiliary encode stays pending
-        backend.completeAux(1)                       // aux keyframe queued (transport stalled: nobody pops)
-        offer(2)                                     // aux A: encoding, aux queue holds 1
-        offer(3)                                     // B: projected 1 queued + 1 encoding = 2 -> must be held
-        XCTAssertEqual(backend.encoded.count, 2, "B waits: A is still encoding and the queue already holds one")
-        backend.completeAux()                        // A (and nothing else) lands
-        XCTAssertEqual(counter.withLock { needed }, 0, "no auxiliary overflow")
-        XCTAssertEqual(aux.discardedCount, 0)
+        func landAuxiliaryFrame() { aux.push(EncodedVideoFrame(flags: [], captureTimeUs: 1, data: [9])) }
     }
 
-    func testAuxInFlightTrackerResolvesAndForgetsStaleEntries() {
-        var t = AuxInFlightTracker()
-        t.began(captureTimeUs: 1_000); t.began(captureTimeUs: 2_000)
-        XCTAssertEqual(t.count(nowUs: 3_000), 2)
-        t.ended(captureTimeUs: 1_000)
-        XCTAssertEqual(t.count(nowUs: 3_000), 1)
-        t.ended(captureTimeUs: 9_999)   // unknown: ignored
-        XCTAssertEqual(t.count(nowUs: 3_000), 1)
-        XCTAssertEqual(t.count(nowUs: 2_000 + AuxInFlightTracker.maxAgeUs + 1), 0, "a missed resolution never holds captures for good")
+    private func makePacked(blockFirstSubmit: Bool = false) -> PackedRig {
+        let rig = PackedRig()
+        rig.blockFirstSubmit = blockFirstSubmit
+        rig.backend.queue = rig.main
+        rig.backend.auxQueue = rig.aux
+        let main = rig.main, aux = rig.aux
+        rig.order = EncoderSubmitOrder<BPBackend>(
+            backend: rig.backend, streamFps: 60, maxInFlight: 2, initialBitrateKbps: 60_000,
+            nowUs: { [clock = rig.clock] in clock.now },
+            scheduleFlush: { [unowned rig] _, fire in rig.lock.withLock { rig.flushes.append(fire) } },
+            downstreamLoad: { [unowned rig] mainInFlight, auxInFlight in
+                rig.duringSnapshot?()
+                return DownstreamBudget.projected(mainInFlight: mainInFlight, mainQueued: main.queuedCount,
+                                                  auxInFlight: auxInFlight, auxQueued: aux.queuedCount)
+            },
+            downstreamCapacity: BoundedFrameQueue.defaultCapacity,
+            beforeSubmit: { [unowned rig] _ in rig.hook() })
+        rig.backend.order = rig.order
+        rig.order.trackAuxiliary()
+        return rig
+    }
+
+    /// A reserved frame owes an auxiliary frame from the moment it holds its slot, not from when the owner queue runs
+    /// its submit: with the owner queue stalled, the next capture must still see that frame's auxiliary capacity.
+    func testReservedFrameReservesAuxiliaryCapacityBeforeItsSubmitRuns() {
+        let rig = makePacked(blockFirstSubmit: true)
+        rig.offer()                       // the keyframe: reserved, its submit blocks on the owner queue
+        rig.landAuxiliaryFrame()          // the stalled transport left one auxiliary frame in the queue
+        rig.offer()                       // A: owed 1 + queued 1 = capacity, so it must wait even though no submit ran yet
+        rig.offer()                       // B
+        XCTAssertEqual(rig.order.currentStats.reservations, 1, "A and B wait: the keyframe owes one and one is queued")
+        XCTAssertEqual(rig.order.auxOwedCount, 1)
+        rig.gate.signal()
+        rig.settle()
+    }
+
+    /// The budget reads the owed auxiliary count first and the queue second, so a frame that lands between the two
+    /// reads is counted twice (safe) and never zero times.
+    func testSnapshotCannotUnderCountAnAuxiliaryFrameThatLandsMidRead() {
+        let rig = makePacked()
+        rig.offer()                       // keyframe, exempt
+        rig.settle()
+        rig.backend.complete()            // main output drained; the auxiliary frame is still owed
+        rig.duringSnapshot = { [unowned rig] in rig.landAuxiliaryFrame() }   // the owed one lands mid-snapshot
+        rig.offer()
+        XCTAssertEqual(rig.order.currentStats.reservations, 1, "owed 1 (read first) + 1 that landed mid-snapshot = capacity: held")
+        rig.duringSnapshot = nil
+    }
+
+    /// Reserved capacity is released only by completion, loss or an explicit reset; time alone never frees it.
+    func testOwedAuxiliaryCapacityDoesNotExpireWithTime() {
+        let rig = makePacked()
+        rig.offer(); rig.settle(); rig.backend.complete()
+        rig.landAuxiliaryFrame()
+        rig.offer()                       // A: reserved, auxiliary owed (queued 1 + owed 2 is over, but A is the second owed)
+        rig.offer()
+        rig.clock.advance(10_000_000)
+        rig.fireFlushes()
+        rig.offer()
+        let held = rig.order.currentStats.reservations
+        rig.clock.advance(10_000_000)
+        rig.fireFlushes()
+        XCTAssertEqual(rig.order.currentStats.reservations, held, "10 s later the owed frames still count")
+        XCTAssertGreaterThan(rig.order.auxOwedCount, 0)
+    }
+
+    func testEveryResetPathClearsOwedAuxiliaryCapacity() {
+        // resolve is idempotent per token and never goes negative
+        let a = makePacked()
+        a.offer(); a.settle()
+        XCTAssertEqual(a.order.auxOwedCount, 1)
+        a.backend.completeAux(); a.backend.completeAux()
+        XCTAssertEqual(a.order.auxOwedCount, 0)
+
+        // clearAuxiliary (aux session replaced / packed fallback) frees a waiting capture
+        let b = makePacked()
+        b.offer(); b.settle(); b.backend.complete()
+        b.landAuxiliaryFrame()
+        b.offer(); b.settle(); b.backend.complete()   // A: second owed -> aux 1 queued + 2 owed... capacity reached
+        b.offer()                                      // C waits
+        let before = b.order.currentStats.reservations
+        b.order.clearAuxiliary()
+        XCTAssertEqual(b.order.auxOwedCount, 0)
+        b.aux.tryPop().map { _ in () }
+        b.fireFlushes()
+        XCTAssertEqual(b.order.currentStats.reservations, before + 1, "the waiting capture goes out after the reset")
+
+        // stop clears too
+        let c = makePacked()
+        c.offer(); c.settle()
+        XCTAssertEqual(c.order.auxOwedCount, 1)
+        c.order.stop()
+        XCTAssertEqual(c.order.auxOwedCount, 0)
     }
 
     func testHealthyFastTransportNeverHoldsOrDropsACapture() {

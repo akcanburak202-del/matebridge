@@ -166,7 +166,7 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
     private let pacerCounts: PacerCounts
     private let log: LogSink
     /// T-370: occupancy downstream would reach with one more frame admitted (`DownstreamBudget.projected`).
-    private let downstreamLoad: @Sendable (_ mainInFlight: Int) -> Int
+    private let downstreamLoad: @Sendable (_ mainInFlight: Int, _ auxInFlight: Int) -> Int
     /// T-370: how many encoded frames downstream can hold (`BoundedFrameQueue.capacity`); `Int.max` = no back pressure.
     private let downstreamCapacity: Int
     /// Test seam: runs right before `backend.encode`, on the owner queue.
@@ -193,6 +193,9 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
     private var lastSlotFreeUs: UInt64 = 0
     private var lastReserveUs: UInt64
     private var flushScheduled = false
+    /// T-370 packed full colour: tokens whose auxiliary frame is not yet queued, lost or discarded.
+    private var auxTracking = false
+    private var auxOutstanding = Set<UInt64>()
     private var stats = Stats()
     /// Live bitrate requests (T-177); stopped together with `stopped`.
     private var bitrate: BitrateRequest
@@ -211,7 +214,7 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
                 scheduleFlush: @escaping FlushScheduler = EncoderSubmitOrder.defaultFlushScheduler(),
                 pacerCounts: @escaping PacerCounts = { _, _, _ in },
                 log: @escaping LogSink = { _, _, _ in },
-                downstreamLoad: @escaping @Sendable (_ mainInFlight: Int) -> Int = { $0 },
+                downstreamLoad: @escaping @Sendable (_ mainInFlight: Int, _ auxInFlight: Int) -> Int = { m, _ in m },
                 downstreamCapacity: Int = .max,
                 queueLabel: String = "matebridge.encoder.submit",
                 beforeSubmit: (@Sendable (Frame) -> Void)? = nil,
@@ -275,6 +278,26 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
         skippedNow.forEach(onSkipped)
         if let delay { armFlush(delay) }
     }
+
+    /// Packed full colour (T-370): every reserved frame also owes an auxiliary frame, which counts against the
+    /// auxiliary queue until `auxResolved`. Call once before the first frame.
+    public func trackAuxiliary() {
+        lock.lock(); auxTracking = true; lock.unlock()
+    }
+
+    /// The auxiliary frame owed by `token` reached its queue, was lost, or was never made. Idempotent per token.
+    public func auxResolved(_ token: EncoderSubmitToken) {
+        lock.lock(); auxOutstanding.remove(token.id); lock.unlock()
+    }
+
+    /// Forgets every owed auxiliary frame: the auxiliary session was torn down or replaced (packed fallback), so no
+    /// completion can still arrive. `stop()` does the same.
+    public func clearAuxiliary() {
+        lock.lock(); auxOutstanding.removeAll(); lock.unlock()
+    }
+
+    /// Reserved frames whose auxiliary frame is still owed.
+    public var auxOwedCount: Int { lock.withLock { auxOutstanding.count } }
 
     /// A keyframe was requested and no frame has been submitted since.
     public var keyframePending: Bool { lock.withLock { forceKeyframe } }
@@ -382,6 +405,7 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
         }
         stopped = true
         bitrate.stop()
+        auxOutstanding.removeAll()
         pacer.clearPending()
         last = nil
         // Captures only the backend and the completion (never `self`): reachable from an owner's `deinit`.
@@ -432,6 +456,7 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
         noteInFlightLocked()
         nextToken += 1
         outstanding.insert(nextToken)
+        if auxTracking { auxOutstanding.insert(nextToken) }   // owed from admission, not from the submit on the owner queue
         var f = input
         f.reserved(lastSlotFreeUs: lastSlotFreeUs)
         if let l = lastStamp, f.stamp <= l { f.stamp = Frame.stamp(after: l) }
@@ -479,7 +504,12 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
     /// as frames arrive) keeps the queue near empty, so nothing is held there.
     private func downstreamHasRoomLocked() -> Bool {
         guard downstreamCapacity < .max, !forceKeyframe else { return true }
-        return downstreamLoad(inFlight) < downstreamCapacity
+        // Order matters: the in-flight counts are read first, the queue counts (inside `downstreamLoad`) second. An
+        // encoder output is pushed to its queue before its slot / owed entry is released, so a frame landing between
+        // the two reads is counted in both (over-count, safe) and never in neither. Main: `completed` pushes, then
+        // `release`; auxiliary: the output wrapper pushes, then `auxResolved`.
+        let aux = auxOutstanding.count
+        return downstreamLoad(inFlight, aux) < downstreamCapacity
     }
 
     /// Must hold `lock`. A frame is waiting only for downstream room (an encoder slot is free): returns the delay of
@@ -517,24 +547,6 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
 /// reach its queue from its own encoder session, so the main and the packed auxiliary stream (decision 0034) are
 /// counted separately; an overflow of either queue drops an encoded delta and forces an IDR. The result is compared
 /// with the queue capacity by `EncoderSubmitOrder`.
-/// Auxiliary encodes accepted and not yet resolved (queued, lost or discarded), by capture time. The auxiliary session
-/// reports through callbacks the encoder does not own, so a missed resolution must never hold captures for good: an
-/// entry older than `maxAgeUs` is forgotten. Not thread-safe; the owner guards it.
-public struct AuxInFlightTracker: Sendable {
-    public static let maxAgeUs: UInt64 = 250_000
-    private var captures: [UInt64] = []
-    public init() {}
-
-    public mutating func began(captureTimeUs: UInt64) { captures.append(captureTimeUs) }
-    public mutating func ended(captureTimeUs: UInt64) {
-        if let i = captures.firstIndex(of: captureTimeUs) { captures.remove(at: i) }
-    }
-    public mutating func count(nowUs: UInt64) -> Int {
-        captures.removeAll { nowUs > $0 && nowUs - $0 > Self.maxAgeUs }
-        return captures.count
-    }
-}
-
 public enum DownstreamBudget {
     public static func projected(mainInFlight: Int, mainQueued: Int, auxInFlight: Int, auxQueued: Int) -> Int {
         max(mainInFlight + mainQueued, auxInFlight + auxQueued)
