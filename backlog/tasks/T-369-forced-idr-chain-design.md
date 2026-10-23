@@ -28,4 +28,6 @@ Bu kart **yalnız araştırma + tasarım**: kod yok. Çıktı `docs/research/202
 
 ## Handoff
 
+Çıktı: `docs/research/2026-10-23-forced-idr-chain.md`. Öneri: T-370 kodlayıcı girişinde geri basınç, T-371 IDR neden günlüğü, T-372 koşullu (IDR arkası delta tutma), T-373 LTR araştırması. Test edilmedi: cihaz/dnctl koşusu yok; Android MediaFormat dokümanı okunamadı (doğrulanmadı olarak işaretli). VT yoklaması geçici sondayla (depoda yok).
+
 ## Open questions
