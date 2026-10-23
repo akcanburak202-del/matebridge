@@ -2042,3 +2042,9 @@ Kaynak: `~/.cache/matebridge-tools/data/2026-10-23-gameab/A1` (filtreli host 1 H
 - **Gecikme sıçramaları (`cap_dec` p99 ~121 ms) = Wi-Fi aksaması + zorlanmış IDR zinciri.** Her bölümde: video soketinde yazma takılması / yeniden gönderim (unacked 230–820 KB) → host kuyruğunda kare düşmesi ya da üzerine yazılması → host IDR zorluyor (tablet istemedi; `keyframe_request` yok, VT kare düşürmedi: `enc_in = enc_out`) → 170–250 KB IDR'ler (30 Mbps'te ortalama karenin ~3 katı) tıkalı bağlantıya → 1–5 sn boyunca saniyede 1–3 IDR, tablet 13–41 fps, saniyede 7–28 düşen kare. Kararlı durumda 4 bölüm 30 kollarında, 0 bölüm 60 kollarında (b60-3'teki tek bölüm ayar değişimi IDR'siyle başladı). n küçük (4–0, p ≈ 0,06–0,13): bit hızına bağlılık kanıtlanmadı.
 - **Yeniden gönderim %9,2 vs %5,0:** 100 sn'de 12 vs 6 saniye; kol yayılımları neredeyse değiyor. Rastlantıdan ayırt edilemiyor.
 - Sonuç: "30 Mbps daha kötü" gözlemi büyük olasılıkla iki bağımsız etkinin rastlantısal dağılımı; asıl bulgular bit hızından bağımsız iki host davranışı (FrameGate yeniden demirleme ofseti, aksamada IDR zorlama zinciri).
+
+## 2026-10-23 — T-365 birleşti (FrameGate faz kredisi)
+
+- Düzeltme: 30 Mbps analizindeki "geç gelen kaynak karesi" çıkarımı yanlıştı; geç olan, kodlayıcı yuvası doluyken bekleyen karenin gönderim anı (`takePending`). Yeniden demirleme artık karenin olağan teslim gecikmesine göre en fazla yarım aralık geri alıyor. Birim testi: 30 ms yuva doluluğu sonrası en kötü kapı beklemesi 5,7 ms → ≤ 1 ms. Codex temiz.
+- Android `DecoderWaitTest`/`OutputParkTest` (uyanma sayısı) yük altında `main`'de de kırmızı; T-365 ile ilgisiz.
+- Cihazda doğrulanacak: host yeniden başlatılınca Oyun 60'ta `gate_wait` p50 aksaklık sonrası ~0,1 ms'de kalmalı.

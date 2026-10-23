@@ -1,7 +1,7 @@
 ---
 id: T-365
 title: Host — FrameGate geç kareden sonra yeniden demirlenince zamanında gelen kareleri dakikalarca bekletiyor
-status: review
+status: done
 phase: 7
 owner: mac-host-dev
 depends_on: []
