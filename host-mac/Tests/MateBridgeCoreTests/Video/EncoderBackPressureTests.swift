@@ -280,6 +280,59 @@ final class EncoderBackPressureTests: XCTestCase {
         XCTAssertEqual(c.order.auxOwedCount, 0)
     }
 
+    // MARK: - Recovery frames keep their exemption when deferred
+
+    /// A keyframe re-submission (`bypassGate`) that arrives while both encoder slots are busy waits as the pending
+    /// frame. When a slot frees up while the output queue is full, it must still go out: it is the recovery.
+    func testDeferredMainRecoveryFrameBypassesBackPressure() {
+        let rig = makeRig(backPressure: true)
+        func offer(bypass: Bool) {
+            rig.stamp += 1
+            rig.clock.advance(16_667)
+            rig.order.offer(bypassGate: bypass) { [stamp = rig.stamp, clock = rig.clock] _ in BPFrame(stamp: stamp, gateUs: clock.now) }
+            drain(rig)
+        }
+        offer(bypass: false)              // keyframe, slot 1
+        offer(bypass: false)              // slot 2
+        for _ in 0..<2 { rig.queue.push(EncodedVideoFrame(flags: [], captureTimeUs: 1, data: [1])) }   // queue full
+        offer(bypass: true)               // recovery: both slots busy -> pending
+        XCTAssertEqual(rig.backend.encoded.count, 2)
+        rig.backend.complete()            // slots free up; the queue is still full
+        drain(rig)
+        XCTAssertEqual(rig.backend.encoded.count, 3, "the deferred recovery frame is not held back by back pressure")
+    }
+
+    func testDeferredAuxiliaryRecoveryFrameBypassesBackPressure() {
+        let rig = makePacked()
+        rig.offer(); rig.settle()         // keyframe: owes an auxiliary frame
+        rig.offer(); rig.settle()         // second slot; two auxiliary frames owed = capacity
+        XCTAssertEqual(rig.order.auxOwedCount, 2)
+        rig.stamp += 1
+        rig.clock.advance(16_667)
+        rig.order.offer(bypassGate: true) { [stamp = rig.stamp, clock = rig.clock] _ in BPFrame(stamp: stamp, gateUs: clock.now) }
+        rig.settle()
+        XCTAssertEqual(rig.order.currentStats.reservations, 2, "both slots busy: the recovery frame is pending")
+        rig.backend.complete()            // main slots free; auxiliary frames are still owed
+        rig.settle()
+        XCTAssertEqual(rig.order.currentStats.reservations, 3, "the deferred auxiliary recovery frame goes out")
+    }
+
+    /// The exemption is for the recovery frame only: once it is out, ordinary captures are held again.
+    func testRecoveryExemptionEndsWhenTheFrameIsSubmitted() {
+        let rig = makePacked()
+        rig.offer(); rig.settle()
+        rig.offer(); rig.settle()
+        rig.stamp += 1
+        rig.clock.advance(16_667)
+        rig.order.offer(bypassGate: true) { [stamp = rig.stamp, clock = rig.clock] _ in BPFrame(stamp: stamp, gateUs: clock.now) }
+        rig.settle()
+        rig.backend.complete(); rig.settle()
+        XCTAssertEqual(rig.order.currentStats.reservations, 3)
+        rig.backend.complete(); rig.settle()
+        rig.offer()                       // ordinary capture: auxiliary owed 3 >= capacity -> held
+        XCTAssertEqual(rig.order.currentStats.reservations, 3)
+    }
+
     func testHealthyFastTransportNeverHoldsOrDropsACapture() {
         let rig = makeRig(backPressure: true)
         for _ in 0..<120 { tick(rig, transportOpen: true) }

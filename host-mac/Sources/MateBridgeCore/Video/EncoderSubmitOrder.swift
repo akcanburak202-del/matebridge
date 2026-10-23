@@ -194,6 +194,10 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
     private var lastReserveUs: UInt64
     private var flushScheduled = false
     /// T-370 packed full colour: tokens whose auxiliary frame is not yet queued, lost or discarded.
+    /// The pending frame is (or replaced) a keyframe re-submission (`bypassGate`, e.g. an auxiliary-only recovery that
+    /// leaves `forceKeyframe` unset): it keeps its back pressure exemption while it waits for a slot. Cleared when no
+    /// frame is pending.
+    private var pendingBypass = false
     private var auxTracking = false
     private var auxOutstanding = Set<UInt64>()
     private var stats = Stats()
@@ -269,9 +273,11 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
                          synthetic: frame.isSynthetic) {
         case .submit(let f): reserveOrSkipLocked(f)
         case .hold(let retryAfterUs):
+            if bypassGate { pendingBypass = true }
             if let r = retryAfterUs { delay = scheduleFlushLocked(afterUs: r) } else { delay = backPressureRetryLocked() }
         case .drop: break
         }
+        if !pacer.hasPending { pendingBypass = false }
         reportPacerLocked()
         let skippedNow = takeSkippedLocked()
         lock.unlock()
@@ -484,7 +490,10 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
     /// time, not the frame's capture time); otherwise returns the delay after which a flush should retry.
     private func takePendingLocked() -> UInt64? {
         guard !stopped else { return nil }
-        defer { reportPacerLocked() }
+        defer {
+            if !pacer.hasPending { pendingBypass = false }
+            reportPacerLocked()
+        }
         switch pacer.takePending(nowUs: nowUs(), slotFree: inFlight < maxInFlight && downstreamHasRoomLocked()) {
         case .submit(let f): reserveOrSkipLocked(f); return nil
         case .retry(let wait): return scheduleFlushLocked(afterUs: wait)
@@ -503,7 +512,7 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
     /// intact. A pending keyframe request is never held back: its frame is the recovery. Healthy flow (the sender pops
     /// as frames arrive) keeps the queue near empty, so nothing is held there.
     private func downstreamHasRoomLocked() -> Bool {
-        guard downstreamCapacity < .max, !forceKeyframe else { return true }
+        guard downstreamCapacity < .max, !forceKeyframe, !pendingBypass else { return true }
         // Order matters: the in-flight counts are read first, the queue counts (inside `downstreamLoad`) second. An
         // encoder output is pushed to its queue before its slot / owed entry is released, so a frame landing between
         // the two reads is counted in both (over-count, safe) and never in neither. Main: `completed` pushes, then
