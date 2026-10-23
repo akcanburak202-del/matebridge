@@ -149,7 +149,8 @@ public struct FramePacer<Frame: Sendable>: Sendable {
             overwrittenCount += 1
             return .drop
         }
-        if !synthetic { noteLag(ptsUs: ptsUs, nowUs: nowUs) }
+        // A bypassed frame is a keyframe re-submission stamped `now + lead` (T-368): its lag is meaningless.
+        if !synthetic, !bypassGate { noteLag(ptsUs: ptsUs, nowUs: nowUs) }
         if decimating, !bypassGate {
             // The grid is on capture timestamps (one host clock). A frame before its slot is held (newest wins) and
             // goes out at slot + grace unless a grid frame replaces it first (T-066): the newest capture must
@@ -183,7 +184,7 @@ public struct FramePacer<Frame: Sendable>: Sendable {
         if slotFree, bypassGate || wait == 0 {
             // A newer frame goes out directly: whatever was waiting is older and must never follow it.
             if pending != nil { pending = nil; overwrittenCount += 1 }
-            submitted(ptsUs: ptsUs, nowUs: nowUs, synthetic: synthetic)
+            submitted(ptsUs: ptsUs, nowUs: nowUs, synthetic: synthetic, bypass: bypassGate)
             return .submit(frame)
         }
         if pending != nil { overwrittenCount += 1 }
@@ -224,7 +225,15 @@ public struct FramePacer<Frame: Sendable>: Sendable {
         return lag > base ? UInt64(lag - base) : 0
     }
 
-    private mutating func submitted(ptsUs: UInt64, nowUs: UInt64, synthetic: Bool = false) {
+    /// `bypass` (T-368): a keyframe re-submission is an extra frame on top of the source cadence. It takes no send
+    /// slot: advancing the grid for it put the grid one interval ahead of the source for good, so every later real
+    /// frame waited about half an interval (the IDR burst after a Wi-Fi loss left `gate_wait` at 8-9 ms for tens
+    /// of seconds). It still moves `lastSubmittedPtsUs`, so older captures stay stale.
+    private mutating func submitted(ptsUs: UInt64, nowUs: UInt64, synthetic: Bool = false, bypass: Bool = false) {
+        if bypass {
+            if !synthetic { lastSubmittedPtsUs = ptsUs }
+            return
+        }
         gate.accept(nowUs: nowUs, phaseCreditUs: phaseCredit(ptsUs: ptsUs, nowUs: nowUs, synthetic: synthetic))
         if !synthetic { lastSubmittedPtsUs = ptsUs }
     }
