@@ -33,12 +33,18 @@ public struct FrameGate: Sendable {
         return nowUs >= open ? 0 : open - nowUs
     }
 
-    /// A frame was submitted at `nowUs`.
-    public mutating func accept(nowUs: UInt64) {
+    /// A frame was submitted at `nowUs`. `phaseCreditUs` (T-365): how much later than its own source cadence the
+    /// frame went out (submit time minus capture time minus the usual delivery lag). A re-anchor takes up to half an
+    /// interval of it back, so the grid follows the source phase instead of the late submit time; otherwise every
+    /// later on-time frame would arrive earlier than the tolerance covers and wait for minutes. The credit never
+    /// exceeds the tolerance a frame may use anyway, so at most two frames pass within one interval and the long-run
+    /// rate is unchanged.
+    public mutating func accept(nowUs: UInt64, phaseCreditUs: UInt64 = 0) {
         if let slot = nextSlotUs, nowUs <= slot + intervalUs {
             nextSlotUs = slot + intervalUs
         } else {
-            nextSlotUs = nowUs + intervalUs   // first frame, or more than one interval behind: re-anchor
+            // first frame, or more than one interval behind: re-anchor
+            nextSlotUs = nowUs + intervalUs - min(phaseCreditUs, intervalUs / 2)
         }
     }
 }
@@ -73,6 +79,8 @@ public struct FramePacer<Frame: Sendable>: Sendable {
     private var pending: (frame: Frame, ptsUs: UInt64, readyAtUs: UInt64, deferred: Bool, synthetic: Bool)?
     public private(set) var lastSubmittedPtsUs: UInt64?
     private var overwrittenCount = 0
+    /// Slowly rising minimum of (arrival - capture time) over real frames: the usual delivery lag (T-365).
+    private var lagBaselineUs: Int64?
 
     public init(streamFps: Int, toleranceUs: UInt64 = FrameGate.defaultToleranceUs) {
         self.streamFps = streamFps
@@ -141,6 +149,7 @@ public struct FramePacer<Frame: Sendable>: Sendable {
             overwrittenCount += 1
             return .drop
         }
+        if !synthetic { noteLag(ptsUs: ptsUs, nowUs: nowUs) }
         if decimating, !bypassGate {
             // The grid is on capture timestamps (one host clock). A frame before its slot is held (newest wins) and
             // goes out at slot + grace unless a grid frame replaces it first (T-066): the newest capture must
@@ -203,8 +212,20 @@ public struct FramePacer<Frame: Sendable>: Sendable {
         return .submit(p.frame)
     }
 
+    private mutating func noteLag(ptsUs: UInt64, nowUs: UInt64) {
+        let lag = Int64(truncatingIfNeeded: nowUs) &- Int64(truncatingIfNeeded: ptsUs)
+        if let base = lagBaselineUs { lagBaselineUs = lag < base ? lag : base + (lag - base) / 64 } else { lagBaselineUs = lag }
+    }
+
+    /// How late this frame goes out relative to the source cadence (0 for synthetic frames or without a baseline).
+    private func phaseCredit(ptsUs: UInt64, nowUs: UInt64, synthetic: Bool) -> UInt64 {
+        guard !synthetic, let base = lagBaselineUs else { return 0 }
+        let lag = Int64(truncatingIfNeeded: nowUs) &- Int64(truncatingIfNeeded: ptsUs)
+        return lag > base ? UInt64(lag - base) : 0
+    }
+
     private mutating func submitted(ptsUs: UInt64, nowUs: UInt64, synthetic: Bool = false) {
-        gate.accept(nowUs: nowUs)
+        gate.accept(nowUs: nowUs, phaseCreditUs: phaseCredit(ptsUs: ptsUs, nowUs: nowUs, synthetic: synthetic))
         if !synthetic { lastSubmittedPtsUs = ptsUs }
     }
 }
