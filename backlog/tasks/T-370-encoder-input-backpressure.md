@@ -1,7 +1,7 @@
 ---
 id: T-370
 title: Host — kodlayıcı girişinde geri basınç: kuyruk/aktarım doluyken yakalamayı VT'ye verme (zorunlu IDR zincirini kes)
-status: todo
+status: review
 phase: 7
 owner: mac-host-dev
 depends_on: [T-368, T-369]
@@ -33,8 +33,17 @@ files:
 
 ## Plan
 
-(ajan yazar)
+`EncoderSubmitOrder` kodlayıcıya yeni kare verirken VT içindekine ek olarak çıkış kuyruğunu sayar: `inFlight + queuedCount < queue kapasitesi (2)` değilse yakalama pacer'da bekletilir/ezilir (`overwritten`). Bekleme için kuyrukta serbest bırakma geri çağrısı yok, 1,5 ms'lik flush yoklaması kullanılır. Bekleyen keyframe isteği ve `bypassGate` (IDR yeniden gönderimi) engellenmez. `HEVCEncoder` yeni `downstreamLoad` parametresini iletir, `VideoPipeline` tek satırla `max(main, aux kuyruk sayısı)` verir.
 
 ## Handoff
+
+- Dal: task/T-370-encoder-input-backpressure. Commit SHA: d1f2545f (main e5370de8 üzerine rebase edilmiş, T-371 dahil).
+- Dosyalar: MateBridgeCore/Video/EncoderSubmitOrder.swift, VideoFrameQueue.swift (`queuedCount`), MateBridgeHost/Video/HEVCEncoder.swift, VideoPipeline.swift (+2 satır), Tests/.../Video/EncoderBackPressureTests.swift (yeni), docs/LOGGING.md, bu kart. FrameGate/BoundedFrameQueue/EncoderSubmitOrder dışı Core dosyalarına dokunulmadı.
+- **Kırmızı çıktı (düzeltme öncesi, parametreler yalnız kabul edilip yok sayılırken):** testStalledTransportDoesNotOverflowQueueOrForceKeyframe: `("1") is not equal to ("0") - no encoded frame was dropped, so no keyframe is needed` (keyframeNeeded 1 kez çağrıldı); `discardedCount ("12") is not equal to ("0")`; `overwritten ("0") is not greater than ("0")`; ve aktarım açıldıktan sonra `keyframeNeeded ("1") != 0`. Senaryo: 60 fps, 5 kare sağlıklı, 200 ms aktarım kapalı (12 kare), sonra açık.
+- Düzeltme sonrası: 3 yeni test yeşil (durma: needed=0, discarded=0, overwritten>0, açılınca 2 kare içinde akış; sağlıklı 120 kare: overwritten=0, 120 kodlanmış; bekleyen keyframe engellenmez). Rebase sonrası `swift test` 709 test 0 hata. check.sh: host OK; gradle 2 test kırmızı (T-367 flaky zamanlama testleri, Android'e dokunulmadı).
+- Kararlar: yeni log alanı yok (kuyruk ezmesi mevcut `overwritten` içinde; `Stats.backPressureHolds` yalnız tanılama), LOGGING.md'ye bir madde. Aux (paketli) akış: aynı kural, kuyruk sayısı `max(ana, aux)`; aux kodlayıcı ana kareyle birlikte tek submit'ten beslendiği için ayrı kapı yok.
+- Varsayım: kuyruk kapasitesi 2 ve `inFlight + queued >= 2` ise tutma. Geçici olarak sender bir kareyi pop etmeden iki yakalama arka arkaya gelirse bir yakalama bir sonraki 1,5 ms yoklamasına kadar bekler (kayıp değil, yalnız en yenisi kazanır).
+- Cihazda doğrulanacak: T-366 dummynet enjektörü ile önce/sonra (olay başına `idr`, `queue_drops`, `cap_dec_ms`, `overwritten`); sağlıklı Oyun 60'ta `overwritten`/`gate_wait` değişmedi mi; T-371 IDR neden günlüğünde `queue_overflow` nedeni azalıyor mu.
+
 
 ## Open questions
