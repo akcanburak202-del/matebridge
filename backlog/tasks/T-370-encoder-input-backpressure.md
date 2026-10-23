@@ -1,7 +1,7 @@
 ---
 id: T-370
 title: Host — kodlayıcı girişinde geri basınç: kuyruk/aktarım doluyken yakalamayı VT'ye verme (zorunlu IDR zincirini kes)
-status: review
+status: done
 phase: 7
 owner: mac-host-dev
 depends_on: [T-368, T-369]
