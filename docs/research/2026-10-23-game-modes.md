@@ -91,10 +91,9 @@ Kol başına kaydedilenler: gönderilen Mbps, video TCP yeniden gönderim (topla
 
 ## Oyun seçimi (2026-10-23)
 
-Kullanıcı: **TotK** (Astris emülatörü, `--proc Astris`; eden de kurulu, oturumda hangisinin çalıştığına bakılır). Dikkat edilecekler:
+Kullanıcı: **TotK, Mac'e yerel uygulama** (emülatör değil; emülatörler bu ölçümün kapsamı dışında). Süreç adı oturum günü uygulama açıkken okunur (`--proc`). Uygulama şu an yeniden derleniyor: oturuma kadar ona dokunulmaz (açma, kapatma, okuma yok). Dikkat edilecekler:
 - TotK kendi hızını sık sık 60'ın altına indiriyor (2026-10-20: tablette <50 fps olan saniyelerin çoğunda oyun Mac'te zaten <55 fps çiziyordu). Bu yüzden kollar **aynı yerde, aynı kamera hareketiyle** alınır (ör. bir köyde dur, kumandayla kamerayı yavaşça 360° çevir), ve tablet sayıları host `cap_fps` ile birlikte okunur.
-- Emülatör iç çözünürlüğünü kendi ayarı belirler. A3'te (1848 ↔ 2240) Mac'te değişen esas olarak çıktı ölçeklemesi ve akış boyutu olur, oyunun çizim yükü az değişir. Mac GPU farkı küçük çıkarsa bu yüzdendir; A3'ün ağırlığı tablet çözme/akıcılık ve kullanıcının netlik notunda.
-- Emülatör ses cızırtısı kaynak tarafında (NOTES 2026-10-09); ölçümle ilgisi yok.
+- A3'te (1848 ↔ 2240) oyunun çizim yükünün değişip değişmediği, oyunun çizim çözünürlüğünü ekrana mı yoksa kendi ayarına mı bağladığına göre değişir; oturumda oyun ayarına bakılır ve sonuçla birlikte yazılır.
 
 ## Açık
 
