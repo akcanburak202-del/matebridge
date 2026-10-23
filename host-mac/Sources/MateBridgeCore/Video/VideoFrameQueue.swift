@@ -40,6 +40,9 @@ public final class VideoFrameQueue: @unchecked Sendable {
         }
     }
 
+    /// Frames waiting in the queue (T-370: the encoder's input back pressure).
+    public var queuedCount: Int { lock.withLock { policy.count } }
+
     public var isFinished: Bool { lock.withLock { finished } }
 
     /// `BoundedFrameQueue.breakChain`: the caller dropped a frame the queue had handed out.

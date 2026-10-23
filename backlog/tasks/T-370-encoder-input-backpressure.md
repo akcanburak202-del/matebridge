@@ -1,7 +1,7 @@
 ---
 id: T-370
 title: Host — kodlayıcı girişinde geri basınç: kuyruk/aktarım doluyken yakalamayı VT'ye verme (zorunlu IDR zincirini kes)
-status: todo
+status: review
 phase: 7
 owner: mac-host-dev
 depends_on: [T-368, T-369]
@@ -33,8 +33,33 @@ files:
 
 ## Plan
 
-(ajan yazar)
+`EncoderSubmitOrder` kodlayıcıya yeni kare verirken VT içindekine ek olarak çıkış kuyruğunu sayar: `inFlight + queuedCount < queue kapasitesi (2)` değilse yakalama pacer'da bekletilir/ezilir (`overwritten`). Bekleme için kuyrukta serbest bırakma geri çağrısı yok, 1,5 ms'lik flush yoklaması kullanılır. Bekleyen keyframe isteği ve `bypassGate` (IDR yeniden gönderimi) engellenmez. `HEVCEncoder` yeni `downstreamLoad` parametresini iletir, `VideoPipeline` tek satırla `max(main, aux kuyruk sayısı)` verir.
 
 ## Handoff
 
+- Dal: task/T-370-encoder-input-backpressure. Commit SHA: d1f2545f (main e5370de8 üzerine rebase edilmiş, T-371 dahil).
+- Dosyalar: MateBridgeCore/Video/EncoderSubmitOrder.swift, VideoFrameQueue.swift (`queuedCount`), MateBridgeHost/Video/HEVCEncoder.swift, VideoPipeline.swift (+2 satır), Tests/.../Video/EncoderBackPressureTests.swift (yeni), docs/LOGGING.md, bu kart. FrameGate/BoundedFrameQueue/EncoderSubmitOrder dışı Core dosyalarına dokunulmadı.
+- **Kırmızı çıktı (düzeltme öncesi, parametreler yalnız kabul edilip yok sayılırken):** testStalledTransportDoesNotOverflowQueueOrForceKeyframe: `("1") is not equal to ("0") - no encoded frame was dropped, so no keyframe is needed` (keyframeNeeded 1 kez çağrıldı); `discardedCount ("12") is not equal to ("0")`; `overwritten ("0") is not greater than ("0")`; ve aktarım açıldıktan sonra `keyframeNeeded ("1") != 0`. Senaryo: 60 fps, 5 kare sağlıklı, 200 ms aktarım kapalı (12 kare), sonra açık.
+- Düzeltme sonrası: 3 yeni test yeşil (durma: needed=0, discarded=0, overwritten>0, açılınca 2 kare içinde akış; sağlıklı 120 kare: overwritten=0, 120 kodlanmış; bekleyen keyframe engellenmez). Rebase sonrası `swift test` 709 test 0 hata. check.sh: host OK; gradle 2 test kırmızı (T-367 flaky zamanlama testleri, Android'e dokunulmadı).
+- Kararlar: yeni log alanı yok (kuyruk ezmesi mevcut `overwritten` içinde; `Stats.backPressureHolds` yalnız tanılama), LOGGING.md'ye bir madde. Aux (paketli) akış: aynı kural, kuyruk sayısı `max(ana, aux)`; aux kodlayıcı ana kareyle birlikte tek submit'ten beslendiği için ayrı kapı yok.
+- Varsayım: kuyruk kapasitesi 2 ve `inFlight + queued >= 2` ise tutma. Geçici olarak sender bir kareyi pop etmeden iki yakalama arka arkaya gelirse bir yakalama bir sonraki 1,5 ms yoklamasına kadar bekler (kayıp değil, yalnız en yenisi kazanır).
+- Cihazda doğrulanacak: T-366 dummynet enjektörü ile önce/sonra (olay başına `idr`, `queue_drops`, `cap_dec_ms`, `overwritten`); sağlıklı Oyun 60'ta `overwritten`/`gate_wait` değişmedi mi; T-371 IDR neden günlüğünde `queue_overflow` nedeni azalıyor mu.
+
+
 ## Open questions
+
+### Codex P2 düzeltmesi (yardımcı akış uçuştaki kareler)
+- Kırmızı (düzeltme öncesi, testAuxiliaryFramesStillEncodingCountAgainstTheAuxiliaryQueue): `("3") is not equal to ("2") - B waits: A is still encoding...`; `needed ("1") != 0`; `discardedCount ("2") != 0` (B kabul edildi, A ve B yardımcı kuyruğu taşırdı).
+- Düzeltme: `DownstreamBudget.projected` = max(ana uçuş + ana kuyruk, yardımcı uçuş + yardımcı kuyruk); `EncoderSubmitOrder` kapısı artık `downstreamLoad(mainInFlight)` ile bu doluluğu kapasiteyle karşılaştırır. Yardımcı uçuş sayısını `AuxInFlightTracker` (Core) tutar: HEVCEncoder submit öncesi `began`, yardımcı çıktı/kayıp/ret'te `ended`; çözülmeyen kayıt 250 ms sonra unutulur (sayaç kayması yakalamayı kalıcı tutamaz). `PackedAuxEncoder.swift` dosya listesi dışı olduğu için dokunulmadı. `HEVCEncoder.downstreamLoad` parametresi `queuedFrames` (ana, yardımcı) oldu; VideoPipeline'da aynı tek ifade.
+- swift test: 711 test, 0 hata. Kod commit SHA: bkz. git log (`T-370: count auxiliary frames in flight`).
+
+### Codex tur 2 (üç P2, paketli sayım) - bu bölüm önceki P2 notunun yerine geçer
+- Kırmızı (düzeltme öncesi, API iskeleti davranışsız): testReservedFrameReservesAuxiliaryCapacityBeforeItsSubmitRuns (`("0") != ("2")` owed), testSnapshotCannotUnderCount... (`("2") != ("1")` B kabul edildi), testOwedAuxiliaryCapacityDoesNotExpireWithTime, testEveryResetPathClearsOwedAuxiliaryCapacity (3 başarısızlık). Arayüzlenmiş (interleaving) senaryolar: sahibi kuyruğu duran submit, anlık görüntü sırasında inen yardımcı kare.
+- 1: `EncoderSubmitOrder.trackAuxiliary()` sonrası her `reserveLocked` token'ı `auxOutstanding`a ekler (ana slotla aynı kilit, aynı an). `HEVCEncoder` token'ı yardımcı çıktı/kayıp (`auxSettled(captureTimeUs:)`), aux submit reddi, passThrough/failed pack ve paketsiz yolda `auxResolved(token)` ile kapatır (token başına idempotent).
+- 2: kapı önce uçuş sayılarını (`inFlight`, `auxOutstanding.count`), sonra kuyruk sayılarını okur. Ana akış: `completed` önce `handle`/`output` (push), sonra `order.release`; yardımcı: çıktı sarmalayıcısı önce `auxOutput` (push), sonra `auxResolved`. İki akışta da aradaki bir iniş iki kez sayılır (fazla sayım, güvenli), hiç sayılmamaz. Test: testSnapshotCannotUnderCount...
+- 3: yaş tabanlı sona erme ve `AuxInFlightTracker` kaldırıldı. Sıfırlama yolları: `stop()`, `clearAuxiliary()` (HEVCEncoder.reportPackedError = paketli geri çekilme; yardımcı oturum ayrı yeniden başlamaz, yalnız encoder yeniden kurulur ve yeni order doğar), token başına çözümleme. Yeni tüketici/resync'te temizlenmez: uçuştaki yardımcı kareler yine kuyruğa iner, temizlemek eksik sayım olurdu. testEveryResetPathClearsOwedAuxiliaryCapacity ve testOwedAuxiliaryCapacityDoesNotExpireWithTime bunları kanıtlar.
+- swift test: 713 test, 0 hata.
+
+### Codex tur 3 (ertelenmiş kurtarma karesi)
+- Kırmızı: testDeferredMainRecoveryFrameBypassesBackPressure `("2") != ("3")`, testDeferredAuxiliaryRecoveryFrameBypassesBackPressure `("2") != ("3")`, testRecoveryExemptionEndsWhenTheFrameIsSubmitted (2 başarısızlık). Senaryo: iki kodlayıcı yuvası dolu, bypassGate'li yeniden gönderim bekleyen kare olur, yuvalar boşalırken çıkış kuyruğu (ana) / yardımcı borç (aux) dolu.
+- Düzeltme: `EncoderSubmitOrder.pendingBypass`: bypassGate'li kare bekleyen olunca set edilir, bekleyen kalmayınca temizlenir; `downstreamHasRoomLocked` bu bayrakla muaf tutar (forceKeyframe muafiyeti gibi). Muafiyet yalnız o kare çıkana kadar; sonra sıradan yakalamalar yine tutulur (üçüncü test). swift test: 716 test, 0 hata.

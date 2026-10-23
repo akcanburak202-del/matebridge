@@ -141,6 +141,8 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
         public var bitrateBlocksEnqueued = 0
         /// Bitrate targets that replaced a not yet applied one in a queued block.
         public var bitrateCoalesced = 0
+        /// Polls that found a capture kept back because the output queue was full (T-370).
+        public var backPressureHolds = 0
     }
 
     /// The target of one queued bitrate block; written under `lock` until the block runs or a submit is queued
@@ -163,6 +165,10 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
     private let scheduleFlush: FlushScheduler
     private let pacerCounts: PacerCounts
     private let log: LogSink
+    /// T-370: occupancy downstream would reach with one more frame admitted (`DownstreamBudget.projected`).
+    private let downstreamLoad: @Sendable (_ mainInFlight: Int, _ auxInFlight: Int) -> Int
+    /// T-370: how many encoded frames downstream can hold (`BoundedFrameQueue.capacity`); `Int.max` = no back pressure.
+    private let downstreamCapacity: Int
     /// Test seam: runs right before `backend.encode`, on the owner queue.
     private let beforeSubmit: (@Sendable (Frame) -> Void)?
     /// Called (outside the lock) for a frame skipped because a keyframe was pending (`skipsOnPendingKeyframe`).
@@ -187,6 +193,13 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
     private var lastSlotFreeUs: UInt64 = 0
     private var lastReserveUs: UInt64
     private var flushScheduled = false
+    /// T-370 packed full colour: tokens whose auxiliary frame is not yet queued, lost or discarded.
+    /// The pending frame is (or replaced) a keyframe re-submission (`bypassGate`, e.g. an auxiliary-only recovery that
+    /// leaves `forceKeyframe` unset): it keeps its back pressure exemption while it waits for a slot. Cleared when no
+    /// frame is pending.
+    private var pendingBypass = false
+    private var auxTracking = false
+    private var auxOutstanding = Set<UInt64>()
     private var stats = Stats()
     /// Live bitrate requests (T-177); stopped together with `stopped`.
     private var bitrate: BitrateRequest
@@ -205,6 +218,8 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
                 scheduleFlush: @escaping FlushScheduler = EncoderSubmitOrder.defaultFlushScheduler(),
                 pacerCounts: @escaping PacerCounts = { _, _, _ in },
                 log: @escaping LogSink = { _, _, _ in },
+                downstreamLoad: @escaping @Sendable (_ mainInFlight: Int, _ auxInFlight: Int) -> Int = { m, _ in m },
+                downstreamCapacity: Int = .max,
                 queueLabel: String = "matebridge.encoder.submit",
                 beforeSubmit: (@Sendable (Frame) -> Void)? = nil,
                 onSkipped: @escaping @Sendable (Frame) -> Void = { _ in }) {
@@ -215,6 +230,8 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
         self.scheduleFlush = scheduleFlush
         self.pacerCounts = pacerCounts
         self.log = log
+        self.downstreamLoad = downstreamLoad
+        self.downstreamCapacity = downstreamCapacity
         self.beforeSubmit = beforeSubmit
         pacer = FramePacer<Frame>(streamFps: streamFps)
         bitrate = BitrateRequest(initialKbps: initialBitrateKbps, range: bitrateRange)
@@ -245,23 +262,48 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
     public func offerChecked(bypassGate: Bool, build: (_ last: Frame?, _ keyframePending: Bool) -> Frame?) {
         lock.lock()
         guard !stopped, var frame = build(last, forceKeyframe) else { lock.unlock(); return }
-        let slotFree = inFlight < maxInFlight
-        frame.arrived(slotFree: slotFree)
+        let encoderFree = inFlight < maxInFlight
+        frame.arrived(slotFree: encoderFree)
         last = frame
         var delay: UInt64?
         // The pacer decides: send now, hold as the single pending frame (newest wins), or drop a stale one.
+        // T-370: with the output queue full a capture is held (and replaced by the next one) instead of encoded.
+        let slotFree = encoderFree && (bypassGate || downstreamHasRoomLocked())
         switch pacer.offer(frame, ptsUs: frame.gateUs, nowUs: nowUs(), slotFree: slotFree, bypassGate: bypassGate,
                          synthetic: frame.isSynthetic) {
         case .submit(let f): reserveOrSkipLocked(f)
-        case .hold(let retryAfterUs): if let r = retryAfterUs { delay = scheduleFlushLocked(afterUs: r) }
+        case .hold(let retryAfterUs):
+            if bypassGate { pendingBypass = true }
+            if let r = retryAfterUs { delay = scheduleFlushLocked(afterUs: r) } else { delay = backPressureRetryLocked() }
         case .drop: break
         }
+        if !pacer.hasPending { pendingBypass = false }
         reportPacerLocked()
         let skippedNow = takeSkippedLocked()
         lock.unlock()
         skippedNow.forEach(onSkipped)
         if let delay { armFlush(delay) }
     }
+
+    /// Packed full colour (T-370): every reserved frame also owes an auxiliary frame, which counts against the
+    /// auxiliary queue until `auxResolved`. Call once before the first frame.
+    public func trackAuxiliary() {
+        lock.lock(); auxTracking = true; lock.unlock()
+    }
+
+    /// The auxiliary frame owed by `token` reached its queue, was lost, or was never made. Idempotent per token.
+    public func auxResolved(_ token: EncoderSubmitToken) {
+        lock.lock(); auxOutstanding.remove(token.id); lock.unlock()
+    }
+
+    /// Forgets every owed auxiliary frame: the auxiliary session was torn down or replaced (packed fallback), so no
+    /// completion can still arrive. `stop()` does the same.
+    public func clearAuxiliary() {
+        lock.lock(); auxOutstanding.removeAll(); lock.unlock()
+    }
+
+    /// Reserved frames whose auxiliary frame is still owed.
+    public var auxOwedCount: Int { lock.withLock { auxOutstanding.count } }
 
     /// A keyframe was requested and no frame has been submitted since.
     public var keyframePending: Bool { lock.withLock { forceKeyframe } }
@@ -369,6 +411,7 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
         }
         stopped = true
         bitrate.stop()
+        auxOutstanding.removeAll()
         pacer.clearPending()
         last = nil
         // Captures only the backend and the completion (never `self`): reachable from an owner's `deinit`.
@@ -419,6 +462,7 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
         noteInFlightLocked()
         nextToken += 1
         outstanding.insert(nextToken)
+        if auxTracking { auxOutstanding.insert(nextToken) }   // owed from admission, not from the submit on the owner queue
         var f = input
         f.reserved(lastSlotFreeUs: lastSlotFreeUs)
         if let l = lastStamp, f.stamp <= l { f.stamp = Frame.stamp(after: l) }
@@ -446,12 +490,44 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
     /// time, not the frame's capture time); otherwise returns the delay after which a flush should retry.
     private func takePendingLocked() -> UInt64? {
         guard !stopped else { return nil }
-        defer { reportPacerLocked() }
-        switch pacer.takePending(nowUs: nowUs(), slotFree: inFlight < maxInFlight) {
+        defer {
+            if !pacer.hasPending { pendingBypass = false }
+            reportPacerLocked()
+        }
+        switch pacer.takePending(nowUs: nowUs(), slotFree: inFlight < maxInFlight && downstreamHasRoomLocked()) {
         case .submit(let f): reserveOrSkipLocked(f); return nil
         case .retry(let wait): return scheduleFlushLocked(afterUs: wait)
-        case .none: return nil
+        case .none: return backPressureRetryLocked()
         }
+    }
+
+    /// How often a frame held for downstream room looks again, microseconds. The queue has no release callback; a
+    /// short poll keeps the resume latency far below one frame interval and costs nothing while nothing is held.
+    static var backPressurePollUs: UInt64 { 1_500 }
+
+    /// Must hold `lock`. T-370: whether the output queue can take one more encoded frame without overflowing: the
+    /// frames in the queue plus the frames inside the encoder (which will land there) plus this one must fit. An
+    /// overflow drops an encoded delta, which breaks the reference chain and forces a keyframe (the 490-880 KB IDR then
+    /// overflows the same congested link again), whereas a capture dropped here, before encoding, leaves the chain
+    /// intact. A pending keyframe request is never held back: its frame is the recovery. Healthy flow (the sender pops
+    /// as frames arrive) keeps the queue near empty, so nothing is held there.
+    private func downstreamHasRoomLocked() -> Bool {
+        guard downstreamCapacity < .max, !forceKeyframe, !pendingBypass else { return true }
+        // Order matters: the in-flight counts are read first, the queue counts (inside `downstreamLoad`) second. An
+        // encoder output is pushed to its queue before its slot / owed entry is released, so a frame landing between
+        // the two reads is counted in both (over-count, safe) and never in neither. Main: `completed` pushes, then
+        // `release`; auxiliary: the output wrapper pushes, then `auxResolved`.
+        let aux = auxOutstanding.count
+        return downstreamLoad(inFlight, aux) < downstreamCapacity
+    }
+
+    /// Must hold `lock`. A frame is waiting only for downstream room (an encoder slot is free): returns the delay of
+    /// the poll that retries it, nil when none is needed or one is already scheduled. While the encoder is full a
+    /// slot release does the retry.
+    private func backPressureRetryLocked() -> UInt64? {
+        guard !stopped, pacer.hasPending, inFlight < maxInFlight, !downstreamHasRoomLocked() else { return nil }
+        stats.backPressureHolds += 1
+        return scheduleFlushLocked(afterUs: Self.backPressurePollUs)
     }
 
     /// Must hold `lock`. Returns the delay to arm, or nil if a flush is already scheduled.
@@ -473,5 +549,15 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
     private func noteInFlightLocked() {
         stats.minInFlight = min(stats.minInFlight, inFlight)
         stats.maxInFlight = max(stats.maxInFlight, inFlight)
+    }
+}
+
+/// T-370: how full each output queue will be once every frame already admitted has landed in it. A stream's frames
+/// reach its queue from its own encoder session, so the main and the packed auxiliary stream (decision 0034) are
+/// counted separately; an overflow of either queue drops an encoded delta and forces an IDR. The result is compared
+/// with the queue capacity by `EncoderSubmitOrder`.
+public enum DownstreamBudget {
+    public static func projected(mainInFlight: Int, mainQueued: Int, auxInFlight: Int, auxQueued: Int) -> Int {
+        max(mainInFlight + mainQueued, auxInFlight + auxQueued)
     }
 }
