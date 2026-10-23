@@ -1,0 +1,33 @@
+7100000 I net sid=77 gen=1 ev=stats fps=60.0 kbps=60000 decode_ms=10.0 dropped=0 cap_dec_ms=20.0 latency_ms=20.0 sent_frames=60 sent_kbps=60000 rejected=0 send_failures=0 idr=0 idr_bytes_max=0 host=192.168.1.20
+7100001 I net sid=77 gen=1 ev=tcp conn=video conn_id=6 retx_pkts_delta=0 rxmit_bytes_delta=0 ooo_bytes_delta=0 tx_pkts_delta=100 srtt_ms=10 rttvar_ms=3 rttcur_ms=4 rto_ms=0 snd_cwnd=1465637 snd_wnd=2242304 ssthresh=1253968 sndbuf_bytes=0 unacked_bytes=0 notsent_bytes=0 user_pending_bytes=0 loss_recovery=0 transport=wifi
+7100002 I net sid=77 gen=1 ev=tcp conn=control conn_id=5 retx_pkts_delta=99 srtt_ms=500 transport=wifi
+7100003 I video sid=77 gen=1 ev=latency frames=60 gpu_ms_p50_95_99_max=2.0/3.0/4.0/5.0 enc_ms_p50_95_99_max=6.5/7.5/8.0/9.0 cap_to_sent_ms_p50_95_99_max=9.0/11.0/12.0/13.0
+7100004 I video sid=77 gen=1 ev=cadence target_ms=16.7 cap=60 cap_fps=60.0 enc_fps=60.0 sent=60 sent_fps=60.0 queue_drops=0
+7101000 I net sid=77 gen=1 ev=stats fps=60.0 kbps=60000 decode_ms=10.0 dropped=0 cap_dec_ms=22.0 latency_ms=22.0 sent_frames=60 sent_kbps=60000 rejected=0 send_failures=0 idr=0 idr_bytes_max=0 host=192.168.1.20
+7101001 I net sid=77 gen=1 ev=tcp conn=video conn_id=6 retx_pkts_delta=0 rxmit_bytes_delta=0 ooo_bytes_delta=0 tx_pkts_delta=100 srtt_ms=10 rttvar_ms=3 rttcur_ms=4 rto_ms=0 snd_cwnd=1465637 snd_wnd=2242304 ssthresh=1253968 sndbuf_bytes=0 unacked_bytes=0 notsent_bytes=0 user_pending_bytes=0 loss_recovery=0 transport=wifi
+7101002 I net sid=77 gen=1 ev=tcp conn=control conn_id=5 retx_pkts_delta=99 srtt_ms=500 transport=wifi
+7101003 I video sid=77 gen=1 ev=latency frames=60 gpu_ms_p50_95_99_max=2.0/3.0/4.0/5.0 enc_ms_p50_95_99_max=6.5/7.5/8.0/9.0 cap_to_sent_ms_p50_95_99_max=9.0/11.0/12.0/13.0
+7101004 I video sid=77 gen=1 ev=cadence target_ms=16.7 cap=60 cap_fps=60.0 enc_fps=60.0 sent=60 sent_fps=60.0 queue_drops=0
+7102000 I net sid=77 gen=1 ev=stats fps=60.0 kbps=60000 decode_ms=10.0 dropped=0 cap_dec_ms=24.0 latency_ms=24.0 sent_frames=60 sent_kbps=60000 rejected=0 send_failures=0 idr=0 idr_bytes_max=0 host=192.168.1.20
+7102001 I net sid=77 gen=1 ev=tcp conn=video conn_id=6 retx_pkts_delta=5 rxmit_bytes_delta=0 ooo_bytes_delta=0 tx_pkts_delta=100 srtt_ms=12 rttvar_ms=3 rttcur_ms=4 rto_ms=0 snd_cwnd=1465637 snd_wnd=2242304 ssthresh=1253968 sndbuf_bytes=0 unacked_bytes=0 notsent_bytes=0 user_pending_bytes=0 loss_recovery=0 transport=wifi
+7102002 I net sid=77 gen=1 ev=tcp conn=control conn_id=5 retx_pkts_delta=99 srtt_ms=500 transport=wifi
+7102003 I video sid=77 gen=1 ev=latency frames=60 gpu_ms_p50_95_99_max=2.0/3.0/4.0/5.0 enc_ms_p50_95_99_max=6.5/7.5/8.0/9.0 cap_to_sent_ms_p50_95_99_max=9.0/11.0/12.0/13.0
+7102004 I video sid=77 gen=1 ev=cadence target_ms=16.7 cap=60 cap_fps=60.0 enc_fps=60.0 sent=60 sent_fps=60.0 queue_drops=0
+7103000 I net sid=77 gen=1 ev=stats fps=60.0 kbps=60000 decode_ms=10.0 dropped=0 cap_dec_ms=300.0 latency_ms=300.0 sent_frames=60 sent_kbps=60000 rejected=0 send_failures=0 idr=0 idr_bytes_max=0 host=192.168.1.20
+7103001 I net sid=77 gen=1 ev=tcp conn=video conn_id=6 retx_pkts_delta=0 rxmit_bytes_delta=0 ooo_bytes_delta=0 tx_pkts_delta=100 srtt_ms=10 rttvar_ms=3 rttcur_ms=4 rto_ms=0 snd_cwnd=1465637 snd_wnd=2242304 ssthresh=1253968 sndbuf_bytes=0 unacked_bytes=0 notsent_bytes=0 user_pending_bytes=0 loss_recovery=0 transport=wifi
+7103002 I net sid=77 gen=1 ev=tcp conn=control conn_id=5 retx_pkts_delta=99 srtt_ms=500 transport=wifi
+7103003 I video sid=77 gen=1 ev=latency frames=60 gpu_ms_p50_95_99_max=2.0/3.0/4.0/5.0 enc_ms_p50_95_99_max=6.5/7.5/8.0/9.0 cap_to_sent_ms_p50_95_99_max=9.0/11.0/12.0/13.0
+7103004 I video sid=77 gen=1 ev=cadence target_ms=16.7 cap=60 cap_fps=60.0 enc_fps=60.0 sent=60 sent_fps=60.0 queue_drops=0
+7104000 I net sid=77 gen=1 ev=stats fps=60.0 kbps=60000 decode_ms=10.0 dropped=0 cap_dec_ms=210.0 latency_ms=210.0 sent_frames=60 sent_kbps=60000 rejected=0 send_failures=0 idr=0 idr_bytes_max=0 host=192.168.1.20
+7104001 I net sid=77 gen=1 ev=tcp conn=video conn_id=6 retx_pkts_delta=10 rxmit_bytes_delta=0 ooo_bytes_delta=0 tx_pkts_delta=100 srtt_ms=10 rttvar_ms=3 rttcur_ms=4 rto_ms=0 snd_cwnd=1465637 snd_wnd=2242304 ssthresh=1253968 sndbuf_bytes=0 unacked_bytes=0 notsent_bytes=0 user_pending_bytes=0 loss_recovery=0 transport=wifi
+7104002 I net sid=77 gen=1 ev=tcp conn=control conn_id=5 retx_pkts_delta=99 srtt_ms=500 transport=wifi
+7104003 I video sid=77 gen=1 ev=latency frames=60 gpu_ms_p50_95_99_max=2.0/3.0/4.0/5.0 enc_ms_p50_95_99_max=6.5/7.5/8.0/9.0 cap_to_sent_ms_p50_95_99_max=9.0/11.0/12.0/13.0
+7104004 I video sid=77 gen=1 ev=cadence target_ms=16.7 cap=60 cap_fps=60.0 enc_fps=60.0 sent=60 sent_fps=60.0 queue_drops=0
+7105000 I net sid=77 gen=1 ev=stats fps=60.0 kbps=60000 decode_ms=10.0 dropped=0 cap_dec_ms=23.0 latency_ms=23.0 sent_frames=60 sent_kbps=60000 rejected=0 send_failures=0 idr=0 idr_bytes_max=0 host=192.168.1.20
+7105001 I net sid=77 gen=1 ev=tcp conn=video conn_id=6 retx_pkts_delta=3 rxmit_bytes_delta=0 ooo_bytes_delta=0 tx_pkts_delta=100 srtt_ms=40 rttvar_ms=3 rttcur_ms=4 rto_ms=0 snd_cwnd=1465637 snd_wnd=2242304 ssthresh=1253968 sndbuf_bytes=0 unacked_bytes=0 notsent_bytes=0 user_pending_bytes=0 loss_recovery=0 transport=wifi
+7105002 I net sid=77 gen=1 ev=tcp conn=control conn_id=5 retx_pkts_delta=99 srtt_ms=500 transport=wifi
+7105003 I video sid=77 gen=1 ev=latency frames=60 gpu_ms_p50_95_99_max=2.0/3.0/4.0/5.0 enc_ms_p50_95_99_max=6.5/7.5/8.0/9.0 cap_to_sent_ms_p50_95_99_max=9.0/11.0/12.0/13.0
+7105004 I video sid=77 gen=1 ev=cadence target_ms=16.7 cap=60 cap_fps=60.0 enc_fps=60.0 sent=60 sent_fps=60.0 queue_drops=0
+7105500 I video sid=77 gen=1 ev=chroma_stats mode=sharp_nearest frames=60 conv_ms_p50_95=2.6/3.2 gpu_ms_p50_95=2.0/3.0 cap_enc_ms_p50_95=9.5/10.5 conv=60 conv_fail=0
+7102500 I net sid=77 gen=1 ev=keyframe_request reason=0 view=main action=forced idr_forced=1 since_idr_ms=900
+7103500 I kbd sid=77 gen=1 ev=key keycode=12 down=1

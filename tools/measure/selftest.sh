@@ -19,7 +19,7 @@ expect() {
 }
 
 echo "==> syntax"
-for f in "$ROOT/scripts/device-smoke.sh" "$HERE/macmon.sh" "$HERE/selftest.sh" "$ROOT"/tools/soak/*.sh; do
+for f in "$ROOT/scripts/device-smoke.sh" "$HERE/macmon.sh" "$HERE/game-ab.sh" "$HERE/selftest.sh" "$ROOT"/tools/soak/*.sh; do
   bash -n "$f" && ok "bash -n ${f#$ROOT/}" || bad "bash -n ${f#$ROOT/}"
 done
 sh -n "$HERE/mbmon.sh" && ok "sh -n tools/measure/mbmon.sh" || bad "sh -n mbmon.sh"
@@ -233,9 +233,111 @@ expect "restarts" "$tmp/soak.txt" "host MateBridgeApp pid changes: 1"
 expect "events" "$tmp/soak.txt" "tablet release_all: 2"
 expect "header carried over" "$tmp/soak.txt" "apk_sha: 588332f (versionCode 1180)"
 
+echo "==> game-ab.sh + game_ab.py (stubs, two arms x two runs)"
+AB="$tmp/ab"; BA="$tmp/binab"; GD="$TD/game_ab"; mkdir -p "$BA" "$AB/logs"
+cp "$B/ioreg" "$B/pgrep" "$B/ps" "$B/lsof" "$B/sw_vers" "$BA/"
+cat >"$BA/top" <<'EOF'
+#!/bin/bash
+cat <<'T'
+Processes: 500 total
+CPU usage: 1.0% user, 1.0% sys, 98.0% idle
+
+PID    %CPU COMMAND
+Processes: 500 total
+CPU usage: 10.5% user, 4.5% sys, 85.0% idle
+
+PID    %CPU COMMAND
+26019  12.3 MateBridgeApp
+100    20.0 WindowServer
+22742  8.0  VTEncoderXPCServ
+555    55.5 Some Game
+T
+EOF
+cat >"$BA/adb" <<'EOF'
+#!/bin/bash
+case "$*" in
+  get-state) echo device ;;
+  "shell getprop ro.product.brand") echo HUAWEI ;;
+  "shell getprop ro.build.display.id") echo 'MRDI-W09 4.3.0.145(C432E2R1P1)' ;;
+  "shell dumpsys package dev.matebridge.client") echo '    versionCode=1180 minSdk=29 targetSdk=34' ;;
+  "logcat -d -v epoch") cat "$AB_TABLET_IDENT" ;;
+  "logcat -v epoch -T 1") cat "$AB_TABLET_WIN"; exec sleep 30 ;;
+  *) echo "adb stub: unexpected $*" >&2; exit 1 ;;
+esac
+EOF
+chmod +x "$BA"/*
+# ab_run LABEL ARM ID HOSTWIN [more game-ab.sh args]: ID selects host_ident_ID / tablet_ident_ID / tablet_win_ID
+ab_run() {
+  local label=$1 arm=$2 id=$3 hw=$4; shift 4
+  cp "$GD/host_ident_$id.txt" "$AB/logs/host.log"
+  ( sleep 1.3; cat "$GD/$hw" >>"$AB/logs/host.log" ) &
+  PATH="$BA:$PATH" ADB="$BA/adb" MB_HOST_LOG_DIR="$AB/logs" MB_MAC_INTERVAL=1 \
+    AB_TABLET_IDENT="$GD/tablet_ident_$id.txt" AB_TABLET_WIN="$GD/tablet_win_$id.txt" \
+    bash "$HERE/game-ab.sh" "$label" --arm "$arm" --seconds 3 --out "$AB/out" --proc "Some Game" --content synthetic \
+    "$@" >/dev/null 2>"$AB/run_$label-$arm.err"
+  wait
+}
+E60=(--expect bitrate_kbps=60000 --expect chroma=sharp --expect width=2240)
+E30=(--expect bitrate_kbps=30000 --expect chroma=normal --expect width=2240)
+ab_run A1 b60 60 host_win_60a.txt --runs 2 "${E60[@]}"
+ab_run A1 b30 30 host_win_30.txt --runs 2 "${E30[@]}"
+ab_run A1 b60 60 host_win_60b.txt --runs 2 "${E60[@]}"
+ab_run A1 b30 30 host_win_30.txt --runs 2 "${E30[@]}"
+ab_run X1 wrong 60 host_win_60a.txt --expect bitrate_kbps=20000 --expect chroma=normal
+[ -d "$AB/out/A1/b60-1" ] && [ -d "$AB/out/A1/b60-2" ] && [ -d "$AB/out/A1/b30-2" ] && ok "arm repeat numbering" || bad "arm repeat numbering"
+S1="$AB/out/A1/b60-1/summary.txt"
+expect "arm 1: arm_check ok" "$S1" "arm_check: ok (bitrate_kbps=60000, chroma=sharp, width=2240)"
+expect "arm 1: applied values and chroma source" "$S1" "applied: bitrate_kbps=60000 (tablet) / 60000 (host) chroma=sharp_nearest [host video chroma_stats mode (in window)] size=2240x1472 fps=60 transport=wifi"
+expect "arm 1: header" "$S1" "apk_sha: 588332f (versionCode 1180)"
+expect "arm 1: header run" "$S1" "run: 1 of 2"
+expect "arm 1: sent Mbps" "$S1" "host sent_mbps p50 60.0"
+expect "arm 1: gpu_ms" "$S1" "host gpu_ms p50 2.00"
+expect "arm 1: retx total" "$S1" "video retx_pkts total 8"
+expect "arm 1: retx share of seconds" "$S1" "video retx_pct_s 33.3"
+expect "arm 1: srtt p50" "$S1" "video srtt_ms p50 10.0"
+expect "arm 1: keyframe requests" "$S1" "keyframe_request 1"
+expect "arm 1: cap_dec p50 (1 Hz)" "$S1" "cap_dec_ms p50 (1 Hz) 22.5"
+expect "arm 1: stalls from 1 Hz samples" "$S1" "stalls >150 ms 1"
+expect "arm 1: tablet recv fps" "$S1" "tablet recv_fps 60.0"
+expect "arm 1: skip_pct" "$S1" "tablet skip_pct p50 2.0"
+expect "arm 1: Mac gpu" "$S1" "mac gpu_dev p50 54"
+expect "arm 1: Mac CPU of the game" "$S1" "mac cpu Some_Game p50 55.5"
+expect "arm 1: Mac CPU of the encoder service" "$S1" "mac cpu VTEncoder p50 8.0"
+python3 "$HERE/game_ab.py" summary "$AB/out/A1" >"$AB/summary_A1.txt"
+expect "summary: arms in recording order" "$AB/summary_A1.txt" "arms (recording order): b60-1 b30-1 b60-2 b30-2"
+expect "summary: 2 runs is not a claim" "$AB/summary_A1.txt" "claim_ok: no (fewer than 3 runs: do not quote as a result)"
+expect "summary: per-run arm_check" "$AB/summary_A1.txt" "b30-2: ok (bitrate_kbps=30000, chroma=normal, width=2240)"
+expect "summary: sent Mbps columns" "$AB/summary_A1.txt" "host sent_mbps p50 60.0 (60.0-60.0) 30.0 (30.0-30.0)"
+expect "summary: retx total median and spread" "$AB/summary_A1.txt" "video retx_pkts total 13 (8-18) 0 (0-0)"
+expect "summary: retx seconds share" "$AB/summary_A1.txt" "video retx_pct_s 41.7 (33.3-50.0) 0.0 (0.0-0.0)"
+expect "summary: stalls median of 1 and 2" "$AB/summary_A1.txt" "stalls >150 ms 1.5 (1-2) 0 (0-0)"
+expect "summary: gpu_ms columns" "$AB/summary_A1.txt" "host gpu_ms p50 2.00 (2.00-2.00) 1.00 (1.00-1.00)"
+expect "summary: stall source" "$AB/summary_A1.txt" "stalls source: host 1 Hz seconds with cap_dec_ms > 150"
+python3 "$HERE/game_ab.py" summary "$AB/out/X1" >"$AB/summary_X1.txt"
+expect "mismatch is flagged, the run is kept" "$AB/summary_X1.txt" "wrong-1: MISMATCH (bitrate_kbps expected 20000, applied 60000/60000; chroma expected 420, applied sharp_nearest)"
+# no 1 Hz cap_dec samples: stalls fall back to the tablet's 10 s windows and say so
+mkdir -p "$AB/fb" && cp -R "$AB/out/A1/b60-1" "$AB/fb/b60-1"
+sed -i '' -E 's/ cap_dec_ms=[0-9.]+//' "$AB/fb/b60-1/host.txt"
+python3 "$HERE/game_ab.py" arm "$AB/fb/b60-1" >"$AB/fb.txt"
+expect "stall fallback to tablet windows" "$AB/fb.txt" "stalls >150 ms 1"
+expect "stall fallback is named" "$AB/fb.txt" "tablet 10 s windows with cap_dec_max_us > 150000"
+# a profile line inside the window (setting changed mid-run) warns
+cp -R "$AB/out/A1/b60-1" "$AB/fb/b60-chg"
+echo 'H 1791200005.000 7100500 encoder profile fps=60 bitrate_kbps=30000' >>"$AB/fb/b60-chg/host.txt"
+python3 "$HERE/game_ab.py" arm "$AB/fb/b60-chg" >"$AB/chg.txt"
+expect "profile line in the window warns" "$AB/chg.txt" "warn: a profile line was logged inside the window"
+ls "$AB/out/A1/b60-1" | tr '\n' ' ' >"$AB/files.txt"
+expect "only filtered files are kept" "$AB/files.txt" "host_ident.txt host.txt mac.txt meta.txt summary.txt tablet_ident.txt tablet.txt"
+# a missing tablet: that part is skipped with a message, the rest is still recorded
+cp "$GD/host_ident_60.txt" "$AB/logs/host.log"
+PATH="$BA:$PATH" ADB="$AB/no-such-adb" MB_HOST_LOG_DIR="$AB/logs" MB_MAC_INTERVAL=1 \
+  bash "$HERE/game-ab.sh" N1 --arm solo --seconds 1 --out "$AB/out" >"$AB/n1.txt" 2>"$AB/n1.err"
+expect "no tablet: skipped, said so" "$AB/n1.err" "tablet part skipped"
+expect "no tablet: no-window note" "$AB/n1.txt" "note: no tablet window"
+
 echo "==> no clipboard, key, text, path, address or serial content in any output"
 # The README documents the same grep for real runs.
-if cat "$tmp"/*.txt "$tmp"/smoke/* "$F"/out/*.txt |
+if cat "$tmp"/*.txt "$tmp"/smoke/* "$F"/out/*.txt "$AB"/*.txt "$AB"/out/*/*/*.txt "$AB"/fb/*/*.txt |
    grep -n -i -E 'clipboard|clip_|keycode|char=|text=|hello|password|secret|serial|ABC123XYZ|/Users/|(^|[ =:/])[0-9]{1,3}(\.[0-9]{1,3}){3}([^0-9.]|$)|com\.example'; then
   bad "forbidden content above"
 else

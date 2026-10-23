@@ -13,6 +13,7 @@ Versioned replacements for the scratch tools of October 2026 (`mbmon.sh`, `an.py
 | `macan.py` | Mac | Host window summary of `macmon.sh` output, optionally with the matching `host.log` slice. |
 | `mblog.py` | Mac | Shared parser, the privacy filter (`mblog.py filter`), percentiles, the result header. |
 | `smoke.py` | Mac | The report behind `device-smoke.sh`. |
+| `game-ab.sh`, `game_ab.py` | Mac | Game A/B: records one arm (tablet + Mac + host.log slice), checks the applied bitrate/chroma/size, side-by-side summary (recipe 5). |
 | `selftest.sh` | Mac | Offline test with stubs and `testdata/` (synthetic, numbers only). Touches no device. |
 
 ## Result header (rule)
@@ -132,9 +133,52 @@ python3 tools/measure/macan.py ~/mb-measure/mac.txt --host-log ~/Library/Logs/Ma
 
 `tools/soak/README.md` (T-194).
 
+### 5. Game A/B (T-364)
+
+One command records one arm (tablet logcat, Mac sampler, host.log slice, all at the same time) and checks that the arm
+was really applied. The user changes the setting in the tablet's panel; nothing here touches a setting.
+Plan: `docs/research/2026-10-23-game-modes.md` ("Olcum plani").
+
+```bash
+# arm order A B A B A B, 90-120 s per arm, same game scene, same build
+tools/measure/game-ab.sh A1 --arm b60 --seconds 100 --out ~/mb-measure --proc "Game Name" \
+  --expect bitrate_kbps=60000 --expect chroma=sharp --expect width=1848 --runs 3 --content "TotK, same scene"
+tools/measure/game-ab.sh A1 --arm b30 --seconds 100 --out ~/mb-measure --proc "Game Name" \
+  --expect bitrate_kbps=30000 --expect chroma=sharp --expect width=1848 --runs 3 --content "TotK, same scene"
+# ... repeat both until each arm has 3 folders, then:
+python3 tools/measure/game_ab.py summary ~/mb-measure/A1
+```
+
+- Files land in `OUT/LABEL/ARM-K/` (K counts up by itself): `meta.txt tablet.txt tablet_ident.txt host.txt
+  host_ident.txt mac.txt summary.txt`, all filtered (numbers and the identity keys of `mblog.py`). A repeat of an
+  arm that went wrong is simply left in place; delete its folder to drop it.
+- `--expect` keys: `bitrate_kbps`, `chroma` (`normal|sharp|full` or `420|sharp_nearest|packed444`), `width`, `size`,
+  `fps`, `transport`. The first lines of every report show what the logs say was applied:
+  `arm_check: ok (...)` or `arm_check: MISMATCH (...)`; a mismatch keeps the recording. Where each value comes
+  from: bitrate = tablet `session ev=profile` and host `encoder ev=profile`; chroma = host `video ev=chroma_stats mode`
+  inside the window, else the latest `encoder ev=chroma_config applied`; size/fps/transport = tablet `session ev=profile`.
+  `warn: a profile line was logged inside the window` means a reconnect or setting change happened during the run.
+- Timing: change the setting, wait about 10 s (capture and encoder restart; a resolution change also rebuilds the
+  virtual display and the game may have to pick its resolution again), start the game scene, then run the command.
+  Keep the scene the same in every arm; a static screen writes no client stats.
+- `--proc` takes the game's process name as `top` shows it (16 characters at most; longer names are cut).
+  `VTEncoderXPCService` is always tracked.
+- `game_ab.py summary` prints, per arm, the median and `(min-max)` over its repeats. Fewer than 3 runs per arm
+  prints `claim_ok: no`. A spread wider than the difference between arms means "uncertain".
+- Definitions: a stall is a 1 Hz host `net ev=stats` second with `cap_dec_ms` > 150 (NOTES 2026-10-20 22:30). With no
+  such samples the tablet's 10 s windows are used (`cap_dec_max_us` > 150000, counts windows); the summary names the
+  source. `gpu_ms`, `enc_ms`, `cap_to_sent_ms` rows are the median over the host's 1 s windows of that window's
+  p50 or p95. `decode_ms` and `cap_dec_ms` (1 Hz) come from the client's per-second report in the host's
+  `net ev=stats`. The tablet logs no decode p95, so the 10 s row is the window p50 only.
+- The tablet part is skipped with a message when no HUAWEI device is on adb; the host and Mac parts still record.
+- Privacy: only `mblog.py filter` output is stored. Run the grep from "Privacy" over `OUT/LABEL` before pasting.
+
 ## Not verified on the device yet
 
 Written from NOTES and LOGGING.md, tested only offline (`selftest.sh`): the `lcd_fps_scence` node path and format,
 the thermal zone names, the devfreq GPU node, `dumpsys media.resource_manager` line format (`codec_res` is a trend
 count, not an exact instance count), `logcat -e` on HarmonyOS 4.3, and `run-as` fd counting. The first device run
 (T-173 [device] criterion) checks them; fix the paths here if a value stays `-`.
+
+- T-364 (`game-ab.sh`): `top` cutting `VTEncoderXPCService` at 16 characters (`VTEncoderXPCServ`, seen on this Mac), the game's
+  `top` name, and the `ev=chroma_stats mode=` value for plain 4:2:0 (assumed `420`) are checked only offline.
