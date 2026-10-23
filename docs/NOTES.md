@@ -2056,3 +2056,12 @@ Kaynak: `~/.cache/matebridge-tools/data/2026-10-23-gameab/A1` (filtreli host 1 H
 - Kötü (host.log saniyelik): ağ temizken (video srtt 10–13 ms, retx 0) oyun sahnesi başlayınca `adapt_step trigger=queue_delay` 1–2 sn içinde 60 → 12 Mbps tabana iniyor. Sonra kendini besleyen döngü: kapı saniyede ~400 ms kapalı (`blocked_ms`), `queue_drops` ~12/s, her düşüş IDR zorluyor → saniyede 4 IDR, srtt kendi IDR patlamalarımızla 40–70 ms'ye çıkıyor (= yeni `queue_delay` kanıtı), tablet 13–20 fps, `cap_dec_ms` 60–200. 40 sn'lik bölümde hedef 12 Mbps'ten hiç kalkmadı; döngü ancak sahne sakinleyince kırıldı.
 - Yorum: `srttExcessTriggerMs = 20` ve 20 ms bütçe, oyunun anlık bit hızı patlamalarını (büyük P/I kareleri) tıkanıklık sanıyor; kapı reddi → kuyruk düşüşü → zorunlu IDR zinciri (bkz. "30 Mbps neden kötü göründü") denetleyicinin kendi tetikleyicisini besliyor. `queueDropped` bastırması ve 400 ms send-buffer kuralı yetmiyor; döngünün ana kolu srtt ve IDR.
 - Sonuç: knob **kapalı kalır**, varsayılan açılmaz. Yeniden denemeden önce tasarım düzeltmesi gerekir (en az: kapı kaynaklı düşüşte IDR zorlamama / P-kare kurtarma, srtt tetikleyicisinin kendi patlamalarımızı ayırt etmesi, tabanda kapı gevşemesi). Ham saniyelik tablo bu oturumda; host.log'da `ev=adapt` satırları.
+
+## 2026-10-23 akşam — knob kapalı oyun oturumu: "arada takılma arttı" (TotK, Oyun 60, 60 Mbps, 1848, Wi-Fi, host b14c48d1)
+
+Kullanıcı ~20 dk oynadı (host.log 114012–115223 s mono). İnternet yolu yok; yalnız ev WLAN'ı.
+- **Tetikleyici Wi-Fi:** video `ev=tcp` saniyelerinin %16'sında `retx_pkts_delta` > 0 (sabahki A1 b60: %5). srtt 6–12 ms, yani tıkanıklık değil, radyo kaybı.
+- **Büyütücü bizim zorunlu IDR'imiz:** ~20 olay; tek retx → `snd_cwnd` 284 KB → 48 KB (ssthresh 18 KB) → host kuyruğu `queue_drops` 9–12 + `overwritten` → IDR zorlanıyor, 3–4 IDR/s, `idr_bytes_max` 490–884 KB → tablet 3–20 fps, `cap_dec_ms` 200–440 (114727–114728, 114693, 114837, 115134). Oturumda 82 IDR.
+- **T-365 cihazda yetmedi:** her olaydan sonra `gate_wait` p50 8–9,5 ms'ye sıçrayıp 10–95 sn kalıyor; 1212 latency penceresinin 470'inde (%39) p50 ≥ 2 ms. O sürelerde `cap_dec_ms` ~21 ms (diğer zamanlar ~13). Birim testindeki senaryo (tek geç gönderim) cihazdaki IDR sonrası birikmeyi kapsamıyor.
+- Ayrı ve açıklanmamış: 3 kısa bölümde (114049–53, 114863–67, 115166–69) tablet `dropped` 13–23/s, `decode_ms` ~11, cap_dec düşük, retx yok, IDR yok → ağ değil; istemci tarafı.
+- Kartlar: T-368 (gate_wait IDR sonrası), T-369 (zorunlu IDR zinciri tasarımı).
