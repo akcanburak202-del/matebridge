@@ -146,6 +146,15 @@ class DevKnobsTest {
         assertFalse(k.knobs.any { it.startsWith("net_bench") })
     }
 
+    @Test fun audioOutSharedIsGatedAndListedInTheProfile() {
+        val on = parse("dev" to true, "audio_out" to "shared")
+        assertEquals(listOf("audio_out:shared"), on.knobs)
+        assertEquals("shared", on.audioOut)
+        val off = parse("audio_out" to "shared") // no `dev`: ignored
+        assertEquals(null, off.audioOut)
+        assertEquals(emptyList<String>(), off.knobs)
+    }
+
     @Test fun unknownStringValuesAreLoggedAsOther() {
         val k = parse("dev" to true, "transport" to "10.0.0.5:7000", "audio_out" to "AAudio ", "decoder_fault" to "boom")
         assertEquals(listOf("transport:other", "audio_out:aaudio", "decoder_fault:other"), k.knobs)
