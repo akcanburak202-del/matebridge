@@ -16,11 +16,11 @@
 ///   inside the encoder (not yet pushed to the queue): the caller's resync puts the config in front of it. This is
 ///   decided from `keyframesPushed`, read under the queue lock together with the resync; a mismatch can only cause an
 ///   extra keyframe, never a missing one.
-/// - One recovery generation (T-378): once the forced keyframe has reached the output queue (`keyframesPushed` moved
-///   past the value recorded at the force), it is on its way until its write completes, however long that takes. No
-///   timer forces a second one: a stuck write is the bounded failure path's job (stall watchdog, reconnect), and a
-///   second IDR behind a stuck first one only adds bytes. Before that point (still inside the encoder, which keeps its
-///   force flag) the timeout below stays as the safety net.
+/// - One recovery generation (T-378): a forced keyframe that is on its way (`livePending`: forced less than
+///   `pendingTimeoutUs` ago and not yet written) absorbs repeated FRAMES_DROPPED requests and host-side drops. That
+///   timeout is the hard liveness bound for ALL suppression: whatever happens to the in-flight keyframe (a stuck
+///   write, a keyframe discarded by an overflow, a resync or a stale `unpop`), the next request after
+///   `pendingTimeoutUs` forces one again. STARTUP / DECODE_ERROR never join this rule (see `request`).
 /// - Nothing is swallowed forever: a coalesced request is covered by a keyframe on its way (at most
 ///   `pendingTimeoutUs`; after that the next request forces again) or by one written within the last `windowUs`.
 ///
@@ -227,7 +227,7 @@ public struct KeyframeRequestCoalescer: Sendable {
             return Decision(action: configResent ? .configResent : (stillInEncoder ? .coalesced : .forced),
                             forceKeyframe: !stillInEncoder, sinceIdrUs: since)
         }
-        let onItsWay = livePending(nowUs: nowUs) != nil || reachedQueue(keyframesPushed)
+        let onItsWay = livePending(nowUs: nowUs) != nil
         let recentlyWritten = since.map { $0 < windowUs } ?? false
         if onItsWay || recentlyWritten {
             coalescedTotal += 1
@@ -326,10 +326,6 @@ public struct KeyframeRequestCoalescer: Sendable {
             return .idle
         }
         if queue.keyframeQueued, keyframeAheadSinceUs == nil { keyframeAheadSinceUs = nowUs }
-        // T-378: our forced keyframe reached the queue and is not written yet: wait for it, no timer forces another.
-        if reachedQueue(queue.keyframesPushed) {
-            return HostDecision(forceKeyframe: false, recheckAtUs: nowUs &+ pollUs)
-        }
         let hardDueUs = deferral.sinceUs &+ pendingTimeoutUs
         if nowUs < hardDueUs, let untilUs = coveredUntil(nowUs: nowUs, queue: queue) {
             return HostDecision(forceKeyframe: false, recheckAtUs: min(untilUs, hardDueUs))
@@ -360,12 +356,6 @@ public struct KeyframeRequestCoalescer: Sendable {
     /// A keyframe was forced while a host-side deferral is active: the hard bound runs from this force.
     private mutating func noteForce(nowUs: UInt64) {
         hostDeferral?.sinceUs = nowUs
-    }
-
-    /// A keyframe we forced was pushed to the output queue since (the count moved past the one recorded at the force)
-    /// and its write has not completed (`keyframeWritten` clears `pending`).
-    private func reachedQueue(_ keyframesPushed: UInt64) -> Bool {
-        pending.map { $0.keyframesPushed != keyframesPushed } ?? false
     }
 
     private func livePending(nowUs: UInt64) -> Pending? {

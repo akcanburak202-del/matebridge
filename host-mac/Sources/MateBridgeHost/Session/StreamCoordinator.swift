@@ -705,6 +705,7 @@ public final class StreamCoordinator: @unchecked Sendable {
                                  requestKeyframe: { [weak pipeline] in pipeline?.requestKeyframe() },
                                  requestAuxKeyframe: { [weak pipeline] in pipeline?.requestAuxKeyframe() },
                                  requestKeyframeForRefusal: { [weak pipeline] in pipeline?.requestKeyframe(refusal: $0) },
+                                 auxKeyframeWritten: { [weak pipeline] in pipeline?.auxKeyframeWritten(bytes: $0) },
                                  auxPairingDropped: { [weak pipeline] in pipeline?.auxPairingDropped() },
                                  onEnded: { [weak self] reason in self?.post(.senderEnded(id: id, reason)) },
                                  // T-170: join keys from the link, not the pipeline (it outlives sessions).

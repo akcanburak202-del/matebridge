@@ -157,10 +157,8 @@ public final class VideoPipeline: @unchecked Sendable {
             }, auxOutput: { [auxFrames, auxKeyframes] frame, _ in
                 var frame = frame
                 frame.trace.enqueuedUs = HostClock.nowUs()
-                // The auxiliary stream has no write trace: a keyframe counts as written when it is queued.
-                if frame.isKeyframe {
-                    auxKeyframes.update { $0.keyframeWritten(nowUs: HostClock.nowUs(), bytes: frame.data.count) }
-                }
+                // T-378: an auxiliary keyframe counts as written when its write completes (`auxKeyframeWritten`, called
+                // by the sender), not when it is queued: a queued one on a congested link is still on its way.
                 auxFrames.push(frame)
             }, onPackedError: { [onPackedFallback] reason in onPackedFallback(reason) },
                onFailure: { [weak self] error in self?.fail(error) })
@@ -339,6 +337,11 @@ public final class VideoPipeline: @unchecked Sendable {
             $0.internalForce(nowUs: HostClock.nowUs(), keyframesPushed: pushed, cause: .transportRefused, refusal: refusal)
         }
         box.encoder?.requestKeyframe(resubmitNow: true, view: .main)
+    }
+
+    /// The write of an auxiliary keyframe completed (T-378).
+    public func auxKeyframeWritten(bytes: Int) {
+        auxKeyframes.update { $0.keyframeWritten(nowUs: HostClock.nowUs(), bytes: bytes) }
     }
 
     /// The sender dropped or refused an auxiliary frame (packed full colour): the next auxiliary frame is an IDR.

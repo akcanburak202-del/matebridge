@@ -187,36 +187,78 @@ final class BusyRetainTests: XCTestCase {
 
     // MARK: One recovery generation
 
-    func testRepeatedClientRequestsWithAStuckWriteForceAtMostOneIdr() {
+    /// Codex round 3 #3: the suppression has a hard bound. A write stuck longer than `pendingTimeoutUs` gets exactly
+    /// one more IDR after the bound, none before.
+    func testStuckWriteSuppressesRepeatedRequestsOnlyUntilTheBound() {
         var c = KeyframeRequestCoalescer()
-        let d0 = c.request(.framesDropped, nowUs: 1_000_000, keyframesPushed: 0)
-        XCTAssertTrue(d0.forceKeyframe)
-        // The IDR left the encoder (push count 1) but its write never completes.
-        var forced = 0
-        var now: UInt64 = 1_100_000
-        while now < 60_000_000 {
-            if c.request(.framesDropped, nowUs: now, keyframesPushed: 1).forceKeyframe { forced += 1 }
+        let bound = KeyframeRequestCoalescer.defaultPendingTimeoutUs
+        let t0: UInt64 = 5_000_000
+        XCTAssertTrue(c.request(.framesDropped, nowUs: t0, keyframesPushed: 0).forceKeyframe)
+        var forcedAt: [UInt64] = []
+        var now = t0 + 100_000
+        while now < t0 + bound + 800_000 {   // the IDR reached the queue (count 1); its write never completes
+            if c.request(.framesDropped, nowUs: now, keyframesPushed: 1).forceKeyframe { forcedAt.append(now) }
             now += 100_000
         }
-        XCTAssertEqual(forced, 0, "no timer forces a second IDR behind a stuck first one")
-        XCTAssertGreaterThan(c.coalescedTotal, 500)
-        c.keyframeWritten(nowUs: now, bytes: 1)
-        XCTAssertEqual(c.request(.framesDropped, nowUs: now + 1000, keyframesPushed: 1).action, .coalesced)
+        XCTAssertEqual(forcedAt.count, 1, "exactly one extra IDR")
+        XCTAssertGreaterThanOrEqual(forcedAt[0] - t0, bound, "none before the bound")
+        XCTAssertLessThanOrEqual(forcedAt[0] - t0, bound + 100_000)
     }
 
-    func testHostDropIsNotForcedAgainWhileTheForcedIdrIsQueuedOrWriting() {
+    func testHostDropWatchIsBoundedToo() {
         var c = KeyframeRequestCoalescer()
-        let timeout = KeyframeRequestCoalescer.defaultPendingTimeoutUs
-        _ = c.request(.framesDropped, nowUs: 0, keyframesPushed: 0)  // pending, in the encoder
+        let bound = KeyframeRequestCoalescer.defaultPendingTimeoutUs
+        _ = c.request(.framesDropped, nowUs: 0, keyframesPushed: 0)
         let q = KeyframeQueueState(awaitingKeyframe: true, keyframeQueued: false, keyframesPushed: 1)
         var now: UInt64 = 10_000
         var d = c.hostDrop(nowUs: now, queue: q)
-        XCTAssertFalse(d.forceKeyframe)
-        while now < 20 * timeout {
-            now = d.recheckAtUs ?? now + 50_000
+        var forcedAt: [UInt64] = []
+        while now < bound + 600_000 {
+            if d.forceKeyframe { forcedAt.append(now) }
+            now = min(d.recheckAtUs ?? now + 50_000, now + 50_000)
             d = c.checkDeferred(nowUs: now, queue: q)
-            XCTAssertFalse(d.forceKeyframe, "stuck write at \(now) us")
         }
+        XCTAssertEqual(forcedAt.count, 1)
+        XCTAssertGreaterThanOrEqual(forcedAt[0], bound)
+    }
+
+    /// Codex round 3 #1: a config that is held or with the sender is not queued a second time, so it cannot push the
+    /// recovery keyframe out of the queue.
+    func testHeldOrChargedConfigIsNotDuplicatedByTheEncodersAnnouncement() {
+        var q = BoundedFrameQueue(capacity: 2)
+        q.chargesPops = true
+        let config = EncodedVideoFrame(flags: .codecConfig, captureTimeUs: 0, data: [7])
+        q.push(config)
+        let popped = q.pop()!                                   // with the sender (charged)
+        q.push(config)                                          // the encoder announces the same config
+        XCTAssertEqual(q.reservedCount, 1, "not queued again while the sender has it")
+        XCTAssertTrue(q.unpop(popped))                          // busy: held
+        q.push(config)
+        XCTAssertEqual(q.count, 1, "not queued again while held")
+        q.push(key(1))                                          // the recovery keyframe
+        XCTAssertEqual(q.count, 2)
+        XCTAssertEqual(q.pop()?.data, [7])
+        XCTAssertEqual(q.pop()?.data, [1], "the keyframe was not the overflow victim")
+    }
+
+    /// Codex round 3 #2: an auxiliary keyframe counts as written when its write completes, not when it is queued.
+    func testAuxKeyframeWrittenIsReportedOnlyWhenTheWriteCompletes() async {
+        let transport = ScriptedTransport(script: [.accepted, .busy, .busy, .accepted])
+        let written = Tally()
+        let main = VideoFrameQueue(keyframeNeeded: {})
+        let aux = VideoFrameQueue(keyframeNeeded: {})
+        let sender = VideoSender(transport: transport, frames: main, auxFrames: aux, requestKeyframe: {},
+                                 auxKeyframeWritten: { written.add("aux \($0)") })
+        sender.start()
+        var m = key(1), a = key(11)
+        m.pairID = 1
+        a.pairID = 1
+        main.push(m)
+        aux.push(a)
+        await waitUntil("both sent") { transport.sentCount == 2 }
+        await sender.stop()
+        XCTAssertEqual(transport.attemptCount, 4, "the aux keyframe was busy twice first")
+        XCTAssertEqual(written.all, ["aux 1"], "reported once, after the accepted write; never for the main keyframe")
     }
 
     /// Codex round 2, P1: STARTUP / DECODE_ERROR always force a new IDR (the T-122 behaviour). A resync reopens nothing

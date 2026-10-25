@@ -64,6 +64,7 @@ public final class VideoSender: @unchecked Sendable {
     private let frames: VideoFrameQueue
     private let requestKeyframe: @Sendable () -> Void
     private let requestKeyframeForRefusal: (@Sendable (VideoRefusal) -> Void)?
+    private let auxKeyframeWritten: (@Sendable (Int) -> Void)?
     private let auxFrames: VideoFrameQueue?
     private let requestAuxKeyframe: @Sendable () -> Void
     private let auxPairingDropped: (@Sendable () -> Void)?
@@ -83,6 +84,8 @@ public final class VideoSender: @unchecked Sendable {
     ///   - requestKeyframe: asks the encoder for a keyframe (after a frame the transport refused).
     ///   - requestKeyframeForRefusal: T-378, optional: like `requestKeyframe` for a main-stream frame the transport
     ///     refused for good, but names the refusal kind (for the `idr_forced` log). nil: `requestKeyframe`.
+    ///   - auxKeyframeWritten: T-378: called with the byte count when the write of an auxiliary keyframe completed
+    ///     (the main stream's equivalent is the finished `FrameTrace`). nil: not reported.
     ///   - onEnded: the loop finished on its own or was stopped; called once, from the sender's task.
     ///   - trace: receives the finished `FrameTrace` of every frame whose write completed (T-070), stamped with
     ///     `clock` (must be the host clock the encoder stamps with) and its `frame_seq`. nil: no measuring, no
@@ -95,6 +98,7 @@ public final class VideoSender: @unchecked Sendable {
                 requestKeyframe: @escaping @Sendable () -> Void,
                 requestAuxKeyframe: @escaping @Sendable () -> Void = {},
                 requestKeyframeForRefusal: (@Sendable (VideoRefusal) -> Void)? = nil,
+                auxKeyframeWritten: (@Sendable (Int) -> Void)? = nil,
                 auxPairingDropped: (@Sendable () -> Void)? = nil,
                 onEnded: @escaping @Sendable (EndReason) -> Void = { _ in },
                 trace: (@Sendable (FrameTrace) -> Void)? = nil,
@@ -108,6 +112,7 @@ public final class VideoSender: @unchecked Sendable {
         self.frames = frames
         self.requestKeyframe = requestKeyframe
         self.requestKeyframeForRefusal = requestKeyframeForRefusal
+        self.auxKeyframeWritten = auxKeyframeWritten
         self.onEnded = onEnded
     }
 
@@ -224,6 +229,7 @@ public final class VideoSender: @unchecked Sendable {
                 markFailed()
                 lock.withLock { wakeLoop }?()
             }
+            if ok, encoded.view == 1, encoded.isKeyframe { auxKeyframeWritten?(size) }
             if ok, measure, let trace {
                 var done = timing
                 done.writeDoneUs = clock()
