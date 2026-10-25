@@ -2135,3 +2135,10 @@ Yalnız yayının aktığı saniyeler (`sent_kbps` ≥ 1000), host.log, 36 dk; 2
 - 41 sn'de `overwritten` 5–29/s (T-370 kodlama öncesi ezme); 31'i video retx saniyesi (tüm saniyelerde %28).
 - ~28 sn tablet `dropped` (host 60 gönderdi), decode 10–11 ms.
 - Kullanıcının bildirdiği takılma 20:55:36–41: SCK tam 60, ama video `write_ms` max 220 ms, `queue_ms` p95 ~200 ms, `unacked` = `cwnd` (141–202 KB), retx 1–3, srtt 4–11 → kısa Wi-Fi radyo tıkanması; `overwritten` 23–29/s, tablet fps 16–21, IDR yok (T-378 doğru davrandı). Çare ağ tarafı: kanal (36, komşu 48), bit hızı uyarlama (T-379) ya da kablo.
+
+## 2026-10-25 21:03–21:18 — Oyun 30 Mbps'te de takılma (kullanıcı)
+
+- ~21:08:57'den itibaren `sent_kbps` ~30 Mbps. 60 Mbps'teki yazım blokları (21:03–21:08: `write_ms` max 60–100, `overwritten` 10–18/s) 30'da tamamen kayboldu (`write_ms` max < 2, `overwritten` 0) → bit hızını düşürmek bu tür (gönderimi bloklayan) tıkanmayı gideriyor; T-379 öncülünü destekliyor.
+- 30'da kalan iki kaynak:
+  1. 21:17:26–29 radyo sıçraması: srtt 46, `snd_cwnd` 9,9 MB → 278 KB, yazım bloklanmadı ama `cap_dec_ms` 88–114, tablet `dropped` 18–22/s. Bit hızından bağımsız; T-379 bunu önlemez.
+  2. **Ağ temizken tablet kare atıyor:** 21:09:02–06, 21:16:58–21:17:01 host 60 kare gönderiyor, srtt ~10, retx 0, ama tablet `dropped` 9–18/s. Tablet `render ev=stats` (21:18:25, 10,5 sn): `skip_pct=11.7`, `late_drops=85`, `slot_dups=85`, `d_jitter_us=21335`, `lead_ms=6.00`, `net_p50/p95/p99` 16,8/24,1/28,0 ms, `shown_p95` 33 ms, decode p95 11 ms (`dec_over=0`). Yorum [çıkarım]: varış aralığı oynaması (~8–10 ms) 6 ms öncülü aşınca kare vsync yuvasını kaçırıyor, sunucu geç kareyi atıp öncekini tekrarlıyor. Decode değil, sunum zamanlaması.
