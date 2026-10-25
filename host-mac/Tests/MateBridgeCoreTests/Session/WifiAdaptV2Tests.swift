@@ -16,10 +16,10 @@ private struct Rig {
 
     @discardableResult
     mutating func tick(srtt: UInt32 = 6, sb: UInt32 = 0, tx: UInt64 = 20, retx: UInt64 = 0,
-                       stall: Bool = false, active: UInt32 = 0) -> C.Outcome {
+                       stall: Bool = false, active: UInt32 = 0, ended: UInt32 = 0) -> C.Outcome {
         now += 100_000
         let o = c.tick(.init(nowUs: now, srttMs: srtt, sendBufferBytes: sb, txPacketsDelta: tx,
-                             retransmitPacketsDelta: retx, stallStarted: stall, stallActiveMs: active))
+                             retransmitPacketsDelta: retx, stallStarted: stall, stallActiveMs: active, stallEndedMs: ended))
         if let s = o.step { steps.append((now, s)) }
         return o
     }
@@ -83,55 +83,55 @@ final class WifiAdaptV2Tests: XCTestCase {
         XCTAssertEqual(b.baselineMs, 12, "old samples left the 30 s window")
     }
 
-    // MARK: Stall detector
+    // MARK: Stall detector (the sampling-phase sweeps are in WriteGapMeterTests)
 
-    func testDetectorReportsOneEventPerStallAndKeepsCountingIt() {
+    func testDetectorReportsOneEventPerOpenWriterStall() {
         var d = SendStallDetector()
-        func obs(_ t: UInt64, _ bytes: UInt64, work: Bool = true) -> SendStallDetector.Result {
-            d.observe(.init(nowUs: t, progressBytes: bytes, outstandingSinceUs: work ? 50_000 : nil))
+        func obs(gapMs: UInt64) -> SendStallDetector.Result {
+            d.observe(.init(writerBusy: true, writerOpenGapUs: gapMs * 1_000, sinceProgressUs: gapMs * 1_000))
         }
-        XCTAssertEqual(obs(100_000, 1_000), .init(newEvent: false, activeUs: 0))
-        XCTAssertEqual(obs(200_000, 2_000), .init(newEvent: false, activeUs: 0))
-        XCTAssertFalse(obs(300_000, 2_000).newEvent, "100 ms without progress")
-        let first = obs(400_000, 2_000)
-        XCTAssertTrue(first.newEvent, "200 ms >= 150 ms")
-        XCTAssertEqual(first.activeUs, 200_000)
-        let next = obs(500_000, 2_000)
+        XCTAssertEqual(obs(gapMs: 50), .init(newEvent: false, activeUs: 0))
+        XCTAssertFalse(obs(gapMs: 149).newEvent)
+        let first = obs(gapMs: 250)
+        XCTAssertTrue(first.newEvent)
+        XCTAssertEqual(first.activeUs, 250_000)
+        let next = obs(gapMs: 350)
         XCTAssertFalse(next.newEvent, "the same stall is not a second event")
-        XCTAssertEqual(next.activeUs, 300_000)
-        XCTAssertEqual(obs(600_000, 3_000), .init(newEvent: false, activeUs: 0), "progress ends it")
-        XCTAssertFalse(obs(700_000, 3_000).newEvent)
-        XCTAssertTrue(obs(800_000, 3_000).newEvent, "a later stall is a new event")
+        XCTAssertEqual(next.activeUs, 350_000)
+        XCTAssertEqual(obs(gapMs: 10), .init(newEvent: false, activeUs: 0), "progress ends it")
+        XCTAssertTrue(obs(gapMs: 200).newEvent, "a later stall is a new event")
     }
 
-    func testProgressingBigKeyframeWriteIsNotAStall() {
+    func testStallThatEndedBetweenPollsIsCountedOnceAndNotTwiceWhenSeenOpen() {
         var d = SendStallDetector()
-        // A 1.5 MB keyframe written over 2 s: the kernel takes bytes at every observation.
-        for i in 1...20 {
-            let r = d.observe(.init(nowUs: UInt64(i) * 100_000, progressBytes: UInt64(i) * 75_000,
-                                    outstandingSinceUs: 100_000))
-            XCTAssertFalse(r.newEvent)
-            XCTAssertEqual(r.activeUs, 0)
+        // Ended unseen.
+        let r = d.observe(.init(writerLongGapsEnded: 1, writerLastLongGapUs: 220_000))
+        XCTAssertTrue(r.newEvent)
+        XCTAssertEqual(r.endedUs, 220_000)
+        // Seen open, then ended: one event.
+        XCTAssertTrue(d.observe(.init(writerBusy: true, writerOpenGapUs: 200_000, writerLongGapsEnded: 1)).newEvent)
+        let end = d.observe(.init(writerLongGapsEnded: 2, writerLastLongGapUs: 320_000))
+        XCTAssertFalse(end.newEvent)
+        XCTAssertEqual(end.endedUs, 320_000)
+    }
+
+    func testNoWorkIsNeverAStall() {
+        var d = SendStallDetector()
+        for _ in 0..<20 {
+            XCTAssertEqual(d.observe(.init(sinceProgressUs: 5_000_000)), .init(newEvent: false, activeUs: 0))
         }
     }
 
-    func testNoOutstandingWorkIsNeverAStall() {
+    func testQueueHeadAgeWithoutProgressIsAStallOnlyWhenNothingIsBeingWritten() {
         var d = SendStallDetector()
-        for i in 1...20 {
-            let r = d.observe(.init(nowUs: UInt64(i) * 100_000, progressBytes: 5, outstandingSinceUs: nil))
-            XCTAssertEqual(r, .init(newEvent: false, activeUs: 0), "a still screen sends nothing")
-        }
-        // Work appears after a long idle: the idle time before it does not count.
-        let r = d.observe(.init(nowUs: 2_100_000, progressBytes: 5, outstandingSinceUs: 2_090_000))
-        XCTAssertFalse(r.newEvent)
-    }
-
-    func testQueueHeadAgeWithoutProgressIsAStall() {
-        var d = SendStallDetector()
-        _ = d.observe(.init(nowUs: 100_000, progressBytes: 10, outstandingSinceUs: nil))
-        // No write in progress; the head frame has waited since 100 ms (the gate is closed).
-        XCTAssertFalse(d.observe(.init(nowUs: 200_000, progressBytes: 10, outstandingSinceUs: 100_000)).newEvent)
-        XCTAssertTrue(d.observe(.init(nowUs: 300_000, progressBytes: 10, outstandingSinceUs: 100_000)).newEvent)
+        XCTAssertFalse(d.observe(.init(sinceProgressUs: 400_000, headAgeUs: 100_000)).newEvent, "head is young")
+        XCTAssertFalse(d.observe(.init(sinceProgressUs: 100_000, headAgeUs: 400_000)).newEvent, "bytes moved 100 ms ago")
+        XCTAssertTrue(d.observe(.init(sinceProgressUs: 160_000, headAgeUs: 400_000)).newEvent)
+        XCTAssertFalse(d.observe(.init(sinceProgressUs: 260_000, headAgeUs: 500_000)).newEvent)
+        // A record being written is the writer's business.
+        var e = SendStallDetector()
+        XCTAssertFalse(e.observe(.init(writerBusy: true, writerOpenGapUs: 50_000, sinceProgressUs: 900_000,
+                                       headAgeUs: 900_000)).newEvent)
     }
 
     // MARK: Controller, S
@@ -269,6 +269,36 @@ final class WifiAdaptV2Tests: XCTestCase {
         XCTAssertEqual(r.downSteps, 1)
         for _ in 0..<3 { r.tick(srtt: 30, sb: 200_000) }
         XCTAssertEqual(r.downSteps, 1, "three fresh samples are not enough, the old ones are spent")
+    }
+
+    func testStallRightAfterANonStallStepIsNotConsumed() {
+        var r = Rig()
+        for _ in 0..<4 { r.tick(srtt: 30, sb: 200_000) }  // moderate step, no stall involved
+        XCTAssertEqual(r.lastStep?.reason, .moderate)
+        // A stall starts at once and runs: no tick with stallActiveMs == 0 in between.
+        r.tick(stall: true, active: 200)
+        for ms in stride(from: 300, through: 700, by: 100) { r.tick(active: UInt32(ms)) }
+        XCTAssertEqual(r.lastStep?.reason, .severe, "a 500 ms stall is heavy on its own")
+        XCTAssertEqual(r.downSteps, 2)
+    }
+
+    func testStallRunningAtAStepIsConsumedAndANewOneIsFresh() {
+        var r = Rig()
+        r.tick(stall: true, active: 200)
+        r.tick(active: 300); r.tick(active: 400); r.tick(active: 500)
+        XCTAssertEqual(r.downSteps, 1)
+        for ms in stride(from: 600, through: 2_000, by: 100) { r.tick(active: UInt32(ms)) }
+        XCTAssertEqual(r.downSteps, 1, "consumed")
+        // A new stall starts right away, with no idle tick between: it is fresh.
+        r.tick(stall: true, active: 200)
+        for ms in stride(from: 300, through: 500, by: 100) { r.tick(active: UInt32(ms)) }
+        XCTAssertEqual(r.downSteps, 2)
+    }
+
+    func testStallThatEndedBetweenSamplesCountsByItsLength() {
+        var r = Rig()
+        r.tick(stall: true, active: 0, ended: 600)
+        XCTAssertEqual(r.lastStep?.toKbps, 42_000)
     }
 
     // MARK: Hold and recovery

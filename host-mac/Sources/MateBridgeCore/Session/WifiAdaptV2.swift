@@ -75,9 +75,13 @@ public struct WifiAdaptV2Controller: Sendable {
         public var stallStarted: Bool
         /// Length of the stall in progress, ms (0: none).
         public var stallActiveMs: UInt32
+        /// Length of the longest stall that ended since the previous sample (one that ended between two samples is
+        /// seen only here), ms.
+        public var stallEndedMs: UInt32
 
         public init(nowUs: UInt64, srttMs: UInt32, sendBufferBytes: UInt32, txPacketsDelta: UInt64,
-                    retransmitPacketsDelta: UInt64, stallStarted: Bool = false, stallActiveMs: UInt32 = 0) {
+                    retransmitPacketsDelta: UInt64, stallStarted: Bool = false, stallActiveMs: UInt32 = 0,
+                    stallEndedMs: UInt32 = 0) {
             self.nowUs = nowUs
             self.srttMs = srttMs
             self.sendBufferBytes = sendBufferBytes
@@ -85,6 +89,7 @@ public struct WifiAdaptV2Controller: Sendable {
             self.retransmitPacketsDelta = retransmitPacketsDelta
             self.stallStarted = stallStarted
             self.stallActiveMs = stallActiveMs
+            self.stallEndedMs = stallEndedMs
         }
     }
 
@@ -142,6 +147,7 @@ public struct WifiAdaptV2Controller: Sendable {
     private var stallEventsUs: [UInt64] = []
     /// The stall running at the last step was used for it; it cannot count again.
     private var stallConsumed = false
+    private var stallActiveNow = false
     private var lastStepUs: UInt64?
     private var holdUntilUs: UInt64 = 0
     private var lastClimbUs: UInt64 = 0
@@ -192,7 +198,10 @@ public struct WifiAdaptV2Controller: Sendable {
         push(&backlogRing, s.sendBufferBytes, keep: Constants.backlogTicks)
         if s.stallStarted { stallEventsUs.append(now) }
         stallEventsUs.removeAll { now > $0 && now - $0 > Constants.stallEventWindowMs * 1_000 }
-        if s.stallActiveMs == 0 { stallConsumed = false }
+        // A stall that was part of a step cannot count again; a stall that starts, or that has ended, is a new one.
+        let consumedBefore = stallConsumed
+        if s.stallActiveMs == 0 || s.stallStarted { stallConsumed = false }
+        stallActiveNow = s.stallActiveMs > 0
 
         // Signals.
         let stallNow = s.stallStarted || s.stallActiveMs > 0
@@ -216,7 +225,8 @@ public struct WifiAdaptV2Controller: Sendable {
 
         // Verdict.
         let freshStalls = stallEventsUs.count
-        let longStall = !stallConsumed && s.stallActiveMs >= UInt32(Constants.longStallMs)
+        let longStall = (!stallConsumed && s.stallActiveMs >= UInt32(Constants.longStallMs))
+            || (!consumedBefore && s.stallEndedMs >= UInt32(Constants.longStallMs))
         let heavyStall = freshStalls >= 2 || longStall
         let heavy = heavyStall || (d50 && backlog)
         let moderate = (d20 && backlog) || (loss && backlog)
@@ -269,7 +279,7 @@ public struct WifiAdaptV2Controller: Sendable {
         lastStepUs = now
         holdUntilUs = max(holdUntilUs, now + Constants.stepHoldMs * 1_000)
         clearEvidence()
-        stallConsumed = true  // a running stall was part of the evidence; it ends before it can count again
+        stallConsumed = stallActiveNow  // only a stall running now was part of the evidence; it cannot count again
         floorHeavyFirstUs = nil  // at the floor, the 2 s count from the next heavy evidence
         return step
     }

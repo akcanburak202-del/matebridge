@@ -328,6 +328,8 @@ public final class BsdTcpConnection: @unchecked Sendable {
     private var writeArmed = false
     private var pendingCancelHandlers = 0
     private var outbound = SocketWriteBuffer<Completion>()
+    /// Writer-side progress timing (T-379), under `lock`.
+    private var gapMeter = WriteGapMeter()
     /// Someone saw the socket above its low-water mark and waits for `writableHandler`.
     private var wantWritable = false
     private var writableHandler: (@Sendable () -> Void)?
@@ -444,6 +446,7 @@ public final class BsdTcpConnection: @unchecked Sendable {
             guard !cancelled, !finishing,
                   outbound.admits(byteCount: bytes.count, maxRecords: maxPendingRecords, maxBytes: maxPendingBytes)
             else { return false }
+            gapMeter.workQueued(nowNs: Self.nowNs(), wasIdle: outbound.isEmpty)
             outbound.append(bytes, token: completion)
             let (outcome, completed) = drainLocked()
             done = completed
@@ -578,10 +581,21 @@ public final class BsdTcpConnection: @unchecked Sendable {
 
     /// Caller holds `lock`.
     private func drainLocked() -> (SocketWriteBuffer<Completion>.DrainOutcome, completed: [Completion]) {
-        outbound.drain { chunk in
+        let result = outbound.drain { chunk in
             let n = Darwin.write(fd, chunk.baseAddress, chunk.count)
+            if n > 0 { gapMeter.progress(nowNs: Self.nowNs(), bytes: n) }
             return .from(returnValue: n, errno: n < 0 ? errno : 0)
         }
+        if outbound.isEmpty { gapMeter.idle() }
+        return result
+    }
+
+    private static func nowNs() -> UInt64 { DispatchTime.now().uptimeNanoseconds }
+
+    /// One consistent reading of the write progress (T-379): accepted bytes, pending bytes and the gap timing are taken
+    /// under one lock, so a record that finishes while the next one starts cannot mix the two.
+    public func writeProgressSnapshot() -> WriteGapMeter.Snapshot {
+        lock.withLock { gapMeter.snapshot(nowNs: Self.nowNs(), pendingBytes: outbound.pendingBytes) }
     }
 
     /// Caller holds `lock`. Before `start` there is no source yet; `start` arms it then.

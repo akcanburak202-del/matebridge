@@ -8,11 +8,12 @@ import XCTest
 /// - Ten ticks per row, at +100 ms ... +1000 ms. `srtt` and the send buffer are the row's value on all ten ticks (the
 ///   worst case for a false decrease: a buffer that stays up is a buffer that "does not fall").
 /// - `retx` and `tx` of the row are split evenly over the ten ticks.
-/// - A row with `stall_ms` >= 150 holds one stall: the sender's byte progress stops right after the first tick of the
-///   row (+100 ms) and resumes `stall_ms` later. The detector then sees it at the first tick at least 150 ms into it,
-///   so a 163 ms stall straddles too few ticks to be seen; that is the phase the 100 ms grid gives it.
+/// - A row with `stall_ms` >= 150 holds one stall: the writer queues a record at +100 ms (right after the first
+///   tick), moves 100 bytes at +101 ms, then makes no progress until `stall_ms` later and finishes it. The writer
+///   (`WriteGapMeter`) times that gap itself, so the stall is counted whether or not a tick falls inside it.
 /// - The send buffer is not interpolated between rows (a buffer that stays up is a buffer that "does not fall").
-/// - Every other tick makes progress (12.5 KB per tick) and has fresh outstanding work.
+/// - Every other tick has a record written 5 ms before it (12.5 KB, progress 1 ms later), so there is always fresh
+///   work and progress; the head of the send queue is empty.
 struct V2Replay {
     var controller: WifiAdaptV2Controller
     var detector = SendStallDetector()
@@ -21,7 +22,6 @@ struct V2Replay {
     var stallEventsUs: [UInt64] = []
     /// The target at the end of each row.
     var targets: [Int] = []
-    private var bytes: UInt64 = 0
     private var second = 0
 
     init(ceilingKbps: Int) { controller = WifiAdaptV2Controller(ceilingKbps: ceilingKbps) }
@@ -33,23 +33,49 @@ struct V2Replay {
         }
     }
 
+    private var meter = WriteGapMeter()
+
     mutating func run(_ trace: String) {
         for row in Self.parse(trace) {
             let rowStart = baseUs + UInt64(second) * 1_000_000
             let stallFrom = rowStart + 100_000
             let stallTo = stallFrom + row.stallMs * 1_000
+            // Writer actions of this row, in microseconds.
+            enum Act { case queue, progress(Int), idle }
+            var acts: [(UInt64, Act)] = []
+            if row.stallMs > 0 {
+                acts += [(stallFrom + 1_000, .queue), (stallFrom + 1_001, .progress(100)), (stallTo, .progress(12_400)),
+                         (stallTo + 1_000, .idle)]
+            }
             for k in 1...10 {
                 let t = rowStart + UInt64(k) * 100_000
-                let stalled = row.stallMs > 0 && t > stallFrom && t < stallTo
-                if !stalled { bytes += 12_500 }
-                let r = detector.observe(.init(nowUs: t, progressBytes: bytes,
-                                               outstandingSinceUs: stalled ? stallFrom : t - 1_000))
+                let w = t - 5_000
+                if row.stallMs == 0 || w < stallFrom || w >= stallTo {
+                    acts += [(w, .queue), (w + 1_000, .progress(12_500)), (w + 2_000, .idle)]
+                }
+            }
+            acts.sort { $0.0 < $1.0 }
+            var next = 0
+            for k in 1...10 {
+                let t = rowStart + UInt64(k) * 100_000
+                while next < acts.count, acts[next].0 <= t {
+                    let (at, act) = acts[next]
+                    switch act {
+                    case .queue: meter.workQueued(nowNs: at * 1_000, wasIdle: true)
+                    case .progress(let n): meter.progress(nowNs: at * 1_000, bytes: n)
+                    case .idle: meter.idle()
+                    }
+                    next += 1
+                }
+                let snap = meter.snapshot(nowNs: t * 1_000, pendingBytes: 0)
+                let r = detector.observe(.init(snap, headAgeUs: nil))
                 if r.newEvent { stallEventsUs.append(t) }
                 let K = UInt64(k)
                 let o = controller.tick(.init(nowUs: t, srttMs: row.srtt, sendBufferBytes: row.sbKB * 1024,
                                               txPacketsDelta: row.tx * K / 10 - row.tx * (K - 1) / 10,
                                               retransmitPacketsDelta: row.retx * K / 10 - row.retx * (K - 1) / 10,
-                                              stallStarted: r.newEvent, stallActiveMs: UInt32(r.activeUs / 1_000)))
+                                              stallStarted: r.newEvent, stallActiveMs: UInt32(r.activeUs / 1_000),
+                                              stallEndedMs: UInt32(r.endedUs / 1_000)))
                 if let s = o.step { steps.append((second, t, s)) }
             }
             targets.append(controller.targetKbps)

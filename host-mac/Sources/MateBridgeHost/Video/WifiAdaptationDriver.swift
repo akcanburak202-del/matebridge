@@ -6,10 +6,10 @@ import MateBridgeCore
 /// connection: a 100 ms timer reads the connection's TCP state and the sender's write progress, feeds the pure
 /// `WifiAdaptV2Controller`, and applies its target to the live encoder (no restart, no keyframe, no admission gate).
 ///
-/// Where S is measured. `SocketVideoTransport.writeObservation` gives the bytes the kernel has accepted from the video
-/// writes and when the record in progress started; `VideoFrameQueue.headEnqueuedUs` gives the age of the frame waiting
-/// at the head of the send queue. `SendStallDetector` turns them into stall events (150 ms without byte progress).
-/// Both are host-clock microseconds (`HostClock`), the clock the transport is created with.
+/// Where S is measured. The connection's writer times its own byte progress (`WriteGapMeter`, read through
+/// `SocketVideoTransport.writeObservation`): a record pending for 150 ms without progress is an event, even if it
+/// ended between two ticks. `VideoFrameQueue.headEnqueuedUs` gives the age of the frame waiting at the head of the
+/// send queue (host clock) for the case where the sender is held back by the socket. `SendStallDetector` combines them.
 ///
 /// Tick source. The coordinator's per-second cadence tick is too slow for a decrease and the session server's 100 ms
 /// tick has no pipeline; this timer owns both. It reads `TCP_CONNECTION_INFO` with its own `TcpInfoMeter`, independent
@@ -92,21 +92,23 @@ final class WifiAdaptationDriver: @unchecked Sendable {
         guard !stopped, let pipeline, let info = link.tcpConnectionInfo() else { return }
         let now = HostClock.nowUs()
         let report = meter.take(TcpConnectionSnapshot(info))
-        let obs = link.writeObservation()
-        let outstanding = [obs.writeStartedUs, pipeline.frames.headEnqueuedUs].compactMap { $0 }.min()
-        let stall = detector.observe(.init(nowUs: now, progressBytes: obs.progressBytes, outstandingSinceUs: outstanding))
+        let snapshot = link.writeObservation()
+        let headAge = pipeline.frames.headEnqueuedUs.map { now > $0 ? now - $0 : 0 }
+        let stall = detector.observe(.init(snapshot, headAgeUs: headAge))
         let activeMs = UInt32(min(UInt64(UInt32.max), stall.activeUs / 1_000))
+        let endedMs = UInt32(min(UInt64(UInt32.max), stall.endedUs / 1_000))
         let outcome = controller.tick(.init(nowUs: now, srttMs: report.snapshot.srttMs,
                                             sendBufferBytes: report.snapshot.sendBufferBytes,
                                             txPacketsDelta: report.txPacketsDelta,
                                             retransmitPacketsDelta: report.retransmitPacketsDelta,
-                                            stallStarted: stall.newEvent, stallActiveMs: activeMs))
+                                            stallStarted: stall.newEvent, stallActiveMs: activeMs,
+                                            stallEndedMs: endedMs))
         ticks += 1
         window.sendBufferMax = max(window.sendBufferMax, report.snapshot.sendBufferBytes)
         window.srttMax = max(window.srttMax, report.snapshot.srttMs)
         window.retx += report.retransmitPacketsDelta
         if stall.newEvent { window.stallEvents += 1 }
-        window.stallMaxMs = max(window.stallMaxMs, activeMs)
+        window.stallMaxMs = max(window.stallMaxMs, activeMs, endedMs)
         for (i, flag) in [WifiAdaptV2Controller.Evidence.stall, .delay, .loss, .backlog].enumerated()
         where outcome.evidence.contains(flag) { window.evidenceTicks[i] += 1 }
 

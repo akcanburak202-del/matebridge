@@ -31,7 +31,7 @@ public final class VideoLink: @unchecked Sendable {
         self.logger = logger
         self.sessionID = sessionID
         self.configID = configID
-        self.transport = SocketVideoTransport(connection: socket, sealer: sealer, clockUs: { HostClock.nowUs() })
+        self.transport = SocketVideoTransport(connection: socket, sealer: sealer)
     }
 
     public var canSend: Bool { transport.canSend }
@@ -77,7 +77,7 @@ public final class VideoLink: @unchecked Sendable {
     }
 
     /// Write progress of the video connection for the stall signal (T-379).
-    func writeObservation() -> SocketVideoTransport.WriteObservation { transport.writeObservation() }
+    func writeObservation() -> WriteGapMeter.Snapshot { transport.writeObservation() }
 
     /// `tcpi_snd_sbbytes` of the connection (kernel send buffer: unsent plus unacknowledged); nil when unreadable.
     func sendBufferBytes() -> UInt32? { transport.connection.connectionInfo()?.tcpi_snd_sbbytes }
