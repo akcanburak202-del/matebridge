@@ -38,6 +38,12 @@ files:
 
 ## Plan
 
+1. **Saf denetleyici** `MateBridgeCore/Session/WifiAdaptV2.swift`: `WifiAdaptV2Controller` (zaman enjekte, I/O yok). Girdi her 100 ms: srtt, sndbuf, tx/retx paket deltası, S durumu. Sabitler tek enum'da (`WifiAdaptV2.Constants`), değerler 0023 ekinden. D tabanı `RttBaseline` (30 sn, yalnız boşalmış örnekler, düşük yüzdelik). Ağır ×0,7 / 500 ms, orta ×0,85 / 750 ms, taze kanıt (adımdan sonra halkalar ve S olayları temizlenir), tek başına S/D/L yalnız 2 sn yukarı bekletmesi, taban 30, acil 20 (30'da, girişten >= 2 sn sonra ağır kanıt), 3 temiz sn sonra +2 Mbps/sn, `setCeiling`, `connectionChanged`.
+2. **S ölçümü (gönderici tarafı)**: saf `SendStallDetector` (Core/Video). `SocketVideoTransport` uçuştaki kaydın başlangıcını ve kernel'e verilen kümülatif baytı tutar (`stallObservation`); kuyruk başı yaşı `VideoFrameQueue.headEnqueuedUs`. Detector: bekleyen iş (yazım ya da kuyruk başı) >= 150 ms ve bu sürede bayt ilerlemesi yok -> stall olayı; ilerleyen büyük keyframe yazımı sayılmaz (ilerleme = stall değil).
+3. **Sürücü**: `WifiAdaptationDriver` yeniden yazılır (100 ms zamanlayıcı, TCP bilgisi + stall örneği -> denetleyici -> `pipeline.setTargetBitrate`), `video ev=adapt` değişim satırı + saniyelik durum. v1 (`CongestionController`, `WifiAdaptation`) ve gönderim kapısı (`setAdmission`, `attachAdaptation`) silinir.
+4. **Testler**: denetleyici birim testleri (taze kanıt, aralıklar, acil taban, tavan, bağlantı değişimi, USB knob), detector testleri, iz tekrarları (`WifiAdaptV2Traces`: saniyelik sayısal özet, ham log yok; 1 sn -> 100 ms eşlemesi dosya başlığında belgeli): 20:55 takılması, 14:25-15:11 temiz oturum, v1 çöküş biçimi.
+5. **Belgeler**: LOGGING.md `ev=adapt`, KNOBS.md satır 48.
+
 ## Handoff
 
 ## Open questions
