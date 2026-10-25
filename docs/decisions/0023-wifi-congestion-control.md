@@ -79,3 +79,23 @@ Bütçeler ölçümden **önce** yazılır. Öneri:
 - **Tavan:** kullanıcının/modun bit hızı tavan kalır (0013 önceliği değişmez); denetleyici yalnız altına iner. PROTOCOL §0x03 metin değişikliği T-328 birleşirken orkestratör tarafından yapılır; bayt ve fixture değişmez.
 - T-326 (açık DSCP) bağımsızdır: ses/kontrolü AP'de videodan ayırır, video kuyruğunu küçültmez. A/B'ler ayrı kollarla ölçülür.
 - **Durum (2026-10-09 akşam):** T-326 (`MATEBRIDGE_IP_TOS`) ve T-327/T-328 (`MATEBRIDGE_WIFI_ADAPT`) birleşti; host `61718882` kurulu. Kullanıcı kararı: ikisi de **varsayılan kapalı kalır**; cihaz A/B'si ve tcpdump doğrulaması şimdilik yapılmadı. Yeniden açılırsa önce tcpdump (DSCP'nin IPv4 başlığına ulaştığı), sonra Oyun 60 Mbps A/B.
+
+**Ek (2026-10-25): WIFI_ADAPT v2 — yalnız bit hızı, doğrulanmış kanıt (T-379).**
+- **Neden:** v1 (T-327/T-328) 2026-10-23 TotK'de çöktü: tek başına srtt fazlası düşüşü tetikledi, ×0,7 adımlar 1,2 sn'de 12 Mbps tabanına indi, bit hızına bağlı gönderim kapısı daralıp kuyruk düşüşü → zorunlu IDR döngüsü kurdu (NOTES 2026-10-23; astra incelemesi `docs/reviews/2026-10-25/astra-wifi-game.md` öneri 1). T-370 (kodlama öncesi ezme) ve T-378 (busy'de kare tutma, tek sınırlı toparlanma IDR'ı) önkoşulları sağladı.
+- **Yeni kanıt (2026-10-25 20:55:36–41, NOTES):** kullanıcının gördüğü takılmada srtt 4–11 ms (fazla yok), retx 1–3 paket/sn (%0,1 altı), ama video yazımı tekrar tekrar ~200 ms bloklandı (`write_ms` max 220, `queue_ms` p95 ~200) ve `unacked` = `cwnd`. Yani bu WLAN'da asıl sinyal **ilerlemeyen gönderim**dir; srtt ve kayıp oranı tek başına bu olayı yakalamaz. Aynı gün temiz oturumda (14:25–15:11) 36 dk'da takılma yok.
+- **Kapsam:** yalnız `transport=network`, ana video akışı. Tavan = kullanıcının/modun bit hızı (0013 önceliği aynı). Anahtar aynı: `MATEBRIDGE_WIFI_ADAPT=1`, varsayılan kapalı; v2, v1 denetleyicisinin yerini alır (v1 kodu ve **ek gönderim kapısı kaldırılır**). Açık anahtarla değişen tek şey canlı kodlayıcı bit hızıdır (`VTSessionSetProperty`; yeniden başlatma, IDR, ekran değişimi, kapı daraltma yok). Tel değişmez; PROTOCOL §0x03 "tavan" metni 2026-10-09 ekindeki gibi.
+- **Örnekleme:** 100 ms. Sinyaller:
+  - **S (stall):** devam eden video yazımı ya da kuyruk başındaki karenin yaşı ≥ 150 ms ve bu sürede yazılan bayt ilerlemiyor (ilerleyen büyük keyframe yazımı stall sayılmaz, bir yerleşme aralığı tanınır).
+  - **D (gecikme):** srtt − taban ≥ 20 ms; taban = son 30 sn'de boşalan (birikimsiz) örneklerin düşük yüzdeliği, bağlantı değişince sıfırlanır; kalıcı tıkanıklık taban olarak öğrenilmez.
+  - **L (kayıp):** kayan 1 sn'de retx/tx ≥ %1 ve ≥ 4 paket.
+  - **B (birikim boşalmıyor):** `sndbuf_bytes`/bekleyen bayt 250 ms boyunca düşmüyor.
+- **Karar yasası** (ilk kalibrasyon; cihazda doğrulanmamış sabitler, tek yerde sabit olarak tanımlanır):
+  - **Ağır:** son 2 sn'de ≥ 2 ayrı S olayı, ya da tek S ≥ 500 ms, ya da 5 örneğin ≥ 3'ünde D ≥ 50 ms ve B. Yanıt **×0,7**, en sık 500 ms'de bir.
+  - **Orta:** 5 örneğin ≥ 3'ünde D ≥ 20 ms ve B, ya da L ve B. Yanıt **×0,85**, en sık 750 ms'de bir.
+  - Her adımdan sonra **taze kanıt** gerekir (aynı olay ikinci kez sayılmaz).
+  - **Tek başına** S, D ya da L (yukarıdakiler sağlanmadan): düşüş yok, yalnız 2 sn yukarı adım beklemesi.
+  - **Taban:** normal taban **30 Mbps** (tavan daha düşükse tavan). **Acil taban 20 Mbps** yalnız 30'dayken 2 sn daha ağır kanıt sürerse. Tabanda kapı sıkılaşmaz, IDR üretilmez.
+  - **Çıkış:** 3 temiz saniyeden sonra **+2 Mbps/sn**, tavana kadar. Boşta tavana sıçrama yok.
+- **Kayıt:** `video ev=adapt` (her değişim: `from_kbps to_kbps reason=severe|moderate|recover|emergency evidence=S,D,L,B`) ve saniyelik durum alanları; `sent_kbps`'in `bitrate_set`'i izlediği cihazda doğrulanır.
+- **Varsayılan açma:** cihaz A/B'si (aynı gün, anahtar açık/kapalı, Oyun 60) ve ayrı ek ile. Ölçüt: takılma (`cap_dec_ms` > 150 ve gösterim boşlukları) azalmalı, temiz oturumda gereksiz düşüş ≤ 1/10 dk, tabana kilitlenme yok, IDR artmıyor.
+- **Beklenti (çıkarım):** radyo tıkanması sırasında donmayı önleyemez (TCP eksik baytı bekler), ama tıkanma tekrarlarken arkada biriken baytı yarıya indirip toparlanmayı ve ezilen kare sayısını azaltır. Kullanıcı onayı: 2026-10-25 ("Evet").
