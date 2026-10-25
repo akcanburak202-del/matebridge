@@ -40,7 +40,7 @@ Karar 0043: Glide Keyboard touchpad'inde (pointer capture, `RelPointerTracker.on
 
 ## Handoff
 
-- Commit: SHA_PLACEHOLDER (branch `task/T-376-client-pad-swipe`, base 2fc62354).
+- Commit: 44f7eef5 (branch `task/T-376-client-pad-swipe`, base 2fc62354).
 - Dosyalar: `protocol/Messages.kt`, `protocol/Codec.kt`, `input/RelPointerTracker.kt`, `input/InputCapture.kt` (yalnız `onEvent`i tracker'a verir), `PadSwipeTest.kt`, `FixtureTest.kt`, `CodecRulesTest.kt`, `docs/LOGGING.md`. `Model.kt` ve `MotionEventAdapter.kt` değişmedi (gerek olmadı).
 - check.sh: Android (gradle) OK, fixtures OK. Swift tarafında `FixtureTests.everyFixtureFileHasATestCase` kırmızı: `pad_swipe_*` fixture'ları için host testi yok. Bu T-375 (host) kapsamı, bu kartta dokunulmadı.
 - Varsayımlar: pad Y ekranla aynı yönde (aşağı artar) kabul edildi; ters çıkarsa `swipeStep` içindeki `swipeDy < 0f` işareti çevrilir. Eşik her iki eksen için extent (X aralığı) üzerinden; Y aralığı ayrıca okunmuyor. Çapraz hareket ilk eşikte gönderilmez ama sonra baskın eksene dönerse gönderilebilir (hareket başına yine en çok bir).
