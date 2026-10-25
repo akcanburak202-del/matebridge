@@ -38,8 +38,6 @@ public final class SocketVideoTransport: VideoTransport, @unchecked Sendable {
     private var sealer: RecordSealer
     private var inFlight = 0
     private var readyHandler: (@Sendable () -> Void)?
-    /// Extra admission of new frames (T-328, Wi-Fi congestion control); nil = the gate above only, exactly as before.
-    private var admission: (@Sendable () -> Bool)?
 
     public init(connection: BsdTcpConnection, sealer: RecordSealer) {
         self.connection = connection
@@ -48,26 +46,17 @@ public final class SocketVideoTransport: VideoTransport, @unchecked Sendable {
     }
 
     public var canSend: Bool {
-        let (inFlight, admission) = lock.withLock { (self.inFlight, self.admission) }
+        let inFlight = lock.withLock { self.inFlight }
         // A record of ours is still in user space: its completion wakes the sender, no need to ask the socket (which
         // would arm its writable notification).
         guard inFlight < SocketVideoGate.maxRecordsInFlight else { return false }
         guard SocketVideoGate.canSend(recordsInFlight: inFlight, socketBelowLowat: connection.isWritableForNewRecord)
         else { return false }
-        // T-328: the in-flight byte budget, asked last and only here. `sendFrame` does not ask again: a frame the
-        // sender already took must not be refused (it would be lost and ask for a keyframe), and the sender asks
-        // before every frame.
-        return admission?() ?? true
+        return true
     }
 
-    /// Sets (or clears) the extra admission of new frames. The closure runs on the sender's thread, outside this
-    /// transport's lock, and must wake the sender through `notifyReady` when a refusal may pass later.
-    public func setAdmission(_ admission: (@Sendable () -> Bool)?) {
-        lock.withLock { self.admission = admission }
-    }
-
-    /// Fires the ready handler: the sender asks `canSend` again. For an admission that was refused earlier.
-    public func notifyReady() { fireReady() }
+    /// Write progress for the stall signal (T-379), one consistent reading from the connection's writer.
+    public func writeObservation() -> WriteGapMeter.Snapshot { connection.writeProgressSnapshot() }
 
     public func setReadyHandler(_ handler: (@Sendable () -> Void)?) {
         lock.withLock { readyHandler = handler }
@@ -79,7 +68,12 @@ public final class SocketVideoTransport: VideoTransport, @unchecked Sendable {
     }
 
     public func sendResult(_ frame: VideoFrame, completion: @escaping @Sendable (Bool) -> Void) -> VideoSendResult {
-        switch sendFrame(frame, completion: completion) {
+        sendResult(frame, queueWaitUs: 0, completion: completion)
+    }
+
+    public func sendResult(_ frame: VideoFrame, queueWaitUs: UInt64, completion: @escaping @Sendable (Bool) -> Void)
+        -> VideoSendResult {
+        switch sendFrame(frame, queueWaitUs: queueWaitUs, completion: completion) {
         case .sent: return .accepted
         case .busy: return .busy
         case .writeRefused: return .refused(.write)
@@ -89,7 +83,8 @@ public final class SocketVideoTransport: VideoTransport, @unchecked Sendable {
     }
 
     /// Seals and queues one frame; see `SendOutcome`. `completion(true)` once the kernel accepted the whole record.
-    public func sendFrame(_ frame: VideoFrame, completion: @escaping @Sendable (Bool) -> Void = { _ in }) -> SendOutcome {
+    public func sendFrame(_ frame: VideoFrame, queueWaitUs: UInt64 = 0,
+                          completion: @escaping @Sendable (Bool) -> Void = { _ in }) -> SendOutcome {
         let message = Message.videoFrame(frame)
         lock.lock()
         defer { lock.unlock() }
@@ -108,7 +103,7 @@ public final class SocketVideoTransport: VideoTransport, @unchecked Sendable {
         }
         inFlight += 1
         // Never calls back inside `write`, so holding `lock` here cannot deadlock.
-        let queued = connection.write(bytes) { [weak self] ok in
+        let queued = connection.write(bytes, headWaitNs: queueWaitUs &* 1_000) { [weak self] ok in
             guard let self else { return completion(ok) }
             let ready = lock.withLock {
                 inFlight -= 1

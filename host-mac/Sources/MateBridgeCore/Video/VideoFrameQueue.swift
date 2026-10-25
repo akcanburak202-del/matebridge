@@ -12,12 +12,18 @@ public final class VideoFrameQueue: @unchecked Sendable {
     private var finished = false
     private var pushedKeyframes: UInt64 = 0
     private let keyframeNeeded: @Sendable () -> Void
+    /// Stamps `FrameTrace.enqueuedUs` on every insertion that has no stamp yet (T-379: the age of the head frame is part
+    /// of the stall signal, and a resync config or a first-connection config must have one too).
+    private let clockUs: @Sendable () -> UInt64
 
     /// - Parameter keyframeNeeded: called (outside the lock) when a dropped delta frame requires a new keyframe. It
     ///   only says that one is needed; when to force it is the caller's decision (T-176: `KeyframeRequestCoalescer.hostDrop`
     ///   with `keyframeState`), and deltas stay refused until a keyframe is pushed.
-    public init(capacity: Int = BoundedFrameQueue.defaultCapacity, keyframeNeeded: @escaping @Sendable () -> Void) {
+    public init(capacity: Int = BoundedFrameQueue.defaultCapacity,
+                clockUs: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds / 1_000 },
+                keyframeNeeded: @escaping @Sendable () -> Void) {
         policy = BoundedFrameQueue(capacity: capacity)
+        self.clockUs = clockUs
         self.keyframeNeeded = keyframeNeeded
     }
 
@@ -44,6 +50,12 @@ public final class VideoFrameQueue: @unchecked Sendable {
     /// A popped frame that is charged (`setChargesPops`) and not yet settled counts too.
     public var queuedCount: Int { lock.withLock { policy.reservedCount } }
 
+    /// When the frame at the head of the queue was enqueued (`FrameTrace.enqueuedUs`, host clock); nil when the queue
+    /// is empty or the frame carries no stamp (T-379: the age of the head is part of the stall signal).
+    public var headEnqueuedUs: UInt64? {
+        lock.withLock { policy.first.flatMap { $0.trace.enqueuedUs > 0 ? $0.trace.enqueuedUs : nil } }
+    }
+
     /// T-378: the sender charges the frame it popped to `queuedCount` until it `settlePop()`s or `unpop`s it.
     /// Turning it off releases any charge.
     public func setChargesPops(_ on: Bool) {
@@ -67,7 +79,15 @@ public final class VideoFrameQueue: @unchecked Sendable {
     /// `BoundedFrameQueue.breakChain`: the caller dropped a frame the queue had handed out.
     public func breakChain() { lock.withLock { policy.breakChain() } }
 
+    private func stamped(_ frame: EncodedVideoFrame) -> EncodedVideoFrame {
+        guard frame.trace.enqueuedUs == 0 else { return frame }
+        var f = frame
+        f.trace.enqueuedUs = max(1, clockUs())
+        return f
+    }
+
     public func push(_ frame: EncodedVideoFrame) {
+        let frame = stamped(frame)
         lock.lock()
         if finished { lock.unlock(); return }
         if frame.isKeyframe { pushedKeyframes &+= 1 }
@@ -140,7 +160,7 @@ public final class VideoFrameQueue: @unchecked Sendable {
         lock.lock()
         let pushed = pushedKeyframes
         guard let config = provider() else { lock.unlock(); return ResyncResult(configQueued: false, keyframesPushed: pushed) }
-        policy.resync(config: config)
+        policy.resync(config: stamped(config))
         var handoff: (CheckedContinuation<EncodedVideoFrame?, Never>, EncodedVideoFrame)?
         if !finished, let w = waiter, let f = policy.pop() {
             waiter = nil
@@ -159,7 +179,7 @@ public final class VideoFrameQueue: @unchecked Sendable {
     /// a resync, the queue is reset even when there is no config yet.
     public func startNewConsumer(configProvider: () -> EncodedVideoFrame?) {
         lock.lock()
-        policy.startNewConsumer(config: configProvider())
+        policy.startNewConsumer(config: configProvider().map(stamped))
         lock.unlock()
     }
 

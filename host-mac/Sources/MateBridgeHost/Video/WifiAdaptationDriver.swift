@@ -2,24 +2,26 @@ import Darwin
 import Foundation
 import MateBridgeCore
 
-/// Runs Wi-Fi congestion control (T-328, `MATEBRIDGE_WIFI_ADAPT=1`, network sessions only) for one video connection:
-/// a `WifiAdaptation` on the link's frame gate, a 100 ms timer that feeds it the connection's TCP state and the host
-/// queue's drop count, and the controller's target bit rate applied to the live encoder (no restart, no keyframe).
+/// Runs Wi-Fi bit rate adaptation v2 (T-379, `MATEBRIDGE_WIFI_ADAPT=1`, network sessions only) for one video
+/// connection: a 100 ms timer reads the connection's TCP state and the sender's write progress, feeds the pure
+/// `WifiAdaptV2Controller`, and applies its target to the live encoder (no restart, no keyframe, no admission gate).
 ///
-/// Tick source. The coordinator's per-second cadence tick is too slow (a decrease one second late is 7 MB of queue at
-/// 60 Mbps) and the session server's 100 ms tick has no pipeline; this timer owns both, so it needs nothing from the
-/// session queue. It reads `TCP_CONNECTION_INFO` ten times a second with its own `TcpInfoMeter`, independent of the
-/// per-second `net ev=tcp` meter (that one's window base never moves). The per-frame admission reads the send buffer
-/// on its own, at most every 2 ms (`WifiAdaptation.sampleFreshUs`).
+/// Where S is measured. The connection's writer times its own byte progress (`WriteGapMeter`, read through
+/// `SocketVideoTransport.writeObservation`): a record pending for 150 ms without progress is an event, even if it
+/// ended between two ticks. `VideoFrameQueue.headEnqueuedUs` gives the age of the frame waiting at the head of the
+/// send queue (host clock) for the case where the sender is held back by the socket. `SendStallDetector` combines them.
 ///
-/// Encoder rate. A lower target is applied at once, so is the ceiling (idle recovery jumps there); other higher ones at most every `WifiAdaptation.upApplyIntervalUs`, because the
-/// controller climbs in 250 kbps steps several times a second and every apply reconfigures the VideoToolbox session.
-/// `stop()` puts the encoder back at the ceiling: the next connection starts a new controller there.
+/// Tick source. The coordinator's per-second cadence tick is too slow for a decrease and the session server's 100 ms
+/// tick has no pipeline; this timer owns both. It reads `TCP_CONNECTION_INFO` with its own `TcpInfoMeter`, independent
+/// of the per-second `net ev=tcp` meter.
+///
+/// The ceiling is the pipeline's configured bit rate, fixed for the pipeline's lifetime (a user change restarts the
+/// stream, which builds a new driver). `stop()` puts the encoder back at the ceiling.
 final class WifiAdaptationDriver: @unchecked Sendable {
-    static let tickMs = 100
+    static let tickMs = WifiAdaptV2Controller.Constants.tickMs
     static let logEveryTicks = 10
 
-    let adaptation: WifiAdaptation
+    let ceilingKbps: Int
     private let link: VideoLink
     private weak var pipeline: VideoPipeline?
     private let logger: SessionLogger
@@ -31,10 +33,22 @@ final class WifiAdaptationDriver: @unchecked Sendable {
     private var timer: DispatchSourceTimer?
     private var stopped = false
     // Timer queue only (and `start`, before the timer runs).
+    private var controller: WifiAdaptV2Controller
+    private var detector = SendStallDetector()
     private var meter = TcpInfoMeter()
     private var ticks = 0
-    private var appliedKbps: Int
-    private var lastUpApplyUs: UInt64 = 0
+    private var window = Window()
+
+    /// One second of the books, for `video ev=adapt_state`.
+    private struct Window {
+        var sendBufferMax: UInt32 = 0
+        var srttMax: UInt32 = 0
+        var retx: UInt64 = 0
+        var stallEvents = 0
+        var stallMaxMs: UInt32 = 0
+        var evidenceTicks = [Int](repeating: 0, count: 4)  // S, D, L, B
+        var steps = 0
+    }
 
     init(link: VideoLink, pipeline: VideoPipeline, logger: SessionLogger) {
         self.link = link
@@ -42,22 +56,16 @@ final class WifiAdaptationDriver: @unchecked Sendable {
         self.logger = logger
         sessionID = link.sessionID
         configID = link.configID
-        let ceiling = pipeline.settings.bitrateKbps
-        appliedKbps = ceiling
-        adaptation = WifiAdaptation(
-            config: .init(ceilingKbps: ceiling, framesPerSecond: pipeline.settings.fps),
-            readSendBuffer: { [weak link] in link?.sendBufferBytes() },
-            nowUs: { HostClock.nowUs() })
+        ceilingKbps = pipeline.settings.bitrateKbps
+        controller = WifiAdaptV2Controller(ceilingKbps: ceilingKbps)
     }
 
-    /// Puts the gate on the link and starts the timer. The encoder is set to the ceiling first: an earlier connection
-    /// of this pipeline may have left it lower.
+    /// Starts the timer. The encoder is set to the ceiling first: an earlier connection of this pipeline may have left
+    /// it lower.
     func start() {
-        pipeline?.setTargetBitrate(kbps: adaptation.ceilingKbps)
-        link.attachAdaptation(adaptation)
+        pipeline?.setTargetBitrate(kbps: ceilingKbps)
         logger.log(.info, "adapt_start", sessionID: sessionID, generation: configID,
-                   fields: "ceiling_kbps=\(adaptation.ceilingKbps) floor_kbps=\(CongestionController.defaultFloorKbps) "
-                       + "tick_ms=\(Self.tickMs)")
+                   fields: "ceiling_kbps=\(ceilingKbps) floor_kbps=\(controller.floorKbps) tick_ms=\(Self.tickMs)")
         let t = DispatchSource.makeTimerSource(queue: queue)
         t.schedule(deadline: .now() + .milliseconds(Self.tickMs), repeating: .milliseconds(Self.tickMs))
         t.setEventHandler { [weak self] in self?.tick() }
@@ -65,7 +73,7 @@ final class WifiAdaptationDriver: @unchecked Sendable {
         t.resume()
     }
 
-    /// Stops the timer and the gate; the encoder goes back to the ceiling. Idempotent, never blocks.
+    /// Stops the timer; the encoder goes back to the ceiling. Idempotent, never blocks.
     func stop() {
         let t: DispatchSourceTimer? = lock.withLock {
             guard !stopped else { return nil }
@@ -74,8 +82,7 @@ final class WifiAdaptationDriver: @unchecked Sendable {
             return timer
         }
         t?.cancel()
-        adaptation.stop()
-        pipeline?.setTargetBitrate(kbps: adaptation.ceilingKbps)
+        pipeline?.setTargetBitrate(kbps: ceilingKbps)
     }
 
     private func tick() {
@@ -83,25 +90,45 @@ final class WifiAdaptationDriver: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         guard !stopped, let pipeline, let info = link.tcpConnectionInfo() else { return }
-        let report = meter.take(TcpConnectionSnapshot(info))
-        let result = adaptation.tick(report: report, queueDropsTotal: pipeline.frames.droppedCount)
-        ticks += 1
         let now = HostClock.nowUs()
-        if result.targetKbps != appliedKbps {
-            let down = result.targetKbps < appliedKbps
-            if WifiAdaptation.shouldApply(target: result.targetKbps, applied: appliedKbps,
-                                          ceiling: adaptation.ceilingKbps, nowUs: now, lastUpApplyUs: lastUpApplyUs) {
-                logger.log(down ? .info : .debug, "adapt_step", sessionID: sessionID, generation: configID,
-                           fields: "from_kbps=\(appliedKbps) to_kbps=\(result.targetKbps) "
-                               + "trigger=\(result.trigger?.rawValue ?? (down ? "other" : "up"))")
-                appliedKbps = result.targetKbps
-                if !down { lastUpApplyUs = now }
-                pipeline.setTargetBitrate(kbps: result.targetKbps)
-            }
+        let report = meter.take(TcpConnectionSnapshot(info))
+        let snapshot = link.writeObservation()
+        let headAge = pipeline.frames.headEnqueuedUs.map { now > $0 ? now - $0 : 0 }
+        let stall = detector.observe(.init(snapshot, headAgeUs: headAge, nowUs: now))
+        let activeMs = UInt32(min(UInt64(UInt32.max), stall.activeUs / 1_000))
+        let endedMs = UInt32(min(UInt64(UInt32.max), stall.endedUs / 1_000))
+        let outcome = controller.tick(.init(nowUs: now, srttMs: report.snapshot.srttMs,
+                                            sendBufferBytes: report.snapshot.sendBufferBytes,
+                                            txPacketsDelta: report.txPacketsDelta,
+                                            retransmitPacketsDelta: report.retransmitPacketsDelta,
+                                            stallEvents: stall.events, stallActiveMs: activeMs,
+                                            stallEndedMs: endedMs,
+                                            stallEventAgesMs: stall.eventAgesUs.map { UInt32(min($0 / 1_000, UInt64(UInt32.max))) }))
+        ticks += 1
+        window.sendBufferMax = max(window.sendBufferMax, report.snapshot.sendBufferBytes)
+        window.srttMax = max(window.srttMax, report.snapshot.srttMs)
+        window.retx += report.retransmitPacketsDelta
+        window.stallEvents += stall.events
+        window.stallMaxMs = max(window.stallMaxMs, activeMs, endedMs)
+        for (i, flag) in [WifiAdaptV2Controller.Evidence.stall, .delay, .loss, .backlog].enumerated()
+        where outcome.evidence.contains(flag) { window.evidenceTicks[i] += 1 }
+
+        if let step = outcome.step {
+            window.steps += 1
+            logger.log(step.toKbps < step.fromKbps ? .info : .debug, "adapt", sessionID: sessionID, generation: configID,
+                       fields: "from_kbps=\(step.fromKbps) to_kbps=\(step.toKbps) reason=\(step.reason.rawValue) "
+                           + "evidence=\(step.evidence.logValue)")
+            pipeline.setTargetBitrate(kbps: step.toKbps)
         }
         if ticks % Self.logEveryTicks == 0 {
-            logger.log(.info, "adapt", sessionID: sessionID, generation: configID,
-                       fields: adaptation.takeLogWindow().logFields)
+            let w = window
+            window = Window()
+            logger.log(.info, "adapt_state", sessionID: sessionID, generation: configID,
+                       fields: "target_kbps=\(controller.targetKbps) srtt_ms_max=\(w.srttMax) "
+                           + "base_ms=\(controller.baselineMs.map { "\($0)" } ?? "na") sbbytes_max=\(w.sendBufferMax) "
+                           + "retx_pkts=\(w.retx) stall_events=\(w.stallEvents) stall_max_ms=\(w.stallMaxMs) "
+                           + "s_ticks=\(w.evidenceTicks[0]) d_ticks=\(w.evidenceTicks[1]) l_ticks=\(w.evidenceTicks[2]) "
+                           + "b_ticks=\(w.evidenceTicks[3]) steps=\(w.steps)")
         }
     }
 }

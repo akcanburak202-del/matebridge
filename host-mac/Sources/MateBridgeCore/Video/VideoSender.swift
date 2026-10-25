@@ -12,11 +12,20 @@ public protocol VideoTransport: Sendable {
     /// Like `send`, but tells a temporary `.busy` (nothing sealed or sent, retry the same frame) from a real refusal
     /// (T-378). The default maps `send`'s Bool: a false is `.refused(.other)`.
     func sendResult(_ frame: VideoFrame, completion: @escaping @Sendable (Bool) -> Void) -> VideoSendResult
+    /// Like `sendResult`, with how long the frame waited at the head of the send queue (T-379: stall timing). The
+    /// default ignores the wait.
+    func sendResult(_ frame: VideoFrame, queueWaitUs: UInt64, completion: @escaping @Sendable (Bool) -> Void)
+        -> VideoSendResult
 }
 
 extension VideoTransport {
     public func sendResult(_ frame: VideoFrame, completion: @escaping @Sendable (Bool) -> Void) -> VideoSendResult {
         send(frame, completion: completion) ? .accepted : .refused(.other)
+    }
+
+    public func sendResult(_ frame: VideoFrame, queueWaitUs: UInt64, completion: @escaping @Sendable (Bool) -> Void)
+        -> VideoSendResult {
+        sendResult(frame, completion: completion)
     }
 }
 
@@ -224,7 +233,12 @@ public final class VideoSender: @unchecked Sendable {
             timing.isKeyframe = encoded.isKeyframe
             timing.bytes = size
         }
-        let result = transport.sendResult(frame) { [self, timing] ok in
+        var queueWaitUs: UInt64 = 0
+        if encoded.view == 0, encoded.trace.enqueuedUs > 0 {
+            let now = clock()
+            if now > encoded.trace.enqueuedUs { queueWaitUs = now - encoded.trace.enqueuedUs }
+        }
+        let result = transport.sendResult(frame, queueWaitUs: queueWaitUs) { [self, timing] ok in
             if !ok {
                 markFailed()
                 lock.withLock { wakeLoop }?()

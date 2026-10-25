@@ -116,7 +116,7 @@ public final class VideoPipeline: @unchecked Sendable {
         self.keyframes = keyframes
         let box = EncoderBox(keyframes: keyframes)
         self.box = box
-        let frames = VideoFrameQueue(keyframeNeeded: { box.queueDropped() })
+        let frames = VideoFrameQueue(clockUs: { HostClock.nowUs() }, keyframeNeeded: { box.queueDropped() })
         self.frames = frames
         box.frames = frames
         // An auxiliary overflow only breaks the auxiliary chain: an auxiliary keyframe, no coalescing needed (the
@@ -125,7 +125,7 @@ public final class VideoPipeline: @unchecked Sendable {
         auxKeyframes = auxGate
         let auxBox = EncoderBox(keyframes: auxGate, view: .auxiliary)
         self.auxBox = auxBox
-        let auxFrames = VideoFrameQueue(keyframeNeeded: { auxBox.queueDropped() })
+        let auxFrames = VideoFrameQueue(clockUs: { HostClock.nowUs() }, keyframeNeeded: { auxBox.queueDropped() })
         self.auxFrames = auxFrames
         auxBox.frames = auxFrames
     }

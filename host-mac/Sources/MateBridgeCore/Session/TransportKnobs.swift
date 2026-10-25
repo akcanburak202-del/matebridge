@@ -183,8 +183,8 @@ public enum NotSentLowatKnob {
     public static func bytes(_ env: [String: String]) -> Int { parseKB(env) * 1024 }
 }
 
-/// `MATEBRIDGE_WIFI_ADAPT=1` (T-328, decision 0023 branch (c)): the Wi-Fi video congestion controller (T-327) gates new
-/// frames on the in-flight byte budget and follows its target bit rate live. Default off. Only `1` turns it on; absent
+/// `MATEBRIDGE_WIFI_ADAPT=1` (T-379, decision 0023 addendum 2026-10-25): the Wi-Fi video bit rate controller (v2) follows
+/// congestion evidence with the live encoder bit rate; nothing else changes. Default off. Only `1` turns it on; absent
 /// or anything else is off. Never active on USB: a `.usb` session never consults the knob.
 public enum WifiAdaptKnob {
     public static let name = "MATEBRIDGE_WIFI_ADAPT"

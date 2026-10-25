@@ -240,39 +240,71 @@ final class BsdTcpSocketTests: XCTestCase {
         server.listener.cancel()
     }
 
-    /// T-328: the extra admission closes `canSend` on an otherwise idle, writable socket, `notifyReady` wakes the
-    /// sender, and clearing it restores the plain gate. A frame the sender already took is not refused by it.
-    func testAdmissionGatesCanSendOnlyAndWakesThroughNotifyReady() throws {
+    /// T-379: the write observation (the stall signal's input) starts at zero and after a finished write counts the
+    /// whole sealed record with nothing pending.
+    func testWriteObservationCountsFinishedRecords() throws {
         let server = try Server(options: BsdTcpOptions(notSentLowatBytes: 128 * 1024))
         let client = connectClient(port: server.listener.port)
         defer { close(client) }
         let c = try XCTUnwrap(server.waitAccepted())
         let t = SocketVideoTransport(connection: c, sealer: RecordSealer(key: key,
                                                                            maxPayload: ProtocolConstants.maxVideoPayload))
-        XCTAssertTrue(t.canSend, "no admission: the plain gate")
+        let before = t.writeObservation()
+        XCTAssertEqual(before.acceptedBytes, 0)
+        XCTAssertFalse(before.busy)
 
-        let open = LockedFlag(false)
-        let asked = Counter()
-        t.setAdmission { asked.increment(); return open.value }
-        XCTAssertFalse(t.canSend)
-        XCTAssertEqual(asked.value, 1)
-
-        let woken = DispatchSemaphore(value: 0)
-        t.setReadyHandler { woken.signal() }
-        open.set(true)
-        t.notifyReady()
-        XCTAssertEqual(woken.wait(timeout: .now() + 2), .success)
-        XCTAssertTrue(t.canSend)
-
-        // Taken while admitted, refused afterwards: `sendFrame` sends anyway and the record counter is used.
-        open.set(false)
         let done = DispatchSemaphore(value: 0)
         XCTAssertEqual(t.sendFrame(frame(0, size: 1000)) { _ in done.signal() }, .sent)
         XCTAssertEqual(done.wait(timeout: .now() + 5), .success)
+        let after = t.writeObservation()
+        XCTAssertFalse(after.busy)
+        XCTAssertEqual(after.pendingBytes, 0)
+        XCTAssertGreaterThan(after.acceptedBytes, 1000, "the whole sealed record counts")
 
-        t.setAdmission(nil)
-        XCTAssertTrue(waitCanSend(t), "cleared: back to the plain gate")
         let reader = Reader(fd: client)
+        c.cancel()
+        _ = reader.done.wait(timeout: .now() + 5)
+        server.listener.cancel()
+    }
+
+    /// T-379: accepted and pending bytes come from one critical section. While records are written back to back (one
+    /// finishing as the next starts), accepted never goes down, and accepted + pending (everything ever queued) never
+    /// goes down either; at the end they add up to exactly what was queued.
+    func testWriteProgressSnapshotIsConsistentAcrossRecordTransitions() throws {
+        let server = try Server(options: BsdTcpOptions())
+        let client = connectClient(port: server.listener.port)
+        defer { close(client) }
+        let c = try XCTUnwrap(server.waitAccepted())
+        let reader = Reader(fd: client)
+        let stop = LockedFlag(false)
+        let violations = Counter()
+        let sampler = Thread {
+            var lastAccepted: UInt64 = 0
+            var lastTotal: UInt64 = 0
+            while !stop.value {
+                let s = c.writeProgressSnapshot()
+                let total = s.acceptedBytes + UInt64(s.pendingBytes)
+                if s.acceptedBytes < lastAccepted || total < lastTotal { violations.increment() }
+                lastAccepted = s.acceptedBytes
+                lastTotal = total
+            }
+        }
+        sampler.start()
+        var queued = 0
+        for i in 0..<400 {
+            let record = [UInt8](repeating: UInt8(i & 0xFF), count: 20_000 + (i % 7) * 3_000)
+            while !c.write(record, completion: { _ in }) { Thread.sleep(forTimeInterval: 0.001) }
+            queued += record.count
+        }
+        let deadline = Date().addingTimeInterval(10)
+        while c.writeProgressSnapshot().pendingBytes > 0, Date() < deadline { Thread.sleep(forTimeInterval: 0.005) }
+        stop.set(true)
+        Thread.sleep(forTimeInterval: 0.05)
+        XCTAssertEqual(violations.value, 0)
+        let end = c.writeProgressSnapshot()
+        XCTAssertEqual(end.pendingBytes, 0)
+        XCTAssertEqual(end.acceptedBytes, UInt64(queued))
+        XCTAssertFalse(end.busy)
         c.cancel()
         _ = reader.done.wait(timeout: .now() + 5)
         server.listener.cancel()
