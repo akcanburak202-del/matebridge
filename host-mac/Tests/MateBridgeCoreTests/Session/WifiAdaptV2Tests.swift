@@ -117,8 +117,10 @@ final class WifiAdaptV2Tests: XCTestCase {
 
     func testStallKeepsItsIdentityWhenTheHeadIsReplacedMidBlockage() {
         var d = SendStallDetector()
+        var clock: UInt64 = 10_000_000
         func head(since: UInt64, age: UInt64?) -> SendStallDetector.Result {
-            d.observe(.init(sinceProgressUs: since * 1_000, headAgeUs: age.map { $0 * 1_000 }))
+            clock += 100_000
+            return d.observe(.init(nowUs: clock, sinceProgressUs: since * 1_000, headAgeUs: age.map { $0 * 1_000 }))
         }
         XCTAssertFalse(head(since: 100, age: 100).newEvent)
         XCTAssertTrue(head(since: 200, age: 200).newEvent, "blocked 200 ms")
@@ -131,6 +133,28 @@ final class WifiAdaptV2Tests: XCTestCase {
         // Bytes move: the stall is over; a later blockage is a new event.
         XCTAssertEqual(head(since: 50, age: 10), .init(newEvent: false, activeUs: 0))
         XCTAssertTrue(head(since: 200, age: 200).newEvent)
+    }
+
+    func testHeadStallDurationStartsWhenTheWorkArrivedNotAtTheLastProgress() {
+        var d = SendStallDetector()
+        // Last bytes moved at 0; the frame arrives at 1000 ms and the socket does not take it.
+        func poll(nowMs: UInt64) -> SendStallDetector.Result {
+            let age = nowMs > 1_000 ? nowMs - 1_000 : 0
+            return d.observe(.init(nowUs: nowMs * 1_000, sinceProgressUs: nowMs * 1_000,
+                                   headAgeUs: age > 0 ? age * 1_000 : nil))
+        }
+        XCTAssertFalse(poll(nowMs: 1_100).newEvent)
+        let first = poll(nowMs: 1_200)
+        XCTAssertTrue(first.newEvent)
+        XCTAssertEqual(first.activeUs, 200_000)
+        XCTAssertEqual(poll(nowMs: 1_300).activeUs, 300_000, "300 ms of blockage, not 1300 ms since the last write")
+    }
+
+    func testALatePollCoveringTwoEndedStallsReportsBoth() {
+        var d = SendStallDetector()
+        let r = d.observe(.init(writerLongGapsEnded: 2, writerLastLongGapUs: 220_000))
+        XCTAssertEqual(r.events, 2)
+        XCTAssertEqual(r.endedUs, 220_000)
     }
 
     func testNoWorkIsNeverAStall() {
@@ -341,6 +365,14 @@ final class WifiAdaptV2Tests: XCTestCase {
         r.tick(stall: true, active: 0, ended: 700)  // heavy, but at the floor: nothing to lower to
         r.quiet(ticks: 40)
         XCTAssertFalse(r.steps.dropFirst(before).contains { $0.step.toKbps < $0.step.fromKbps }, "no emergency from one old event")
+    }
+
+    func testTwoStallEventsInOneSampleAreHeavy() {
+        var r = Rig()
+        r.now += 100_000
+        let o = r.c.tick(.init(nowUs: r.now, srttMs: 6, sendBufferBytes: 0, txPacketsDelta: 20, retransmitPacketsDelta: 0,
+                               stallEvents: 2, stallEndedMs: 220))
+        XCTAssertEqual(o.step, .init(fromKbps: 60_000, toKbps: 42_000, reason: .severe, evidence: .stall))
     }
 
     func testStallThatEndedBetweenSamplesCountsByItsLength() {

@@ -68,13 +68,13 @@ struct V2Replay {
                     next += 1
                 }
                 let snap = meter.snapshot(nowNs: t * 1_000, pendingBytes: 0)
-                let r = detector.observe(.init(snap, headAgeUs: nil))
-                if r.newEvent { stallEventsUs.append(t) }
+                let r = detector.observe(.init(snap, headAgeUs: nil, nowUs: t))
+                for _ in 0..<r.events { stallEventsUs.append(t) }
                 let K = UInt64(k)
                 let o = controller.tick(.init(nowUs: t, srttMs: row.srtt, sendBufferBytes: row.sbKB * 1024,
                                               txPacketsDelta: row.tx * K / 10 - row.tx * (K - 1) / 10,
                                               retransmitPacketsDelta: row.retx * K / 10 - row.retx * (K - 1) / 10,
-                                              stallStarted: r.newEvent, stallActiveMs: UInt32(r.activeUs / 1_000),
+                                              stallEvents: r.events, stallActiveMs: UInt32(r.activeUs / 1_000),
                                               stallEndedMs: UInt32(r.endedUs / 1_000)))
                 if let s = o.step { steps.append((second, t, s)) }
             }

@@ -94,20 +94,20 @@ final class WifiAdaptationDriver: @unchecked Sendable {
         let report = meter.take(TcpConnectionSnapshot(info))
         let snapshot = link.writeObservation()
         let headAge = pipeline.frames.headEnqueuedUs.map { now > $0 ? now - $0 : 0 }
-        let stall = detector.observe(.init(snapshot, headAgeUs: headAge))
+        let stall = detector.observe(.init(snapshot, headAgeUs: headAge, nowUs: now))
         let activeMs = UInt32(min(UInt64(UInt32.max), stall.activeUs / 1_000))
         let endedMs = UInt32(min(UInt64(UInt32.max), stall.endedUs / 1_000))
         let outcome = controller.tick(.init(nowUs: now, srttMs: report.snapshot.srttMs,
                                             sendBufferBytes: report.snapshot.sendBufferBytes,
                                             txPacketsDelta: report.txPacketsDelta,
                                             retransmitPacketsDelta: report.retransmitPacketsDelta,
-                                            stallStarted: stall.newEvent, stallActiveMs: activeMs,
+                                            stallEvents: stall.events, stallActiveMs: activeMs,
                                             stallEndedMs: endedMs))
         ticks += 1
         window.sendBufferMax = max(window.sendBufferMax, report.snapshot.sendBufferBytes)
         window.srttMax = max(window.srttMax, report.snapshot.srttMs)
         window.retx += report.retransmitPacketsDelta
-        if stall.newEvent { window.stallEvents += 1 }
+        window.stallEvents += stall.events
         window.stallMaxMs = max(window.stallMaxMs, activeMs, endedMs)
         for (i, flag) in [WifiAdaptV2Controller.Evidence.stall, .delay, .loss, .backlog].enumerated()
         where outcome.evidence.contains(flag) { window.evidenceTicks[i] += 1 }

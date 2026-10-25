@@ -33,8 +33,9 @@ final class WriteGapMeterTests: XCTestCase {
                 }
                 next += 1
             }
-            let r = det.observe(.init(meter.snapshot(nowNs: ns(Double(t)), pendingBytes: 0), headAgeUs: nil))
-            if r.newEvent { events += 1 }
+            let r = det.observe(.init(meter.snapshot(nowNs: ns(Double(t)), pendingBytes: 0), headAgeUs: nil,
+                                       nowUs: UInt64(t) * 1_000))
+            events += r.events
             maxActive = max(maxActive, Double(r.activeUs) / 1_000)
             maxEnded = max(maxEnded, Double(r.endedUs) / 1_000)
             t += 100
@@ -134,8 +135,9 @@ final class WriteGapMeterTests: XCTestCase {
                 meter.idle()
             }
             let age: UInt64? = (!accepted && Double(t) >= enqueued) ? UInt64((Double(t) - enqueued) * 1_000) : nil
-            let r = det.observe(.init(meter.snapshot(nowNs: UInt64(t) * 1_000_000, pendingBytes: 0), headAgeUs: age))
-            if r.newEvent { events += 1 }
+            let r = det.observe(.init(meter.snapshot(nowNs: UInt64(t) * 1_000_000, pendingBytes: 0), headAgeUs: age,
+                                       nowUs: UInt64(t) * 1_000))
+            events += r.events
             maxActive = max(maxActive, Double(r.activeUs) / 1_000)
             maxEnded = max(maxEnded, Double(r.endedUs) / 1_000)
             t += 100

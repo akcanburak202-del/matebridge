@@ -76,6 +76,13 @@ files:
 - **İz sayıları değişmedi** (20:17: 60/42/35,7/30; 20:55: 60/42/30; temiz: 3 düşüş / 46 dk, min 51).
 - Tam `swift test` (taskpolicy -b): 782 test, 0 hata.
 
+## Handoff — codex round 4 fixes (2 x P2)
+
+1. **Kuyruk-başı takılma süresi**: dedektör artık `nowUs` alır ve sayılan kuyruk-başı takılmasının başlangıcını (`now - min(yaş, sonİlerlemedenBeri)`: iş geldiğinde ya da son ilerlemede, hangisi geç) saklar; süre `now - başlangıç` (baş kare değişse de korunur), son yazımdan beri geçen boşta süreyi içermez. Test: `testHeadStallDurationStartsWhenTheWorkArrivedNotAtTheLastProgress`.
+2. **Olay sayısı**: `SendStallDetector.Result.events: Int` (`newEvent` türetilmiş), `WifiAdaptV2Controller.Sample.stallEvents` (`stallStarted` türetilmiş); geç bir poll'un kapsadığı iki biten takılma iki olay sayılır, sürücü sayıyı geçirir. Testler: `testALatePollCoveringTwoEndedStallsReportsBoth`, `testTwoStallEventsInOneSampleAreHeavy`.
+- **İz sayıları değişmedi** (20:17: 60/42/35,7/30; 20:55: 60/42/30; temiz: 3 düşüş / 46 dk, min 51).
+- Tam `swift test` (taskpolicy -b): 785 test, 0 hata; `swift build` tamam.
+
 ## Open questions
 
 - B eşiği (20 ms hız, >= 32 KiB) ve acil taban "yeni kanıt" şartı ek metninde yok; yukarıdaki sapma listesi 0023 ekine işlenmeli mi?

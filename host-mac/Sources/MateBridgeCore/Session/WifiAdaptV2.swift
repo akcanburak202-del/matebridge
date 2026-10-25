@@ -71,8 +71,9 @@ public struct WifiAdaptV2Controller: Sendable {
         public var sendBufferBytes: UInt32
         public var txPacketsDelta: UInt64
         public var retransmitPacketsDelta: UInt64
-        /// A stall started at this sample (`SendStallDetector.Result.newEvent`).
-        public var stallStarted: Bool
+        /// Stalls found at this sample (`SendStallDetector.Result.events`; a late poll can cover several).
+        public var stallEvents: Int
+        public var stallStarted: Bool { stallEvents > 0 }
         /// Length of the stall in progress, ms (0: none).
         public var stallActiveMs: UInt32
         /// Length of the longest stall that ended since the previous sample (one that ended between two samples is
@@ -80,14 +81,14 @@ public struct WifiAdaptV2Controller: Sendable {
         public var stallEndedMs: UInt32
 
         public init(nowUs: UInt64, srttMs: UInt32, sendBufferBytes: UInt32, txPacketsDelta: UInt64,
-                    retransmitPacketsDelta: UInt64, stallStarted: Bool = false, stallActiveMs: UInt32 = 0,
+                    retransmitPacketsDelta: UInt64, stallStarted: Bool = false, stallEvents: Int = 0, stallActiveMs: UInt32 = 0,
                     stallEndedMs: UInt32 = 0) {
             self.nowUs = nowUs
             self.srttMs = srttMs
             self.sendBufferBytes = sendBufferBytes
             self.txPacketsDelta = txPacketsDelta
             self.retransmitPacketsDelta = retransmitPacketsDelta
-            self.stallStarted = stallStarted
+            self.stallEvents = max(stallEvents, stallStarted ? 1 : 0)
             self.stallActiveMs = stallActiveMs
             self.stallEndedMs = stallEndedMs
         }
@@ -197,7 +198,7 @@ public struct WifiAdaptV2Controller: Sendable {
         push(&delayRing, (excess >= Constants.delayModerateMs, excess >= Constants.delayHeavyMs), keep: Constants.delaySamples)
         push(&lossRing, (s.retransmitPacketsDelta, s.txPacketsDelta), keep: Constants.lossTicks)
         push(&backlogRing, s.sendBufferBytes, keep: Constants.backlogTicks)
-        if s.stallStarted { stallEventsUs.append(now) }
+        for _ in 0..<min(s.stallEvents, 8) { stallEventsUs.append(now) }
         stallEventsUs.removeAll { now > $0 && now - $0 > Constants.stallEventWindowMs * 1_000 }
         // A stall that was part of a step cannot count again; a stall that starts, or that has ended, is a new one.
         let consumedBefore = stallConsumed

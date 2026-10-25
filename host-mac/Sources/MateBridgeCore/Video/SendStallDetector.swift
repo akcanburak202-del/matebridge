@@ -19,6 +19,8 @@ public struct SendStallDetector: Equatable, Sendable {
     public static let thresholdUs: UInt64 = 150_000
 
     public struct Observation: Equatable, Sendable {
+        /// Clock of the caller, microseconds (any monotone clock): the blocked work's start is kept across polls.
+        public var nowUs: UInt64
         public var writerBusy: Bool
         /// Writer: time since the last progress while a record is pending (0 when not busy).
         public var writerOpenGapUs: UInt64
@@ -30,8 +32,9 @@ public struct SendStallDetector: Equatable, Sendable {
         /// Age of the frame at the head of the send queue; nil when the queue is empty.
         public var headAgeUs: UInt64?
 
-        public init(writerBusy: Bool = false, writerOpenGapUs: UInt64 = 0, writerLongGapsEnded: UInt64 = 0,
+        public init(nowUs: UInt64 = 0, writerBusy: Bool = false, writerOpenGapUs: UInt64 = 0, writerLongGapsEnded: UInt64 = 0,
                     writerLastLongGapUs: UInt64 = 0, sinceProgressUs: UInt64 = 0, headAgeUs: UInt64? = nil) {
+            self.nowUs = nowUs
             self.writerBusy = writerBusy
             self.writerOpenGapUs = writerOpenGapUs
             self.writerLongGapsEnded = writerLongGapsEnded
@@ -41,23 +44,29 @@ public struct SendStallDetector: Equatable, Sendable {
         }
 
         /// From a writer snapshot (nanoseconds) and the head frame's age.
-        public init(_ s: WriteGapMeter.Snapshot, headAgeUs: UInt64?) {
-            self.init(writerBusy: s.busy, writerOpenGapUs: s.openGapNs / 1_000, writerLongGapsEnded: s.longGapsEnded,
+        public init(_ s: WriteGapMeter.Snapshot, headAgeUs: UInt64?, nowUs: UInt64 = 0) {
+            self.init(nowUs: nowUs, writerBusy: s.busy, writerOpenGapUs: s.openGapNs / 1_000, writerLongGapsEnded: s.longGapsEnded,
                       writerLastLongGapUs: s.lastLongGapNs / 1_000, sinceProgressUs: s.sinceProgressNs / 1_000,
                       headAgeUs: headAgeUs)
         }
     }
 
     public struct Result: Equatable, Sendable {
-        /// A stall was found at this observation (one that started, or one that ended since the last observation).
-        public var newEvent: Bool
+        /// Stalls found at this observation: ones that started, and ones that ended since the last observation (a late
+        /// poll can cover several).
+        public var events: Int
+        public var newEvent: Bool { events > 0 }
         /// How long the stall still open has lasted; 0 when there is none.
         public var activeUs: UInt64
         /// Length of the longest stall that ended since the last observation; 0 when none.
         public var endedUs: UInt64
 
         public init(newEvent: Bool, activeUs: UInt64, endedUs: UInt64 = 0) {
-            self.newEvent = newEvent
+            self.init(events: newEvent ? 1 : 0, activeUs: activeUs, endedUs: endedUs)
+        }
+
+        public init(events: Int, activeUs: UInt64, endedUs: UInt64 = 0) {
+            self.events = events
             self.activeUs = activeUs
             self.endedUs = endedUs
         }
@@ -66,6 +75,8 @@ public struct SendStallDetector: Equatable, Sendable {
     private var lastEnded: UInt64 = 0
     private var writerOpenCounted = false
     private var headOpenCounted = false
+    /// When the work behind the counted head stall became blocked: the later of its enqueue and the last byte progress.
+    private var headBlockStartUs: UInt64 = 0
 
     public init() {}
 
@@ -95,18 +106,21 @@ public struct SendStallDetector: Equatable, Sendable {
         // config at the head) keeps the stall that is already counted, until bytes move again.
         if !o.writerBusy, let age = o.headAgeUs {
             let blocked = o.sinceProgressUs >= Self.thresholdUs
+            let idle = min(age, o.sinceProgressUs)
             if headOpenCounted, blocked {
-                active = max(active, o.sinceProgressUs)
-            } else if min(age, o.sinceProgressUs) >= Self.thresholdUs {
+                // Not the time since the last progress: that includes idle time before the frame arrived.
+                active = max(active, o.nowUs > headBlockStartUs ? o.nowUs - headBlockStartUs : idle)
+            } else if idle >= Self.thresholdUs {
                 events += 1
                 headOpenCounted = true
-                active = max(active, min(age, o.sinceProgressUs))
+                headBlockStartUs = o.nowUs > idle ? o.nowUs - idle : 0
+                active = max(active, idle)
             } else {
                 headOpenCounted = false
             }
         } else {
             headOpenCounted = false
         }
-        return Result(newEvent: events > 0, activeUs: active, endedUs: ended)
+        return Result(events: events, activeUs: active, endedUs: ended)
     }
 }
