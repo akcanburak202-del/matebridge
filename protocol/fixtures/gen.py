@@ -21,7 +21,7 @@ HERE = Path(__file__).resolve().parent
 T = {
     "HELLO": 0x01, "HELLO_ACK": 0x02, "STREAM_CONFIG": 0x03, "BYE": 0x04, "STREAM_PREFS": 0x05, "CLIPBOARD": 0x06, "DISPLAY_RATE": 0x07, "SETTINGS_OPEN": 0x08, "FILES_INFO": 0x09, "FILES_NET": 0x0A, "CURSOR_PREFS": 0x0B, "CURSOR_SHAPE": 0x0C, "CURSOR_STATE": 0x0D,
     "PEN": 0x10, "KEY": 0x11, "POINTER_REL": 0x12, "POINTER_ABS": 0x13,
-    "SCROLL": 0x14, "PEN_GESTURE": 0x15, "RELEASE_ALL": 0x16, "PINCH": 0x17,
+    "SCROLL": 0x14, "PEN_GESTURE": 0x15, "RELEASE_ALL": 0x16, "PINCH": 0x17, "PAD_SWIPE": 0x18,
     "PING": 0x20, "PONG": 0x21, "STATS": 0x22, "KEYFRAME_REQUEST": 0x23,
     "AUDIO_PREFS": 0x30, "AUDIO_CONFIG": 0x31, "AUDIO_FRAME": 0x32,
     "VIDEO_HELLO": 0x40, "VIDEO_FRAME": 0x41,
@@ -412,6 +412,18 @@ FIXTURES = {
         field("u16", "y", 0),
         field("u8", "phase", 3, "ENDED"),
         field("u8", "source", 1, "TOUCHPAD"),
+        field("u16", "reserved", 0),
+    ])),
+    "pad_swipe_up": ("PAD_SWIPE: three fingers up on the touchpad (Mission Control)", frame("PAD_SWIPE", [
+        field("u64", "time_us", 1127501200000),
+        field("u8", "direction", 1, "UP"),
+        field("u8", "fingers", 3),
+        field("u16", "reserved", 0),
+    ])),
+    "pad_swipe_left": ("PAD_SWIPE: three fingers left on the touchpad (space to the right)", frame("PAD_SWIPE", [
+        field("u64", "time_us", 1127501700000),
+        field("u8", "direction", 3, "LEFT"),
+        field("u8", "fingers", 3),
         field("u16", "reserved", 0),
     ])),
     "stream_prefs": ("STREAM_PREFS: performance mode, 120 fps at 75 percent size", frame("STREAM_PREFS", [

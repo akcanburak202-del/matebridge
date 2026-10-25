@@ -34,6 +34,8 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-334](tasks/T-334-dav-copy-put-concurrency.md) | WebDAV — eşzamanlı COPY/MOVE geri alması başka bağlantının başarılı PUT'unu silmesin | 7 | android-client-dev | [T-288] |
 | [T-335](tasks/T-335-host-pipeline-stop-join.md) | Host — pipeline teardown sürerken ikinci stop çağıranı beklesin; hata zamanı teardown'dan önce alınsın | 7 | mac-host-dev | [T-325, T-293] |
 | [T-367](tasks/T-367-android-timing-tests-flaky.md) | Android — zamanlama testleri yük altında kırmızı (DecoderWaitTest, OutputParkTest, AacDecodeWorkerTest) | 7 | android-client-dev | [] |
+| [T-375](tasks/T-375-host-pad-swipe.md) | Host — PAD_SWIPE (0x18) çöz, Control+ok sistem kısayolu olarak enjekte et | 7 | mac-host-dev | [] |
+| [T-376](tasks/T-376-client-pad-swipe.md) | İstemci — touchpad'de üç parmak kaydırmayı tanı, PAD_SWIPE (0x18) gönder | 7 | android-client-dev | [] |
 
 ## done
 

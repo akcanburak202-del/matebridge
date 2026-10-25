@@ -44,7 +44,7 @@ USB kullanımında aynı bağlantılar `adb reverse` ile taşınır. Protokol de
 - **İsteğe bağlı sondaki grup:** sona sonradan eklenen alanlar bir grup olarak tanımlanabilir. Payload grubun hiçbir baytını içermiyorsa alıcı belgedeki varsayılanı kullanır; grubun yalnız bir kısmı varsa payload kısadır (protokol hatası). Gönderen, grup varsayılan değerdeyse grubu yazmaz. Şu an tek örnek: `STREAM_PREFS.display_*` (fixture `invalid_stream_prefs_partial`).
 - **Bilinmeyen enum değerleri:**
   - **Durumu belirleyen** alanlarda protokol hatasıdır: `HELLO_ACK.status`, `HELLO_ACK.key_mode`, `STREAM_CONFIG.codec`, `PEN.tool`, `KEY.action`, `POINTER_ABS.source`, `SCROLL.phase`, `PINCH.phase`, `PINCH.source`.
-  - **Bilgi amaçlı** alanlarda kabul edilir ve "bilinmeyen" olarak işlenir: `BYE.reason`, `RELEASE_ALL.reason`, `KEYFRAME_REQUEST.reason` (davranış aynı: bırak / kapat / keyframe), `PEN_GESTURE.gesture` (yok sayılır), `STREAM_CONFIG` renk kodları (bilinmeyen kod: sRGB varsayılır).
+  - **Bilgi amaçlı** alanlarda kabul edilir ve "bilinmeyen" olarak işlenir: `BYE.reason`, `RELEASE_ALL.reason`, `KEYFRAME_REQUEST.reason` (davranış aynı: bırak / kapat / keyframe), `PEN_GESTURE.gesture` (yok sayılır), `PAD_SWIPE.direction` (yok sayılır), `STREAM_CONFIG` renk kodları (bilinmeyen kod: sRGB varsayılır).
   - Tanımsız `capabilities` ve bayrak bitleri yok sayılır.
 - **Protokol hatası:**
   - Kontrol bağlantısında: alıcı `BYE(PROTOCOL_ERROR)` gönderir, **iki bağlantıyı da** kapatır.
@@ -108,6 +108,7 @@ Onaylanmamış cihaz ne görüntü alır ne girdi gönderebilir (PLAN §5.4). İ
 | 0x15 | PEN_GESTURE | C→H | kontrol | `pen_gesture` |
 | 0x16 | RELEASE_ALL | C→H | kontrol | `release_all` |
 | 0x17 | PINCH | C→H | kontrol | `pinch_began`, `pinch`, `pinch_ended` |
+| 0x18 | PAD_SWIPE | C→H | kontrol | `pad_swipe_up`, `pad_swipe_left` |
 | 0x30 | AUDIO_PREFS | C→H | kontrol | `audio_prefs` |
 | 0x31 | AUDIO_CONFIG | H→C | kontrol | `audio_config`, `audio_config_stopped` |
 | 0x32 | AUDIO_FRAME | H→C | kontrol | `audio_frame`, `invalid_audio_frame_short` |
@@ -582,6 +583,37 @@ Host bu oturumun basılı tuttuğu her şeyi bırakır (§7).
 - `source = TOUCH` ise host BEGAN'da imleci merkeze taşır (sürüklemesiz fare hareketi), çünkü macOS uygulamaları büyütmeyi imleç konumunda uygular. TOUCHPAD'de imleç yerinde kalır.
 - Mac'e giden olay: büyütme hareketi (başla / değişim = `scale` / bitti). Sıfır `scale`'li CHANGED enjekte edilmez. **CANCELLED Mac'e "bitti" olarak gider** (Qt'de iptalin karşılığı yok; hareket açık kalırdı).
 - Zorla bitirme (yeni BEGAN, watchdog, release-all, kapı kapanması) Mac'e "bitti" olarak gider.
+
+### 0x18 PAD_SWIPE (C→H)
+
+Touchpad'de üç parmakla kaydırma (karar 0043). Mac'e trackpad hareketi olarak değil, karşılığı olan **sistem kısayolu** olarak gider: macOS'ta Dock kaydırma hareketi dışarıdan üretilemiyor (NOTES 2026-09-30, karar 0009). Geçiş parmağı adım adım izlemez, hareket tanındığında bir kerede olur.
+
+| Alan | Tip | Açıklama |
+|---|---|---|
+| time_us | u64 | Hareketin tanındığı olayın zamanı |
+| direction | u8 | Parmakların gittiği yön: `1` UP, `2` DOWN, `3` LEFT, `4` RIGHT. Bilinmeyen değerler yok sayılır. |
+| fingers | u8 | Parmak sayısı. Bugün yalnız `3` gönderilir. Host başka değerleri yok sayar (ileride dört parmak). |
+| reserved | u16 | |
+
+**İstemci kuralları:**
+- Yalnızca pointer capture altındaki **touchpad**'den gelir (dokunmatik ekrandan değil).
+- Bir hareket (ilk parmağın inişinden son parmağın kalkışına kadar) en çok **bir** PAD_SWIPE üretir. Eşik istemcidedir.
+- Fiziksel tık basılıyken (sürükleme) PAD_SWIPE üretilmez.
+- Üçüncü parmak indiğinde açık SCROLL/PINCH zaten ENDED ile kapanır (§4 SCROLL); PAD_SWIPE'tan önce açık SCROLL/PINCH kalmaz.
+
+**Host kuralları:**
+- Açık SCROLL ya da PINCH varsa önce zorla bitirilir (§4 SCROLL zorla bitirme). Sol düğmenin sahibi varken (sürükleme sürüyor) PAD_SWIPE yok sayılır.
+- Eşleme (macOS varsayılan kısayolları, Sistem Ayarları → Klavye → Kısayollar → Mission Control):
+
+  | direction | Mac'teki kısayol | Etki |
+  |---|---|---|
+  | UP | Control+↑ | Mission Control |
+  | DOWN | Control+↓ | Uygulama pencereleri |
+  | LEFT | Control+→ | Sağdaki masaüstü (gerçek trackpad'de parmaklar sola = sağdaki alan) |
+  | RIGHT | Control+← | Soldaki masaüstü |
+
+- Tuş basışı **tek parça** enjekte edilir: Control ve ok tuşu basılır, aynı anda bırakılır. Mesajlar arasında basılı bir şey kalmaz; release-all'da bırakılacak durum yoktur. Değiştirici bayrakları açıkça yalnız Control'dür. Kullanıcının o anda basılı tuttuğu değiştiriciler (ör. Ctrl → Command) bu olaya karışmaz ve sonrasında olduğu gibi kalır.
+- Önceki PAD_SWIPE'tan sonraki **250 ms** içinde gelen PAD_SWIPE yok sayılır (güvenlik sınırı).
 
 ### 0x20 PING / 0x21 PONG (iki yön)
 
