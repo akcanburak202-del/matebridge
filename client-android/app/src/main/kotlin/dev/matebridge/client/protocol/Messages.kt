@@ -41,6 +41,7 @@ object MsgType {
     const val PEN_GESTURE = 0x15
     const val RELEASE_ALL = 0x16
     const val PINCH = 0x17
+    const val PAD_SWIPE = 0x18
     const val PING = 0x20
     const val PONG = 0x21
     const val STATS = 0x22
@@ -630,6 +631,18 @@ data class Pinch(
         const val SOURCE_TOUCHPAD = 1
         const val MIN_SCALE = -0.5f
         const val MAX_SCALE = 1.0f
+    }
+}
+
+/** Three-finger touchpad swipe (PROTOCOL.md section 4 PAD_SWIPE, decision 0043). [direction] is where the fingers went. */
+data class PadSwipe(val timeUs: Long, val direction: Int, val fingers: Int = 3) : Message {
+    override val type get() = MsgType.PAD_SWIPE
+
+    companion object {
+        const val UP = 1
+        const val DOWN = 2
+        const val LEFT = 3
+        const val RIGHT = 4
     }
 }
 

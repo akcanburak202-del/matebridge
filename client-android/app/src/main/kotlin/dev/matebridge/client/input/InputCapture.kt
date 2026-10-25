@@ -50,7 +50,7 @@ class InputCapture(
     private val touch = TouchTracker(viewport, pen, counters)
     private val doubleTap = DoubleTapDetector()
     private val keys = KeyTracker()
-    private val rel = RelPointerTracker(counters)
+    private val rel = RelPointerTracker(counters, onEvent)
     private val outbox = InputOutbox(sink, counters) { onRefused() }
 
     /** T-278: sees every input message that was sent (local cursor prediction); never changes what is sent. */

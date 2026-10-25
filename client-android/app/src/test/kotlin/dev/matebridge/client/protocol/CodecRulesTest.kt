@@ -95,7 +95,7 @@ class CodecRulesTest {
     fun shortPayloadRejectedForEveryKnownType() {
         for (type in listOf(
             MsgType.HELLO, MsgType.HELLO_ACK, MsgType.STREAM_CONFIG, MsgType.BYE, MsgType.PEN, MsgType.KEY,
-            MsgType.POINTER_REL, MsgType.POINTER_ABS, MsgType.SCROLL, MsgType.PEN_GESTURE, MsgType.RELEASE_ALL,
+            MsgType.POINTER_REL, MsgType.POINTER_ABS, MsgType.SCROLL, MsgType.PEN_GESTURE, MsgType.PAD_SWIPE, MsgType.RELEASE_ALL,
             MsgType.PING, MsgType.PONG, MsgType.STATS, MsgType.KEYFRAME_REQUEST, MsgType.VIDEO_HELLO,
             MsgType.VIDEO_FRAME, MsgType.STREAM_PREFS, MsgType.DISPLAY_RATE, MsgType.SETTINGS_OPEN,
         )) {
@@ -477,7 +477,7 @@ class CodecRulesTest {
     @Test
     fun informationalEnumsAcceptUnknownValues() {
         for (msg in listOf(
-            Bye(200), ReleaseAll(200), KeyframeRequest(200), PenGesture(0, 99),
+            Bye(200), ReleaseAll(200), KeyframeRequest(200), PenGesture(0, 99), PadSwipe(0, 99, 7),
             StreamConfig(1, 1, 1, 1, 1, 1, 1, 1, 99, 99, 99, 7),
         )) {
             assertEquals(msg, decode(Codec.encode(msg)))

@@ -143,6 +143,8 @@ class FixtureTest {
             "pinch_began" to Pinch(1127500800000L, 0f, 24576, 32768, Pinch.BEGAN, Pinch.SOURCE_TOUCH),
             "pinch" to Pinch(1127500816000L, 0.05f, 24576, 32768, Pinch.CHANGED, Pinch.SOURCE_TOUCH),
             "pinch_ended" to Pinch(1127500900000L, 0f, 0, 0, Pinch.ENDED, Pinch.SOURCE_TOUCHPAD),
+            "pad_swipe_up" to PadSwipe(1127501200000L, PadSwipe.UP, 3),
+            "pad_swipe_left" to PadSwipe(1127501700000L, PadSwipe.LEFT, 3),
             "release_all" to ReleaseAll(ReleaseAll.BACKGROUND),
             "ping" to Ping(7, 1127500700000L),
             "pong" to Pong(7, 1127500700000L, 98765432100L),

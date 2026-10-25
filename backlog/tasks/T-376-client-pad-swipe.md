@@ -1,7 +1,7 @@
 ---
 id: T-376
 title: İstemci — touchpad'de üç parmak kaydırmayı tanı, PAD_SWIPE (0x18) gönder
-status: todo
+status: review
 phase: 7
 owner: android-client-dev
 depends_on: []
@@ -33,6 +33,19 @@ Karar 0043: Glide Keyboard touchpad'inde (pointer capture, `RelPointerTracker.on
 
 ## Plan
 
+1. `PadSwipe` (0x18) mesajı + Codec (bilinmeyen yön kabul, yok sayma alıcıda); FixtureTest'e iki fixture, CodecRulesTest'e kısa yük ve bilgi amaçlı enum.
+2. `RelPointerTracker`: üç parmak varken (n == 3, maxCount == 3) ortak ağırlık merkezi yolu izlenir; üçüncü parmaktan sonra 60 ms oturma (taban parmakları izler); eşik extent*0.12, baskın eksen >= 2x; hareket başına bir kez (`swipeSent`); `clicked` / basılı düğme varken gönderilmez. Mevcut `locked` davranışı ve SCROLL/PINCH ENDED kapanışı değişmedi.
+3. Log: `onEvent` geri çağrısı tracker'a verildi (InputCapture'dan); `pad_swipe` ve `pad_swipe3_end`.
+4. `PadSwipeTest` ile kabul 4'teki senaryolar. LOGGING.md.
+
 ## Handoff
+
+- Commit: SHA_PLACEHOLDER (branch `task/T-376-client-pad-swipe`, base 2fc62354).
+- Dosyalar: `protocol/Messages.kt`, `protocol/Codec.kt`, `input/RelPointerTracker.kt`, `input/InputCapture.kt` (yalnız `onEvent`i tracker'a verir), `PadSwipeTest.kt`, `FixtureTest.kt`, `CodecRulesTest.kt`, `docs/LOGGING.md`. `Model.kt` ve `MotionEventAdapter.kt` değişmedi (gerek olmadı).
+- check.sh: Android (gradle) OK, fixtures OK. Swift tarafında `FixtureTests.everyFixtureFileHasATestCase` kırmızı: `pad_swipe_*` fixture'ları için host testi yok. Bu T-375 (host) kapsamı, bu kartta dokunulmadı.
+- Varsayımlar: pad Y ekranla aynı yönde (aşağı artar) kabul edildi; ters çıkarsa `swipeStep` içindeki `swipeDy < 0f` işareti çevrilir. Eşik her iki eksen için extent (X aralığı) üzerinden; Y aralığı ayrıca okunmuyor. Çapraz hareket ilk eşikte gönderilmez ama sonra baskın eksene dönerse gönderilebilir (hareket başına yine en çok bir).
+- Sapma: debug logu yerine info (`MainActivity` dosya listesinde yok, `onEvent` yalnız info). `pad_swipe3_end` hareket başına bir satır, seyrek.
+- Cihazda bakılacak: Glide Keyboard touchpad'inde üç parmakla yukarı/aşağı/yanlara kaydır; `adb logcat -s 'MB:*'` içinde `MB/input ev=pad_swipe3_end` çıkıyor mu (çıkmıyorsa HarmonyOS üç parmağı yutuyor), `dx`/`dy` işaretleri yönle uyuyor mu (parmaklar yukarı = dy negatif, `dir=up`), dört parmakta satır yok, iki parmak kaydırma/pinch bozulmadı, tıklı sürüklemede `sent=0`. Host tarafı (T-375) olmadan Mac'te etki görülmez.
+- Test edilmedi: gerçek tablet (hiçbir şey). T-367 flaky testleri bu koşuda kırmızı vermedi.
 
 ## Open questions

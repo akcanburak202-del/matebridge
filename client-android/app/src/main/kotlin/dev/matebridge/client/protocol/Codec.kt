@@ -278,6 +278,7 @@ object Codec {
                 w.u64(msg.timeUs); w.f32(msg.scale); w.u16(msg.x); w.u16(msg.y)
                 w.u8(msg.phase); w.u8(msg.source); w.u16(0)
             }
+            is PadSwipe -> { w.u64(msg.timeUs); w.u8(msg.direction); w.u8(msg.fingers); w.u16(0) }
             is PenGesture -> { w.u64(msg.timeUs); w.u8(msg.gesture); w.u8(0); w.u16(0) }
             is ReleaseAll -> w.u8(msg.reason)
             is Ping -> { w.u32(msg.seq); w.u64(msg.senderTimeUs) }
@@ -463,6 +464,10 @@ object Codec {
                 checkEnum(phase, 1..4, "PINCH.phase")
                 checkEnum(source, 0..1, "PINCH.source")
                 Pinch(time, scale, x, y, phase, source)
+            }
+            MsgType.PAD_SWIPE -> {
+                val time = r.u64(); val direction = r.u8(); val fingers = r.u8(); r.skip(2)
+                PadSwipe(time, direction, fingers) // unknown direction: the receiver ignores it, not a protocol error
             }
             MsgType.PEN_GESTURE -> {
                 val time = r.u64(); val gesture = r.u8(); r.skip(3)
