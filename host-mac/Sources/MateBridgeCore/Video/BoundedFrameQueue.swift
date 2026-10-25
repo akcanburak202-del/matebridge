@@ -34,6 +34,13 @@ public struct BoundedFrameQueue: Sendable {
     /// returns it first, and it counts toward `count` / `capacity`, so downstream reservations (T-370) see it.
     /// Overflow never drops it: it is the oldest frame and was neither sealed nor sent, so the chain stays intact.
     private var held: EncodedVideoFrame?
+    /// T-378: when on, a popped frame stays charged to the queue's reservation (`reservedCount`) until the consumer
+    /// calls `settle()` (the transport accepted it, or refused it for good) or hands it back with `unpop`. Without
+    /// this the frame vanishes from the downstream accounting between pop and unpop, and a capture admitted into the
+    /// freed slot overflows the queue when the frame comes back. A reset (new consumer, resync, `removeAll`) drops the
+    /// charge, so a stale `unpop` of a frame the reset discarded is refused (no resurrection).
+    public var chargesPops = false
+    private var charged = false
 
     public init(capacity: Int = BoundedFrameQueue.defaultCapacity) {
         precondition(capacity >= 1)
@@ -42,6 +49,9 @@ public struct BoundedFrameQueue: Sendable {
 
     public var count: Int { frames.count + (held == nil ? 0 : 1) }
     public var isEmpty: Bool { frames.isEmpty && held == nil }
+    /// `count` plus the popped frame still charged (see `chargesPops`): what downstream reservations compare with
+    /// `capacity`. Overflow itself (`push`) judges `count` only.
+    public var reservedCount: Int { count + (charged ? 1 : 0) }
     /// A frame is handed back and waits to be offered again (T-378).
     public var hasHeldFrame: Bool { held != nil }
     /// Delta frames are refused until a keyframe is pushed (after a chain-breaking drop, a new consumer or a resync).
@@ -99,19 +109,28 @@ public struct BoundedFrameQueue: Sendable {
     }
 
     public mutating func pop() -> EncodedVideoFrame? {
+        let frame: EncodedVideoFrame?
         if let h = held {
             held = nil
-            return h
+            frame = h
+        } else {
+            frame = frames.isEmpty ? nil : frames.removeFirst()
         }
-        return frames.isEmpty ? nil : frames.removeFirst()
+        charged = chargesPops && frame != nil
+        return frame
     }
+
+    /// The consumer is done with the frame `pop()` returned (accepted, or refused for good): releases its charge.
+    public mutating func settle() { charged = false }
 
     /// T-378: gives back the frame `pop()` just returned because the transport was busy: it becomes the head again,
     /// with no change to the reference chain. At most one frame can be held (the consumer sends one at a time);
     /// returns false, holding nothing, when one already is.
     @discardableResult
     public mutating func unpop(_ frame: EncodedVideoFrame) -> Bool {
-        guard held == nil else { return false }
+        // Refused when a reset discarded the pop's charge (its frame must not come back) or one is already held.
+        guard held == nil, !chargesPops || charged else { return false }
+        charged = false
         held = frame
         return true
     }
@@ -127,6 +146,7 @@ public struct BoundedFrameQueue: Sendable {
     public mutating func startNewConsumer(config: EncodedVideoFrame?) {
         frames.removeAll()
         held = nil  // belongs to the previous consumer's connection
+        charged = false
         keyframeNeeded = false
         awaitingKeyframe = true
         if let config { frames.append(config) }
@@ -175,5 +195,6 @@ public struct BoundedFrameQueue: Sendable {
     public mutating func removeAll() {
         frames.removeAll()
         held = nil
+        charged = false
     }
 }

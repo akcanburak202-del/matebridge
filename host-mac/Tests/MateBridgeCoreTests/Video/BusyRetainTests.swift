@@ -219,6 +219,29 @@ final class BusyRetainTests: XCTestCase {
         }
     }
 
+    func testStartupRetryDoesNotForceASecondIdrWhileTheFirstIsBeingWritten() {
+        var c = KeyframeRequestCoalescer()
+        XCTAssertTrue(c.request(.startup, nowUs: 1_000_000, keyframesPushed: 0, configResent: true).forceKeyframe)
+        // The IDR was pushed (count 1), popped and is partly written; the client retries STARTUP 600 ms later.
+        let retry = c.request(.startup, nowUs: 1_600_000, keyframesPushed: 1, configResent: true,
+                              queuedKeyframeDiscarded: false)
+        XCTAssertFalse(retry.forceKeyframe, "no second IDR behind one that is being written")
+        XCTAssertEqual(retry.action, .configResent, "the config is still re-sent")
+        XCTAssertEqual(c.coalescedTotal, 1)
+        // The same retry when the resync threw the queued IDR away: a keyframe is needed.
+        let discarded = c.request(.startup, nowUs: 2_200_000, keyframesPushed: 1, configResent: true,
+                                  queuedKeyframeDiscarded: true)
+        XCTAssertTrue(discarded.forceKeyframe)
+    }
+
+    func testResyncReportsADiscardedQueuedKeyframe() {
+        let q = VideoFrameQueue(keyframeNeeded: {})
+        let config = EncodedVideoFrame(flags: .codecConfig, captureTimeUs: 0, data: [7])
+        q.push(.init(flags: .keyframe, captureTimeUs: 1, data: [1]))
+        XCTAssertTrue(q.resyncCountingKeyframes(config: { config }).discardedQueuedKeyframe)
+        XCTAssertFalse(q.resyncCountingKeyframes(config: { config }).discardedQueuedKeyframe)
+    }
+
     func testStatsFieldsShowOnlyNonZeroDeltas() {
         var before = VideoSender.Counters()
         before.busyRetries = 2

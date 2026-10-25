@@ -41,7 +41,20 @@ public final class VideoFrameQueue: @unchecked Sendable {
     }
 
     /// Frames waiting in the queue (T-370: the encoder's input back pressure), a handed-back frame included.
-    public var queuedCount: Int { lock.withLock { policy.count } }
+    /// A popped frame that is charged (`setChargesPops`) and not yet settled counts too.
+    public var queuedCount: Int { lock.withLock { policy.reservedCount } }
+
+    /// T-378: the sender charges the frame it popped to `queuedCount` until it `settlePop()`s or `unpop`s it.
+    /// Turning it off releases any charge.
+    public func setChargesPops(_ on: Bool) {
+        lock.withLock {
+            policy.chargesPops = on
+            if !on { policy.settle() }
+        }
+    }
+
+    /// The popped frame was accepted or refused for good: releases its charge.
+    public func settlePop() { lock.withLock { policy.settle() } }
 
     /// T-378: the consumer popped a frame, the transport answered `.busy` (nothing sealed or sent) and it gives the
     /// frame back: it is the next one `tryPop`/`next` return, and it counts in `queuedCount`. See
@@ -112,6 +125,9 @@ public final class VideoFrameQueue: @unchecked Sendable {
         /// `keyframesPushed` read under the same lock as the reset: every keyframe pushed later is queued behind the
         /// config (T-122).
         public var keyframesPushed: UInt64
+        /// T-378: a keyframe was waiting in the queue (or held) and the reset discarded it. A keyframe already popped
+        /// (being written) is not affected.
+        public var discardedQueuedKeyframe = false
     }
 
     /// Resyncs the attached consumer (see `BoundedFrameQueue.resync`), with the config read by `provider` **while the
@@ -127,6 +143,7 @@ public final class VideoFrameQueue: @unchecked Sendable {
         lock.lock()
         let pushed = pushedKeyframes
         guard let config = provider() else { lock.unlock(); return ResyncResult(configQueued: false, keyframesPushed: pushed) }
+        let discardedKeyframe = policy.hasQueuedKeyframe
         policy.resync(config: config)
         var handoff: (CheckedContinuation<EncodedVideoFrame?, Never>, EncodedVideoFrame)?
         if !finished, let w = waiter, let f = policy.pop() {
@@ -135,7 +152,7 @@ public final class VideoFrameQueue: @unchecked Sendable {
         }
         lock.unlock()
         handoff.map { $0.0.resume(returning: $0.1) }
-        return ResyncResult(configQueued: true, keyframesPushed: pushed)
+        return ResyncResult(configQueued: true, keyframesPushed: pushed, discardedQueuedKeyframe: discardedKeyframe)
     }
 
     /// Keyframes pushed so far (including ones the policy later dropped). A keyframe forced after reading this value

@@ -57,3 +57,9 @@ Cihazda doğrulanacak: kabul 7 (T-366 `stall-inject.sh`, tek 200 ms kesinti; `id
 ## Open questions
 
 Yok. Not: bypass kuralı yalnız ana (main) kodlayıcıdaki keyframe'e bakar; aux yarısı bilerek sayılmaz (yukarıda).
+
+## Codex --high round 1 (90a56514): üç P2 düzeltildi
+
+1. Çekilen kare ayrılmada kalır: `BoundedFrameQueue.chargesPops` (gönderici açar). `pop` kareyi "charged" tutar; `reservedCount` (= `queuedCount`, T-370 bütçesi) onu sayar; `settlePop()` (kabul ya da kalıcı red) bırakır, `unpop` charge'ı held'e çevirir. Taşma politikası (`push`) yalnız `count` (kuyruk+held) ile yargılar, yani sağlıklı akışta ek erken düşüş yok. Testler: `testPoppedFrameStaysInTheReservationUntilSettled`.
+2. Bayat `unpop` reddedilir: resync / yeni tüketici / `removeAll` charge'ı siler, `unpop` charge yoksa false döner (kare atılır). Test: `testStaleUnpopAfterAResyncIsDiscarded` (eski config geri gelmez, kurtarma IDR düşmez).
+3. STARTUP yeniden denemesi: koalesör, önceki zorlanan IDR bir config'in arkasında zorlandıysa (`behindConfig`), çıkış kuyruğuna ulaştıysa ve bu resync onu atmadıysa (`ResyncResult.discardedQueuedKeyframe`, kilit altında okunur) ikinci IDR zorlamaz; config yine yeniden gönderilir (`configResent`). FRAMES_DROPPED ile zorlanmış IDR ya da resync'in attığı IDR için eski kural (yeni IDR) geçerli: T-122 gerekçesi, config'in önünde yazılan IDR yeniden kurulan çözücüye yaramaz. Bypass yeniden gönderimleri (`bypassGate`) artık yalnız kodlayıcıda başka kurtarma keyframe'i yokken oda kontrolünü atlar. Testler: `testStartupRetryDoesNotForceASecondIdrWhileTheFirstIsBeingWritten`, `testResyncReportsADiscardedQueuedKeyframe`, `testBypassResubmissionWaitsWhileARecoveryKeyframeIsInTheEncoder`.

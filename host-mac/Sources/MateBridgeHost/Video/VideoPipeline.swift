@@ -376,7 +376,8 @@ public final class VideoPipeline: @unchecked Sendable {
             if reason.resendsCodecConfig {
                 let r = auxFrames.resyncCountingKeyframes(config: { encoder.currentAuxCodecConfig() })
                 aux = auxKeyframes.update {
-                    $0.request(reason, nowUs: now, keyframesPushed: r.keyframesPushed, configResent: r.configQueued)
+                    $0.request(reason, nowUs: now, keyframesPushed: r.keyframesPushed, configResent: r.configQueued,
+                           queuedKeyframeDiscarded: r.discardedQueuedKeyframe)
                 }
             } else {
                 let pushed = auxFrames.keyframesPushed
@@ -394,7 +395,8 @@ public final class VideoPipeline: @unchecked Sendable {
             // The keyframe push count is read under the same lock: a keyframe pushed later is behind the config.
             let r = frames.resyncCountingKeyframes(config: { encoder?.currentCodecConfig() })
             decision = keyframes.update {
-                $0.request(reason, nowUs: now, keyframesPushed: r.keyframesPushed, configResent: r.configQueued)
+                $0.request(reason, nowUs: now, keyframesPushed: r.keyframesPushed, configResent: r.configQueued,
+                           queuedKeyframeDiscarded: r.discardedQueuedKeyframe)
             }
         } else {
             let pushed = frames.keyframesPushed

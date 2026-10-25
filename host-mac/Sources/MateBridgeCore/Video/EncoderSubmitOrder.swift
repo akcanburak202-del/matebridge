@@ -271,7 +271,10 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
         var delay: UInt64?
         // The pacer decides: send now, hold as the single pending frame (newest wins), or drop a stale one.
         // T-370: with the output queue full a capture is held (and replaced by the next one) instead of encoded.
-        let slotFree = encoderFree && (bypassGate || downstreamHasRoomLocked(synthetic: frame.isSynthetic))
+        // T-378: a keyframe re-submission (`bypassGate`) skips the room check only while no earlier recovery keyframe
+        // is inside the encoder (`downstreamHasRoomLocked` states the rule); otherwise it waits like any capture.
+        let slotFree = encoderFree && ((bypassGate && !recoveryKeyframeInEncoderLocked())
+                                       || downstreamHasRoomLocked(synthetic: frame.isSynthetic))
         switch pacer.offer(frame, ptsUs: frame.gateUs, nowUs: nowUs(), slotFree: slotFree, bypassGate: bypassGate,
                          synthetic: frame.isSynthetic) {
         case .submit(let f): reserveOrSkipLocked(f)

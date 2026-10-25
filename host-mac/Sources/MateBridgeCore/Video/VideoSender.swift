@@ -140,10 +140,14 @@ public final class VideoSender: @unchecked Sendable {
         frames.setActivityHandler { signal.yield() }
         aux.setActivityHandler { signal.yield() }
         lock.withLock { wakeLoop = { signal.yield() } }
+        frames.setChargesPops(true)  // T-378: a popped frame stays in the downstream reservation until settled
+        aux.setChargesPops(true)
         defer {
             signal.finish()
             frames.setActivityHandler(nil)
             aux.setActivityHandler(nil)
+            frames.setChargesPops(false)
+            aux.setChargesPops(false)
         }
         var iterator = ready.makeAsyncIterator()
         var seqs: [UInt32] = [0, 0]
@@ -164,6 +168,7 @@ public final class VideoSender: @unchecked Sendable {
                     } else {
                         // Its main frame never went out: the auxiliary chain has a hole.
                         aux.breakChain()
+                        aux.settlePop()
                         lock.withLock { counters.auxDropped += 1 }
                         // Recovery goes through the auxiliary coalescer when wired: a keyframe already queued behind
                         // the hole (kept by `breakChain`) covers it, so no extra IDR is forced.
@@ -226,6 +231,9 @@ public final class VideoSender: @unchecked Sendable {
             }
         }
         record(result: result, bytes: size, keyframe: encoded.isKeyframe)
+        // T-378: the frame leaves the downstream reservation once the transport took it or refused it for good; a busy
+        // one stays charged until the caller hands it back (`unpop`).
+        if result != .busy { (encoded.view == 1 ? auxFrames : frames)?.settlePop() }
         if result.isAccepted, encoded.view == 1 {
             lock.withLock { counters.auxFramesSent += 1; counters.auxBytesSent += size }
         }
@@ -249,7 +257,11 @@ public final class VideoSender: @unchecked Sendable {
         let (ready, signal) = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
         transport.setReadyHandler { signal.yield() }
         lock.withLock { wakeLoop = { signal.yield() } }  // `write` wakes the loop on a failed completion
-        defer { signal.finish() }
+        frames.setChargesPops(true)  // T-378
+        defer {
+            signal.finish()
+            frames.setChargesPops(false)
+        }
         var iterator = ready.makeAsyncIterator()
         var seq: UInt32 = 0
         var busyStreak = 0
