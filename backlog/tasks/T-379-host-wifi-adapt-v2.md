@@ -1,7 +1,7 @@
 ---
 id: T-379
 title: Host — WIFI_ADAPT v2: yalnız bit hızı, doğrulanmış tıkanıklık kanıtı, IDR'sız (astra öneri 1)
-status: review
+status: done
 phase: 7
 owner: mac-host-dev
 depends_on: [T-378]
