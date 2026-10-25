@@ -2121,3 +2121,10 @@ Yalnız yayının aktığı saniyeler (`sent_kbps` ≥ 1000), host.log, 36 dk; 2
 - Dikkat: bu oturumda Wi-Fi daha temizdi (retx saniyesi %18 vs %41); takılma farkının bir kısmı ağdan. Kabul 7'deki `stall-inject.sh` 200 ms denemesi yapılmadı.
 - Ayrı, bilinen: tablet `dropped` 258 saniyede > 0 (80 saniyede ≥ 5); ağ değil, istemci sunum/decode tarafı (T-310 ile ilgili olabilir [çıkarım]).
 - Aynı oturumda: ses Düşük gecikme'de cızırdadı, Uyumlu'da düzeldi (kullanıcı). Tablet logcat halkası ~10 sn tuttuğu için cızırtı anı kaydedilemedi.
+
+## 2026-10-25 19:42 — Düşük gecikme cızırtısı anında tablet kaydı (TotK, Wi-Fi)
+
+- Kullanıcı cızırtıyı duyarken alındı: tablet `ev=stats` 19:42:26–19:43:23, `api=aaudio perf_mode=low_latency burst=240 buf_frames=1440`.
+- Bütün sayaçlar düz: `underruns` 6'da sabit, `xruns=0`, `underflow_est=0`, `drops` 3'te sabit, `late_frames=0`, `out_headroom_min_frames=1440` (çıkış arabelleği hep dolu), `write_gap_ms_max` ~5,2, seviye 41–62 ms (hedef 40). `ratio_ppm` −566…+577 arasında saniyede bir yön değiştiriyor (kübik yeniden örnekleyici, ±0,1 % sınırı içinde; duyulur olması beklenmez [çıkarım]).
+- Host temiz: 100 paket/s, `dropped=0`, `gaps=0`, `rms_dbfs` −37.
+- Yorum: uygulamanın gördüğü yolda boşalma yok. Ya MMAP/HAL altında bildirilmeyen bir aksama, ya da kaynakta (2026-10-09 bulgusu). Kullanıcının "Uyumlu'da düzeldi" gözlemi birincisini destekliyor ama aynı sahnede ileri-geri A/B yapılmadı (kullanıcı sahneden ayrıldı). Sonraki adım: cızırtı anında Uyumlu ↔ Düşük gecikme 2–3 kez A/B.
