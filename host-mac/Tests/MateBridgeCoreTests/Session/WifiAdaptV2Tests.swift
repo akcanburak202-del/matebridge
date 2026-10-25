@@ -384,6 +384,15 @@ final class WifiAdaptV2Tests: XCTestCase {
         XCTAssertEqual(o2.step?.toKbps, 42_000)
     }
 
+    func testOldEventsNeverDisplaceFreshOnes() {
+        var r = Rig()
+        r.now += 100_000
+        let ages: [UInt32] = Array(repeating: 5_000, count: 7) + [1_000, 200]
+        let o = r.c.tick(.init(nowUs: r.now, srttMs: 6, sendBufferBytes: 0, txPacketsDelta: 20, retransmitPacketsDelta: 0,
+                               stallEvents: 9, stallActiveMs: 200, stallEventAgesMs: ages))
+        XCTAssertEqual(o.step?.toKbps, 42_000, "the recent ended stall and the open one are two in 2 s")
+    }
+
     func testDetectorCarriesEachEventsAge() {
         var d = SendStallDetector()
         let r = d.observe(.init(writerLongGapsEnded: 2, writerLastLongGapUs: 220_000,

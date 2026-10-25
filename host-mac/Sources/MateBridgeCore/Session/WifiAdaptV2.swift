@@ -201,11 +201,13 @@ public struct WifiAdaptV2Controller: Sendable {
         push(&delayRing, (excess >= Constants.delayModerateMs, excess >= Constants.delayHeavyMs), keep: Constants.delaySamples)
         push(&lossRing, (s.retransmitPacketsDelta, s.txPacketsDelta), keep: Constants.lossTicks)
         push(&backlogRing, s.sendBufferBytes, keep: Constants.backlogTicks)
-        for i in 0..<min(s.stallEvents, 8) {
+        for i in max(0, s.stallEvents - 64)..<max(0, s.stallEvents) {
             let ageMs = i < s.stallEventAgesMs.count ? UInt64(s.stallEventAgesMs[i]) : 0
             stallEventsUs.append(now > ageMs * 1_000 ? now - ageMs * 1_000 : 0)
         }
         stallEventsUs.removeAll { now > $0 && now - $0 > Constants.stallEventWindowMs * 1_000 }
+        // Expired events go first; then the newest 8 are kept.
+        if stallEventsUs.count > 8 { stallEventsUs.removeFirst(stallEventsUs.count - 8) }
         // A stall that was part of a step cannot count again; a stall that starts, or that has ended, is a new one.
         let consumedBefore = stallConsumed
         if s.stallActiveMs == 0 || s.stallStarted { stallConsumed = false }
