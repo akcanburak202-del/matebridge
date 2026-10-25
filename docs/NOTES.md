@@ -2089,3 +2089,8 @@ Wi-Fi kaybı azalmadı (retx saniyesi daha da çok), ama artık zorunlu IDR zinc
 - Aynı 80 MHz bloğunda (36–48) iki komşu ağ: biri kanal 36 (802.11ac, 80 MHz), biri kanal 48 (802.11ax, 80 MHz). 52–64 ve 100–140 bloklarında görünen ağ yok.
 - Mac varsayılan rota Ethernet (en0); Wi-Fi da bağlı (−13 dBm, 960 Mbps).
 - Sonuç: oyun akışı komşularla aynı bloğu paylaşıyor. Aday deneme: modemde 5 GHz kanalını elle 100 (ya da 52) seçmek; bedeli DFS (açılışta ~1 dk dinleme, radar algılanırsa kanal kaçışı).
+
+## 2026-10-25 ~12:20 — T-375/T-376 üç parmak touchpad kaydırma cihazda doğrulandı
+
+- Host fdb78527 (12:10), daily APK aynı commit (12:13), Wi-Fi.
+- Kullanıcı: yukarı (Mission Control), aşağı (uygulama pencereleri), sola/sağa (masaüstü geçişi), iki parmak kaydırma/yakınlaştırma "her şey sorunsuz". HarmonyOS üç parmak touchpad olaylarını pointer capture altında uygulamaya iletiyor; sentetik Control+ok sistem kısayolunu tetikliyor (0043 riskleri kapandı). Control+Shift/Command basılıyken kaydırma ayrıca denenmedi.
