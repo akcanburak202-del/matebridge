@@ -9,6 +9,11 @@ enum class AudioOutPref {
     AUTO,
     /** AAudio MMAP (exclusive, else shared) without the shared latency check; AudioTrack if AAudio MMAP cannot be used. */
     AAUDIO,
+    /**
+     * T-381 (launch extra `--es audio_out shared` only, never offered in the panel): AAudio MMAP starting at SHARED
+     * (EXCLUSIVE skipped), no latency probation, so the shared stream is kept for A/B; AudioTrack if it cannot be used.
+     */
+    SHARED,
     /** AudioTrack only (the pre-T-100 path). */
     TRACK;
 
@@ -27,6 +32,7 @@ enum class AudioOutPref {
         fun parse(raw: String?): AudioOutPref? = when (raw?.trim()?.lowercase()) {
             null, "", "auto" -> AUTO
             "aaudio" -> AAUDIO
+            "shared" -> SHARED
             "track", "audiotrack" -> TRACK
             else -> null
         }
@@ -61,6 +67,7 @@ enum class OutChoice(val logName: String) {
  *    and both AAudio steps are skipped until [reset].
  *  - A shared MMAP stream (asked for, or granted instead of exclusive) is on probation in [AudioOutPref.AUTO]: the
  *    writer measures its latency ([SharedLatencyProbe]) and calls [onProbationFailed] if it is too high.
+ *  - [AudioOutPref.SHARED] (T-381): EXCLUSIVE is never tried; SHARED (MMAP only) is kept without probation.
  *  - [reset]: a new host stream, or the output device changed (disconnect, routing): the chain starts from the top.
  *  - [onAaudioFailure]: an AAudio stream failed while running (disconnected, write error, stall). [MAX_FAILURES]
  *    within [WINDOW_MS] disable AAudio for this policy's lifetime: AudioTrack from then on, the session is unaffected.
@@ -92,7 +99,7 @@ class SinkPolicy(
 
     @Synchronized fun next(): OutChoice = when {
         pref == AudioOutPref.TRACK || aaudioDisabled -> OutChoice.TRACK
-        !exclusiveOut -> OutChoice.AAUDIO_EXCLUSIVE
+        !exclusiveOut && pref != AudioOutPref.SHARED -> OutChoice.AAUDIO_EXCLUSIVE
         !sharedOut -> OutChoice.AAUDIO_SHARED
         else -> OutChoice.TRACK
     }
@@ -125,7 +132,7 @@ class SinkPolicy(
         }
         if (choice == OutChoice.AAUDIO_EXCLUSIVE && exclusive) return Verdict.ACCEPT
         exclusiveOut = true
-        return if (pref == AudioOutPref.AAUDIO) Verdict.ACCEPT else Verdict.PROBATION
+        return if (pref == AudioOutPref.AAUDIO || pref == AudioOutPref.SHARED) Verdict.ACCEPT else Verdict.PROBATION
     }
 
     /** The shared stream's latency was not reasonable: skip SHARED until [reset]. */

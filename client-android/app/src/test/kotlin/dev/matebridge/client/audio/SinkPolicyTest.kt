@@ -18,7 +18,37 @@ class SinkPolicyTest {
         assertEquals(AudioOutPref.AAUDIO, AudioOutPref.parse("aaudio"))
         assertEquals(AudioOutPref.AAUDIO, AudioOutPref.parse(" AAudio "))
         assertEquals(AudioOutPref.TRACK, AudioOutPref.parse("track"))
+        assertEquals(AudioOutPref.SHARED, AudioOutPref.parse(" Shared "))
+        assertEquals("shared", AudioOutPref.SHARED.id)
         assertNull(AudioOutPref.parse("oboe"))
+    }
+
+    @Test fun sharedPrefStartsAtSharedWithoutProbation() {
+        val p = SinkPolicy(AudioOutPref.SHARED, true)
+        assertEquals(shared, p.next())
+        assertEquals(SinkPolicy.Verdict.ACCEPT, p.onOpened(shared, exclusive = false, mmap = 1))
+        p.reset()
+        assertEquals(shared, p.next()) // a rebuild starts at SHARED again, never EXCLUSIVE
+    }
+
+    @Test fun sharedPrefFallsToTrackWhenSharedCannotOpenOrIsNotMmap() {
+        val p = SinkPolicy(AudioOutPref.SHARED, true)
+        p.onOpenFailed(shared)
+        assertEquals(track, p.next())
+        p.reset()
+        assertEquals(shared, p.next())
+        assertEquals(SinkPolicy.Verdict.REJECT, p.onOpened(shared, exclusive = false, mmap = 0))
+        assertEquals(track, p.next())
+    }
+
+    @Test fun sharedPrefOnlyChangesTheChainWhileSelected() {
+        val p = SinkPolicy(AudioOutPref.SHARED, true)
+        assertTrue(p.setPref(AudioOutPref.AUTO))
+        assertEquals(excl, p.next()) // the panel's Düşük gecikme: the normal chain
+        assertTrue(p.setPref(AudioOutPref.TRACK))
+        assertEquals(track, p.next())
+        assertEquals(excl, SinkPolicy(AudioOutPref.AUTO, true).next()) // unchanged without the knob
+        assertEquals(track, SinkPolicy(AudioOutPref.SHARED, aaudioAvailable = false).next())
     }
 
     @Test fun autoPrefersExclusiveMmap() {

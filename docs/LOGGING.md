@@ -530,7 +530,7 @@ Artık yazılmaz: `render ev=gl_stats`, `render ev=gl_fallback`, `render ev=rend
 
 ## Modlar: Günlük / Çizim / Oyun (tablet, `MB/session`, T-223, karar 0030)
 
-- `I session ev=mode_layer mode=daily|drawing|game action=enter|exit overrides=<liste> bitrate_kbps=<n> audio_out=auto|aaudio|track fingers=all|gestures|off [at=start]`: Oyun ya da Çizim'in geçici katmanı kuruldu (`enter`) ya da bırakıldı (`exit`). Eski `ev=game_mode` yerine geçer (aynı alanlar, artık `mode=` ve `fingers=` ile). `jitter=`/`jitter_src=` T-303'te kalktı.
+- `I session ev=mode_layer mode=daily|drawing|game action=enter|exit overrides=<liste> bitrate_kbps=<n> audio_out=auto|aaudio|shared|track fingers=all|gestures|off [at=start]`: Oyun ya da Çizim'in geçici katmanı kuruldu (`enter`) ya da bırakıldı (`exit`). Eski `ev=game_mode` yerine geçer (aynı alanlar, artık `mode=` ve `fingers=` ile). `jitter=`/`jitter_src=` T-303'te kalktı.
   - `mode`: katmanı kurulan ya da bırakılan mod. Oyun ↔ Çizim geçişi tek bir `enter`dir (yeni katman baştan kurulur); Günlük'e dönüş `exit`tir. Aynı modda tekrar satır çıkmaz.
   - `overrides`: katmanın ezdiği ayarlar. Oyun `bitrate,audio,pen`; Çizim `bitrate,finger` (parmak politikası `gestures`: tek parmak hiçbir şey göndermez, iki parmak kaydırma ve sıkıştırma çalışır; kayıtlı "tamamen kapat" açıksa `off` kalır; Otomatik bit hızı ise 60 Mbps). Katmanın ezmediği ayarlar (Oyun: parmak; Çizim: ses, kalem izi/noktası) panelde değiştirilince normal olarak kaydedilir.
   - Değerler katmanın etkin değerleridir (kayıtlı ayarlar değil). `at=start`: uygulama açılışında kayıtlı mod Oyun/Çizim olduğu için kuruldu.
@@ -543,7 +543,7 @@ Artık yazılmaz: `render ev=gl_stats`, `render ev=gl_fallback`, `render ev=rend
   - `ignored`: `--ez dev true` verilmediği için yok sayılan "yalnızca geliştirici" anahtarları, `docs/KNOBS.md` sırasıyla.
   - Yalnız anahtar adları yazılır, değerler asla (`net_bench` adresi dahil). Biçim T-127 için sabittir.
 - `W diag ev=net_bench err=not_in_build`: `--ez dev true --es net_bench …` verildi ama bench etkinliği bu derlemede yok (debug kaynak seti olmayan derleme; T-301'den beri varsayılan `daily` APK). Oturum normal başlar.
-- `I session ev=profile mode=<id> fps=<n> size=<w>x<h> scale_permille=<n> display=native|<w>x<h> [display_applied=0|1] hdr=0|1 bitrate_kbps=<n> bitrate_setting=<n>|auto transport=usb|wifi|- transport_mode=auto|usb|wifi audio=0|1 audio_out=auto|aaudio|track pacer=adaptive sha=<kısa SHA>[-dirty]|unknown built=<UTC>|unknown dev=0|1 knobs=<anahtar>:<değer>[;…]|- chroma=0|1`
+- `I session ev=profile mode=<id> fps=<n> size=<w>x<h> scale_permille=<n> display=native|<w>x<h> [display_applied=0|1] hdr=0|1 bitrate_kbps=<n> bitrate_setting=<n>|auto transport=usb|wifi|- transport_mode=auto|usb|wifi audio=0|1 audio_out=auto|aaudio|shared|track pacer=adaptive sha=<kısa SHA>[-dirty]|unknown built=<UTC>|unknown dev=0|1 knobs=<anahtar>:<değer>[;…]|- chroma=0|1`
   - Uygulanan her `STREAM_CONFIG`'te (`installConfig`) bir kez yazılır, `stream_config_bitrate`'ten hemen sonra: oturum başında, mod ya da bit hızı değişiminde ve yeni config getiren her yeniden bağlanmada.
   - Alanların kaynağı:
     - `fps`, `size`, `bitrate_kbps`: STREAM_CONFIG.
