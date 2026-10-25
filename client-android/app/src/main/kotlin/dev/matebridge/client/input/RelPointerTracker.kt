@@ -267,7 +267,11 @@ class RelPointerTracker(
         for (fg in f.fingers) downPos[fg.id]?.let { p -> val d = floatArrayOf(fg.x, fg.y); if (hypot(d[0] - p[0], d[1] - p[1]) > slop) moved = true }
 
         updatePadButtons(f, n, nowMs, timeUs, out)
-        if (n == 3 && maxCount == 3) swipeStep(nowMs, timeUs, extent, out)
+        if (n == 3 && maxCount == 3) swipeStep(cur.values, nowMs, timeUs, extent, out)
+        else if (f.action == PadAction.UP && before == 3 && f.fingers.size == 3 && maxCount == 3) {
+            // The first UP frame still reports the departing finger: its three contacts count (a fast swipe-and-lift).
+            swipeStep(f.fingers.map { floatArrayOf(it.x, it.y) }, nowMs, timeUs, extent, out)
+        }
 
         // Motion.
         val base = if (widthPt > 0) widthPt * PadTuning.SCREEN_SPAN / extent else 0f
@@ -301,9 +305,9 @@ class RelPointerTracker(
     }
 
     /** Three fingers on the pad: track their centroid path and send the one PAD_SWIPE once it is long and straight enough. */
-    private fun swipeStep(nowMs: Long, timeUs: Long, extent: Float, out: MutableList<Outgoing>) {
+    private fun swipeStep(pts: Collection<FloatArray>, nowMs: Long, timeUs: Long, extent: Float, out: MutableList<Outgoing>) {
         var cx = 0f; var cy = 0f
-        for (p in cur.values) { cx += p[0]; cy += p[1] }
+        for (p in pts) { cx += p[0]; cy += p[1] }
         cx /= 3f; cy /= 3f
         swipeSeen = true
         if (nowMs < swipeSettleUntilMs || !swipeHasBase) { // the contacts of a fresh third finger still move

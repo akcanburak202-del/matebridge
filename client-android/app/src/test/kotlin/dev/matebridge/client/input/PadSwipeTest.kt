@@ -69,6 +69,14 @@ class PadSwipeTest {
         assertEquals(3, swipes().single().fingers)
     }
 
+    @Test fun fastSwipeAndLiftIsRecognizedOnTheFirstUpFrame() {
+        land(3)
+        move(3, 0f, -110f, 100) // below the threshold (120)
+        assertTrue(swipes().isEmpty())
+        lift(3, 120, dy = -130f) // the first UP frame still carries all three fingers at -130
+        assertEquals(listOf(PadSwipe.UP), swipes().map { it.direction })
+    }
+
     @Test fun belowThresholdSendsNothing() {
         swipe(0f, -100f)
         assertTrue(swipes().isEmpty())

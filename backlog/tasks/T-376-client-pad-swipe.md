@@ -49,3 +49,7 @@ Karar 0043: Glide Keyboard touchpad'inde (pointer capture, `RelPointerTracker.on
 - Test edilmedi: gerçek tablet (hiçbir şey). T-367 flaky testleri bu koşuda kırmızı vermedi.
 
 ## Open questions
+
+### Codex düzeltmesi (P2)
+
+`onPad` ayrılan parmağı çıkardıktan sonra n == 3 denetimi yapıyordu; üç parmağın eşiği ilk UP karesinde geçtiği hızlı kaydır-ve-kaldır kayboluyordu. İlk UP karesinin üç teması (ayrılan parmak dahil) artık değerlendirilir; hareket başına en çok bir PAD_SWIPE. Regresyon testi: `fastSwipeAndLiftIsRecognizedOnTheFirstUpFrame`. Düzeltme commit'i bu satırın hemen ardındaki SHA (bkz. git log).
