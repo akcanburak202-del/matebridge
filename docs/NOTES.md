@@ -2082,3 +2082,10 @@ Aynı akşam, aynı oyun; yalnız yayının aktığı saniyeler (`sent_kbps` ≥
 | srtt p50/p95 | 8/12 | 7/12 |
 
 Wi-Fi kaybı azalmadı (retx saniyesi daha da çok), ama artık zorunlu IDR zincirine dönmüyor: kuyruk düşüşü yerine kodlama öncesi tek kare ezmesi. T-370 cihazda amacına ulaştı. T-374 bu ölçümde yok (henüz kurulmadı).
+
+## 2026-10-25 ~12:30 — Ev WLAN kanal taraması (Mac `system_profiler SPAirPortDataType`)
+
+- Ev modemi 5 GHz'te artık **kanal 36, 80 MHz** (2026-10-04'te kanal 52 DFS idi; modem otomatik kanal seçiyor, değişimin nedeni bilinmiyor; DFS radar kaçışı olabilir [çıkarım]).
+- Aynı 80 MHz bloğunda (36–48) iki komşu ağ: biri kanal 36 (802.11ac, 80 MHz), biri kanal 48 (802.11ax, 80 MHz). 52–64 ve 100–140 bloklarında görünen ağ yok.
+- Mac varsayılan rota Ethernet (en0); Wi-Fi da bağlı (−13 dBm, 960 Mbps).
+- Sonuç: oyun akışı komşularla aynı bloğu paylaşıyor. Aday deneme: modemde 5 GHz kanalını elle 100 (ya da 52) seçmek; bedeli DFS (açılışta ~1 dk dinleme, radar algılanırsa kanal kaçışı).
