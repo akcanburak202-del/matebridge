@@ -22,7 +22,7 @@ NOTES 2026-10-25 23:40: Düşük gecikme (`api=aaudio sharing=exclusive mmap=1 b
 ## Kabul
 
 1. `--ez dev true --es audio_out shared` (mevcut `audio_out` anahtarına yeni değer; `DevKnobs.SPECS` `ids`) → AAudio önce SHARED açılır. MMAP'lı ya da MMAP'sız SHARED kabul edilir mi, mevcut SHARED gecikme denetimi (probation) uygulanır mı: Plan'da kararlaştır ve gerekçelendir; amaç ölçüm, yani anahtar açıkken SHARED akışı mümkünse korunmalı (gecikme `audio_out`/`audio_clock_raw` satırlarında görünür).
-2. Anahtar yokken davranış bayt bayt aynı (mevcut testler yeşil). Panel `Ses çıkışı` seçimi değişmez; anahtar yalnız Düşük gecikme (auto/aaudio) yolunu etkiler, Uyumlu seçiliyken yok sayılır.
+2. Anahtar yokken davranış bayt bayt aynı (mevcut testler yeşil). Panel `Ses çıkışı` seçimi değişmez; anahtar, mevcut `audio_out=aaudio` anahtarı gibi o açılış için kayıtlı seçimin yerine geçer (kayıtlı Uyumlu dahil); panelde herhangi bir `Ses çıkışı` seçimi geçersiz kılmayı bitirir. (Orkestratör 2026-10-25: Codex P2 üzerine kabul metni mevcut `aaudio` davranışına hizalandı; A/B'de kullanıcı Uyumlu'dayken anahtar doğrudan devreye girsin.)
 3. `audio ev=audio_out` satırında `reason=` ile anahtarın etkisi görünür (`sharing=shared mmap=0|1`, `requested=shared`). `diag ev=dev_knobs` profil listesinde görünür.
 4. Daily APK'da çalışır (geliştirici kapısı derleme türünden bağımsız).
 5. Birim testleri: SinkPolicy zinciri anahtarla SHARED'dan başlar, SHARED açılamazsa TRACK'e düşer; anahtarsız zincir değişmez.
