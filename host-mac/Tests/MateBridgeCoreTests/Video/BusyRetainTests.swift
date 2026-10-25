@@ -219,27 +219,44 @@ final class BusyRetainTests: XCTestCase {
         }
     }
 
-    func testStartupRetryDoesNotForceASecondIdrWhileTheFirstIsBeingWritten() {
+    /// Codex round 2, P1: STARTUP / DECODE_ERROR always force a new IDR (the T-122 behaviour). A resync reopens nothing
+    /// by itself: the queue refuses deltas until a keyframe is pushed, and the IDR being written cannot do that.
+    func testStartupDuringASlowIdrWriteForcesAKeyframeAndVideoResumes() {
         var c = KeyframeRequestCoalescer()
-        XCTAssertTrue(c.request(.startup, nowUs: 1_000_000, keyframesPushed: 0, configResent: true).forceKeyframe)
-        // The IDR was pushed (count 1), popped and is partly written; the client retries STARTUP 600 ms later.
-        let retry = c.request(.startup, nowUs: 1_600_000, keyframesPushed: 1, configResent: true,
-                              queuedKeyframeDiscarded: false)
-        XCTAssertFalse(retry.forceKeyframe, "no second IDR behind one that is being written")
-        XCTAssertEqual(retry.action, .configResent, "the config is still re-sent")
-        XCTAssertEqual(c.coalescedTotal, 1)
-        // The same retry when the resync threw the queued IDR away: a keyframe is needed.
-        let discarded = c.request(.startup, nowUs: 2_200_000, keyframesPushed: 1, configResent: true,
-                                  queuedKeyframeDiscarded: true)
-        XCTAssertTrue(discarded.forceKeyframe)
+        let q = VideoFrameQueue(keyframeNeeded: {})
+        q.setChargesPops(true)
+        let config = EncodedVideoFrame(flags: .codecConfig, captureTimeUs: 0, data: [7])
+        XCTAssertTrue(c.request(.framesDropped, nowUs: 1_000_000, keyframesPushed: q.keyframesPushed).forceKeyframe)
+        q.push(key(1))                                         // the recovery IDR reaches the queue ...
+        let idr = q.tryPop()                                   // ... and is being written slowly
+        XCTAssertNotNil(idr)
+        // 600 ms later the client's STARTUP retry arrives.
+        let r = q.resyncCountingKeyframes(config: { config })
+        let d = c.request(.startup, nowUs: 1_600_000, keyframesPushed: r.keyframesPushed, configResent: r.configQueued)
+        XCTAssertTrue(d.forceKeyframe, "a new IDR is forced even though one is being written")
+        q.push(delta(2))                                       // refused: the queue awaits a keyframe
+        XCTAssertEqual(q.queuedCount, 1)
+        q.push(key(3))                                         // the forced keyframe
+        XCTAssertEqual([q.tryPop()?.data, q.tryPop()?.data], [[7], [3]], "config, then the new keyframe")
+        q.push(delta(4))                                       // deltas flow again
+        XCTAssertEqual(q.tryPop()?.data, [4], "video resumes with deltas")
     }
 
-    func testResyncReportsADiscardedQueuedKeyframe() {
-        let q = VideoFrameQueue(keyframeNeeded: {})
-        let config = EncodedVideoFrame(flags: .codecConfig, captureTimeUs: 0, data: [7])
-        q.push(.init(flags: .keyframe, captureTimeUs: 1, data: [1]))
-        XCTAssertTrue(q.resyncCountingKeyframes(config: { config }).discardedQueuedKeyframe)
-        XCTAssertFalse(q.resyncCountingKeyframes(config: { config }).discardedQueuedKeyframe)
+    /// Codex round 2, P2: a recovery keyframe pushed while a popped frame is charged counts that frame toward capacity,
+    /// so the frame coming back from a busy transport can never leave the queue over capacity.
+    func testChargedPopCountsTowardCapacityWhenTheFrameComesBack() {
+        var q = BoundedFrameQueue(capacity: 2)
+        q.chargesPops = true
+        q.push(delta(1)); q.push(delta(2))
+        let a = q.pop()!                                       // A is with the sender; queue [B]
+        q.push(key(3))                                         // recovery IDR: [B, K] + charged A = 3 > 2
+        XCTAssertLessThanOrEqual(q.reservedCount, 2)
+        XCTAssertTrue(q.unpop(a))                              // transport busy: A comes back
+        XCTAssertLessThanOrEqual(q.count, 2, "never above capacity")
+        XCTAssertEqual(q.pop()?.data, [1])
+        XCTAssertEqual(q.pop()?.data, [3], "the keyframe survives; the superseded delta B went")
+        XCTAssertNil(q.pop())
+        XCTAssertFalse(q.takeKeyframeRequest(), "the keyframe restarts the chain: nothing more to request")
     }
 
     func testStatsFieldsShowOnlyNonZeroDeltas() {

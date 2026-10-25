@@ -125,9 +125,6 @@ public final class VideoFrameQueue: @unchecked Sendable {
         /// `keyframesPushed` read under the same lock as the reset: every keyframe pushed later is queued behind the
         /// config (T-122).
         public var keyframesPushed: UInt64
-        /// T-378: a keyframe was waiting in the queue (or held) and the reset discarded it. A keyframe already popped
-        /// (being written) is not affected.
-        public var discardedQueuedKeyframe = false
     }
 
     /// Resyncs the attached consumer (see `BoundedFrameQueue.resync`), with the config read by `provider` **while the
@@ -143,7 +140,6 @@ public final class VideoFrameQueue: @unchecked Sendable {
         lock.lock()
         let pushed = pushedKeyframes
         guard let config = provider() else { lock.unlock(); return ResyncResult(configQueued: false, keyframesPushed: pushed) }
-        let discardedKeyframe = policy.hasQueuedKeyframe
         policy.resync(config: config)
         var handoff: (CheckedContinuation<EncodedVideoFrame?, Never>, EncodedVideoFrame)?
         if !finished, let w = waiter, let f = policy.pop() {
@@ -152,7 +148,7 @@ public final class VideoFrameQueue: @unchecked Sendable {
         }
         lock.unlock()
         handoff.map { $0.0.resume(returning: $0.1) }
-        return ResyncResult(configQueued: true, keyframesPushed: pushed, discardedQueuedKeyframe: discardedKeyframe)
+        return ResyncResult(configQueued: true, keyframesPushed: pushed)
     }
 
     /// Keyframes pushed so far (including ones the policy later dropped). A keyframe forced after reading this value

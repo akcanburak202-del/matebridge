@@ -183,7 +183,7 @@ final class VideoFrameQueueKeyframeCountTests: XCTestCase {
         q.push(key(1)); q.push(delta(2)); q.push(key(3))
         XCTAssertEqual(q.keyframesPushed, 2)
         let r = q.resyncCountingKeyframes(config: { config() })
-        XCTAssertEqual(r, .init(configQueued: true, keyframesPushed: 2, discardedQueuedKeyframe: true))
+        XCTAssertEqual(r, .init(configQueued: true, keyframesPushed: 2))
         let none = q.resyncCountingKeyframes(config: { nil })
         XCTAssertEqual(none, .init(configQueued: false, keyframesPushed: 2))
     }

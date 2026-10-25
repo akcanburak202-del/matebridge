@@ -49,8 +49,8 @@ public struct BoundedFrameQueue: Sendable {
 
     public var count: Int { frames.count + (held == nil ? 0 : 1) }
     public var isEmpty: Bool { frames.isEmpty && held == nil }
-    /// `count` plus the popped frame still charged (see `chargesPops`): what downstream reservations compare with
-    /// `capacity`. Overflow itself (`push`) judges `count` only.
+    /// `count` plus the popped frame still charged (see `chargesPops`): what downstream reservations and `push`'s
+    /// overflow rule compare with `capacity`.
     public var reservedCount: Int { count + (charged ? 1 : 0) }
     /// A frame is handed back and waits to be offered again (T-378).
     public var hasHeldFrame: Bool { held != nil }
@@ -79,7 +79,9 @@ public struct BoundedFrameQueue: Sendable {
             if !frames.isEmpty, frames.allSatisfy(\.isCodecConfig) { frames.removeAll() }
         }
         frames.append(frame)
-        guard frames.count + (held == nil ? 0 : 1) > capacity else { return 0 }
+        // A popped frame that is still charged (T-378) counts as if it were queued: if it comes back (`unpop`) the
+        // queue must not exceed `capacity`, and the usual newest-wins / keyframe rules apply to what is queued now.
+        guard frames.count + (held == nil ? 0 : 1) + (charged ? 1 : 0) > capacity else { return 0 }
         // Oldest first: plain delta frame, else oldest non-config keyframe, else oldest overall.
         let idx = frames.firstIndex(where: { !$0.isProtected })
             ?? frames.firstIndex(where: { !$0.isCodecConfig })

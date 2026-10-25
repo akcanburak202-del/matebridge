@@ -153,8 +153,6 @@ public struct KeyframeRequestCoalescer: Sendable {
         var sinceUs: UInt64
         /// Queue push count when the keyframe was forced: unchanged means the keyframe is still in the encoder.
         var keyframesPushed: UInt64
-        /// Forced by a config-resending request (STARTUP / DECODE_ERROR): the resync queued the config ahead of it.
-        var behindConfig = false
     }
 
     /// Outcome of `hostDrop` / `checkDeferred` (T-176).
@@ -213,24 +211,21 @@ public struct KeyframeRequestCoalescer: Sendable {
     /// for a config reason it must be the value read under the queue lock together with the resync.
     /// `configResent`: the resync queued a config (false when no parameter sets exist yet).
     public mutating func request(_ reason: KeyframeReason, nowUs: UInt64, keyframesPushed: UInt64,
-                                 configResent: Bool = false, queuedKeyframeDiscarded: Bool = false) -> Decision {
+                                 configResent: Bool = false) -> Decision {
         let since = sinceIdrUs(nowUs: nowUs)
         if reason.resendsCodecConfig {
             // Only a keyframe that will be queued after the resync reaches the rebuilt decoder behind the config.
             let stillInEncoder = livePending(nowUs: nowUs).map { $0.keyframesPushed == keyframesPushed } ?? false
-            // T-378, one recovery generation: our forced keyframe left the encoder and the resync did NOT discard it
-            // (it is being written, not waiting in the queue) and was itself forced behind a config: a STARTUP retry (the client's 500 ms retry of a
-            // keyframe it has not completely received) re-sends the config but forces no second IDR. When the resync
-            // did discard it, the next keyframe is needed and replaces it.
-            let beingWritten = reachedQueue(keyframesPushed) && pending?.behindConfig == true && !queuedKeyframeDiscarded
-            if stillInEncoder || beingWritten { coalescedTotal += 1 } else {
-                pending = Pending(sinceUs: nowUs, keyframesPushed: keyframesPushed, behindConfig: true)
+            // T-378 note: this path is deliberately NOT part of the one-recovery-generation rule. The resync has
+            // just reset the queue (deltas refused until a keyframe is pushed) and dropped any keyframe queued or
+            // held, and an IDR already being written cannot reopen it, so a new keyframe is always needed.
+            if stillInEncoder { coalescedTotal += 1 } else {
+                pending = Pending(sinceUs: nowUs, keyframesPushed: keyframesPushed)
                 noteForce(nowUs: nowUs)
                 recordForce(.clientRequest, nowUs: nowUs)
             }
-            let covered = stillInEncoder || beingWritten
-            return Decision(action: configResent ? .configResent : (covered ? .coalesced : .forced),
-                            forceKeyframe: !covered, sinceIdrUs: since)
+            return Decision(action: configResent ? .configResent : (stillInEncoder ? .coalesced : .forced),
+                            forceKeyframe: !stillInEncoder, sinceIdrUs: since)
         }
         let onItsWay = livePending(nowUs: nowUs) != nil || reachedQueue(keyframesPushed)
         let recentlyWritten = since.map { $0 < windowUs } ?? false
