@@ -2128,3 +2128,10 @@ Yalnız yayının aktığı saniyeler (`sent_kbps` ≥ 1000), host.log, 36 dk; 2
 - Bütün sayaçlar düz: `underruns` 6'da sabit, `xruns=0`, `underflow_est=0`, `drops` 3'te sabit, `late_frames=0`, `out_headroom_min_frames=1440` (çıkış arabelleği hep dolu), `write_gap_ms_max` ~5,2, seviye 41–62 ms (hedef 40). `ratio_ppm` −566…+577 arasında saniyede bir yön değiştiriyor (kübik yeniden örnekleyici, ±0,1 % sınırı içinde; duyulur olması beklenmez [çıkarım]).
 - Host temiz: 100 paket/s, `dropped=0`, `gaps=0`, `rms_dbfs` −37.
 - Yorum: uygulamanın gördüğü yolda boşalma yok. Ya MMAP/HAL altında bildirilmeyen bir aksama, ya da kaynakta (2026-10-09 bulgusu). Kullanıcının "Uyumlu'da düzeldi" gözlemi birincisini destekliyor ama aynı sahnede ileri-geri A/B yapılmadı (kullanıcı sahneden ayrıldı). Sonraki adım: cızırtı anında Uyumlu ↔ Düşük gecikme 2–3 kez A/B.
+
+## 2026-10-25 20:20–20:56 — TotK fps düşüşleri: üç kaynak (host eced2a99, Wi-Fi ch36)
+
+- 20:16–20:41, sent < 55 olan 194 sn: 158'inde SCK `status=idle` 9–23/s (yakalanan kare < 60, `cap_int` p95 33 ms; host kodlama/gönderme kaybı yok). Kullanıcı: oyunun kendi FPS'i sabit 60. Sunum (present) ile SCK teslimi arasında kayıp; oyun mu sanal ekran mı bilinmiyor → araştırılacak.
+- 41 sn'de `overwritten` 5–29/s (T-370 kodlama öncesi ezme); 31'i video retx saniyesi (tüm saniyelerde %28).
+- ~28 sn tablet `dropped` (host 60 gönderdi), decode 10–11 ms.
+- Kullanıcının bildirdiği takılma 20:55:36–41: SCK tam 60, ama video `write_ms` max 220 ms, `queue_ms` p95 ~200 ms, `unacked` = `cwnd` (141–202 KB), retx 1–3, srtt 4–11 → kısa Wi-Fi radyo tıkanması; `overwritten` 23–29/s, tablet fps 16–21, IDR yok (T-378 doğru davrandı). Çare ağ tarafı: kanal (36, komşu 48), bit hızı uyarlama (T-379) ya da kablo.
