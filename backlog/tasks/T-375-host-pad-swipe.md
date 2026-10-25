@@ -43,7 +43,7 @@ Karar 0043: tablet touchpad'inde üç parmak kaydırma Mac'te Mission Control / 
 
 ## Handoff
 
-- Commit: SHA_PLACEHOLDER (branch `task/T-375-host-pad-swipe`, main 2fc62354 uzerine).
+- Commit: bbe01d37 (branch `task/T-375-host-pad-swipe`, main 2fc62354 uzerine).
 - `./scripts/check.sh`: host-mac build + test GECER (1322 test, pad_swipe_up/left fixture'lari bayt bayt dahil). Kirmizi olan tek sey `gradle (client-android)`: `FixtureTest.everyFixtureFileHasATestCase` Android'de pad_swipe fixture'lari icin test case yok (beklenen, T-376). Baska Android hatasi yok.
 - Dokunulan dosyalar: `Sources/MateBridgeCore/{ProtocolConstants,Message}.swift`, yeni `Messages/PadSwipe.swift`, `Input/{InputStateMachine,InputStateMachine+PadSwipe,InjectAction,InjectionPlanner,InputPipeline,KeyMap}.swift`, `Sources/MateBridgeHost/Input/{InputController,InjectTest}.swift`, `Tests/MateBridgeCoreTests/{FixtureTests,Input/PadSwipeTests,Input/InjectionPlannerTests,Input/InputTestSupport}.swift`, `docs/LOGGING.md`.
 - Kapsam disi tek dokunus (zorunlu): `Sources/MateBridgeCore/Session/SessionMachine.swift` icindeki kapsamli `switch`'e `.padSwipe` eklendi (`.pen, .key, ..., .pinch, .padSwipe, ...` satirina bir kelime; aktif oturumda `deliver`, onaylanmamis oturumda yok sayilir). Kart `files:` listesinde yoktu ama olmadan derlenmez. `SessionServer.swift`'e dokunulmadi: `routeCursor`'daki imlec bildirimi swipe icin gerekmiyor (imleci oynatmaz).
