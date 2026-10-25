@@ -34,7 +34,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-334](tasks/T-334-dav-copy-put-concurrency.md) | WebDAV — eşzamanlı COPY/MOVE geri alması başka bağlantının başarılı PUT'unu silmesin | 7 | android-client-dev | [T-288] |
 | [T-335](tasks/T-335-host-pipeline-stop-join.md) | Host — pipeline teardown sürerken ikinci stop çağıranı beklesin; hata zamanı teardown'dan önce alınsın | 7 | mac-host-dev | [T-325, T-293] |
 | [T-367](tasks/T-367-android-timing-tests-flaky.md) | Android — zamanlama testleri yük altında kırmızı (DecoderWaitTest, OutputParkTest, AacDecodeWorkerTest) | 7 | android-client-dev | [] |
-| [T-381](tasks/T-381-client-aaudio-shared-knob.md) | İstemci — geliştirici anahtarı `audio_out=shared` (Düşük gecikme'de AAudio SHARED ile başla) — exclusive MMAP cızırtısı A/B | 7 | android-client-dev | [] |
 
 ## done
 
@@ -389,3 +388,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-378](tasks/T-378-host-busy-retain-no-idr.md) | Host — video yazımı geçici `.busy` reddinde kareyi tut ve yeniden dene; tek toparlanma kuşağı (astra öneri 2) | 7 | mac-host-dev | [T-370, T-371] |
 | [T-379](tasks/T-379-host-wifi-adapt-v2.md) | Host — WIFI_ADAPT v2: yalnız bit hızı, doğrulanmış tıkanıklık kanıtı, IDR'sız (astra öneri 1) | 7 | mac-host-dev | [T-378] |
 | [T-380](tasks/T-380-pacer-dcap-game-ab.md) | Ölçüm — Oyun 60'ta tablet geç kare atması (late_drops ~%12); pacer D tavanı A/B (pace_dcap_half 2/3/4) | 7 | orchestrator | [] |
+| [T-381](tasks/T-381-client-aaudio-shared-knob.md) | İstemci — geliştirici anahtarı `audio_out=shared` (Düşük gecikme'de AAudio SHARED ile başla) — exclusive MMAP cızırtısı A/B | 7 | android-client-dev | [] |

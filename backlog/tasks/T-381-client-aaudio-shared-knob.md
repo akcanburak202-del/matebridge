@@ -1,7 +1,7 @@
 ---
 id: T-381
 title: İstemci — geliştirici anahtarı `audio_out=shared` (Düşük gecikme'de AAudio SHARED ile başla) — exclusive MMAP cızırtısı A/B
-status: review
+status: done
 phase: 7
 owner: android-client-dev
 depends_on: []
