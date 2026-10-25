@@ -9,6 +9,9 @@ decisions: [0023]
 files:
   - host-mac/Sources/MateBridgeCore/Session/
   - host-mac/Sources/MateBridgeHost/Video/
+  - host-mac/Sources/MateBridgeCore/Video/
+  - host-mac/Sources/MateBridgeHost/Session/StreamCoordinator.swift
+  - host-mac/Sources/MateBridgeHost/Session/SessionServer.swift
   - host-mac/Tests/MateBridgeCoreTests/
   - docs/LOGGING.md
   - docs/KNOBS.md
