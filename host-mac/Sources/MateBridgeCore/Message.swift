@@ -23,6 +23,7 @@ public enum Message: Equatable, Sendable {
     case penGesture(PenGesture)
     case releaseAll(ReleaseReason)
     case pinch(Pinch)
+    case padSwipe(PadSwipe)
     case ping(Ping)
     case pong(Pong)
     case stats(Stats)
@@ -66,6 +67,7 @@ public enum Message: Equatable, Sendable {
         case .penGesture: .penGesture
         case .releaseAll: .releaseAll
         case .pinch: .pinch
+        case .padSwipe: .padSwipe
         case .ping: .ping
         case .pong: .pong
         case .stats: .stats
@@ -112,6 +114,7 @@ public enum Message: Equatable, Sendable {
         case .penGesture(let m): m.write(&w)
         case .releaseAll(let r): w.u8(r.rawValue)
         case .pinch(let m): m.write(&w)
+        case .padSwipe(let m): m.write(&w)
         case .ping(let m): m.write(&w)
         case .pong(let m): m.write(&w)
         case .stats(let m): m.write(&w)
@@ -234,6 +237,7 @@ public enum Message: Equatable, Sendable {
         case .penGesture: return .penGesture(try PenGesture.read(&r))
         case .releaseAll: return .releaseAll(ReleaseReason(rawValue: try r.u8()))
         case .pinch: return .pinch(try Pinch.read(&r))
+        case .padSwipe: return .padSwipe(try PadSwipe.read(&r))
         case .ping: return .ping(try Ping.read(&r))
         case .pong: return .pong(try Pong.read(&r))
         case .stats: return .stats(try Stats.read(&r))

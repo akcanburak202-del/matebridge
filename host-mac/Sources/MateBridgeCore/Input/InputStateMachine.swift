@@ -41,6 +41,8 @@ public struct InputStateMachine: Sendable {
         public var scrollWatchdogUs: UInt64 = 500_000
         /// Open pinch gesture without a PINCH message for this long: end it (PROTOCOL.md section 7).
         public var pinchWatchdogUs: UInt64 = 500_000
+        /// A PAD_SWIPE within this time after the previous performed one is ignored (PROTOCOL.md section 4).
+        public var padSwipeMinIntervalUs: UInt64 = 250_000
         /// New TOUCH presses are ignored while the pen is in range and for this long after the last pen sample
         /// (decision 0006).
         public var touchGateHoldUs: UInt64 = 1_000_000
@@ -119,6 +121,10 @@ public struct InputStateMachine: Sendable {
     public internal(set) var pinchMessages = 0
     /// Forced ends not yet taken by `takePinchForcedEnds()`, for the `pinch_forced_end` log event.
     var pendingPinchEnds: [PinchEndCause] = []
+
+    // Pad swipe (`InputStateMachine+PadSwipe.swift`): nothing stays open, only the rate limit and the log are kept.
+    var lastPadSwipeAt: UInt64?
+    var pendingPadSwipe: [PadSwipeOutcome] = []
 
     // Keyboard.
     /// Keys held, in press order, with what was injected for them (the UP releases the record, never the current
@@ -203,6 +209,8 @@ public struct InputStateMachine: Sendable {
         case .pinch(let m):
             pinchMessages += 1
             out += handlePinch(m, now: now)
+        case .padSwipe(let m):
+            out += handlePadSwipe(m, now: now)
         case .penGesture(let g):
             handlePenGesture(g)
         case .releaseAll(let reason):

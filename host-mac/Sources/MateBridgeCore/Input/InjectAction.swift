@@ -104,6 +104,8 @@ public enum PinchEndCause: String, Equatable, Sendable {
     case releaseAll = "release_all"
     /// A BEGAN that was ignored (left button owner, finger gate) while an older pinch was still open.
     case ignoredBegan = "ignored_began"
+    /// A PAD_SWIPE replaced it (decision 0043).
+    case padSwipe = "pad_swipe"
 }
 
 /// Phase of a pinch gesture on the Mac side (PROTOCOL.md section 4 PINCH). The Mac sees only began, changed and
@@ -155,6 +157,11 @@ public enum InjectAction: Equatable, Sendable {
     /// One step of a magnify gesture. `scale` is the relative change since the previous step (0 on began and ended).
     /// `center` is set on a `began` from the touchscreen only: the cursor moves there before the gesture starts.
     case pinch(InjectPinchPhase, scale: Float, center: PinchCenter?)
+
+    // MARK: Pad swipe (decision 0043)
+
+    /// A three-finger touchpad swipe: one atomic Control+arrow shortcut (pressed and released in the same list).
+    case padSwipe(PadSwipeDirection)
 
     // MARK: Keyboard (decision 0003: physical keys; the flags of each event are the planner's business)
 

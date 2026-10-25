@@ -34,6 +34,8 @@ public struct InputPipeline: Sendable {
     private var records: [ReleaseRecord] = []
     /// Pinch gestures the machine ended on its own since the last `takePinchForcedEnds()` (for the log).
     private var pinchForcedEnds: [PinchEndCause] = []
+    /// PAD_SWIPE outcomes since the last `takePadSwipeOutcomes()` (for the log).
+    private var padSwipeOutcomes: [PadSwipeOutcome] = []
     private var machineConfiguration: InputStateMachine.Configuration
 
     public init(planner: InjectionPlanner.Configuration = .init(), machine: InputStateMachine.Configuration = .init()) {
@@ -63,8 +65,19 @@ public struct InputPipeline: Sendable {
         return pinchForcedEnds
     }
 
+    /// What became of the PAD_SWIPE messages since the last call, oldest first (the `pad_swipe` log event).
+    public mutating func takePadSwipeOutcomes() -> [PadSwipeOutcome] {
+        defer { padSwipeOutcomes.removeAll() }
+        return padSwipeOutcomes
+    }
+
     private mutating func collectPinchEnds() {
         guard machine != nil else { return }
+        let outcomes = machine?.takePadSwipeOutcomes() ?? []
+        if padSwipeOutcomes.count + outcomes.count > 64 {
+            padSwipeOutcomes.removeFirst(padSwipeOutcomes.count + outcomes.count - 64)
+        }
+        padSwipeOutcomes += outcomes
         let ends = machine?.takePinchForcedEnds() ?? []
         if pinchForcedEnds.count + ends.count > 64 { pinchForcedEnds.removeFirst(pinchForcedEnds.count + ends.count - 64) }
         pinchForcedEnds += ends

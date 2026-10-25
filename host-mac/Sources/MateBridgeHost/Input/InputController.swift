@@ -274,7 +274,7 @@ public final class InputController: @unchecked Sendable {
     /// feeds the input-age clock offset; other non-input messages are ignored here.
     public func deliver(_ message: Message) {
         switch message {
-        case .pen, .pointerRel, .pointerAbs, .scroll, .pinch, .penGesture, .releaseAll, .bye, .key: break
+        case .pen, .pointerRel, .pointerAbs, .scroll, .pinch, .padSwipe, .penGesture, .releaseAll, .bye, .key: break
         case .pong(let pong):
             let receivedUs = HostClock.nowUs()  // before the hop: queue time is not round-trip time
             queue.sync {
@@ -609,6 +609,13 @@ public final class InputController: @unchecked Sendable {
     private func logRecords() {
         // State changes only (a pinch the host had to end itself), never coordinates.
         for cause in pipeline.takePinchForcedEnds() { log(.info, "pinch_forced_end", "cause=\(cause.rawValue)") }
+        // T-375: the direction or the reason only, never coordinates.
+        for outcome in pipeline.takePadSwipeOutcomes() {
+            switch outcome {
+            case .performed(let direction): log(.info, "pad_swipe", "dir=\(Self.logName(direction))")
+            case .ignored(let reason): log(.info, "pad_swipe", "ignored=\(reason.rawValue)")
+            }
+        }
         for record in pipeline.takeReleaseRecords() {
             let level: LogLevel = record.cause == .gateLost || record.slowed > 0 || record.reason == "owed_replay" ? .warning
                 : (record.events > 0 ? .info : .debug)
@@ -731,6 +738,15 @@ public final class InputController: @unchecked Sendable {
             let hidden = pipeline.planner.counters.hiddenCursorMoves
             log(.info, "input_age", fields + " pointer_hidden_n=\(hidden - hiddenMovesLogged)")
             hiddenMovesLogged = hidden
+        }
+    }
+
+    private static func logName(_ direction: PadSwipeDirection) -> String {
+        switch direction {
+        case .up: "up"
+        case .down: "down"
+        case .left: "left"
+        case .right: "right"
         }
     }
 

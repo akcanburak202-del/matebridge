@@ -54,6 +54,10 @@ public struct KeyFlags: OptionSet, Hashable, Sendable {
     public static let control = KeyFlags(rawValue: 0x0004_0000)
     public static let option = KeyFlags(rawValue: 0x0008_0000)
     public static let command = KeyFlags(rawValue: 0x0010_0000)
+    /// `maskNumericPad`: set by a real keyboard on the arrow keys.
+    public static let numericPad = KeyFlags(rawValue: 0x0020_0000)
+    /// `maskSecondaryFn`: set by a real keyboard on the arrow keys.
+    public static let secondaryFn = KeyFlags(rawValue: 0x0080_0000)
 
     /// The flags of a set of held modifiers. Either side held keeps the aggregate flag; each side keeps its own bit,
     /// so releasing one of two held sides leaves the aggregate and the other side's bit in place.

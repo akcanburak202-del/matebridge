@@ -335,6 +335,9 @@ public struct InjectionPlanner: Sendable {
         case .pinch(let phase, let scale, let center):
             applyPinch(phase, scale, center, env, &out)
 
+        case .padSwipe(let direction):
+            applyPadSwipe(direction, env, &out)
+
         case .keyDown(let code, let autorepeat):
             if autorepeat {
                 // Continues a key that was posted; needs permission and a display, not "new input" checks.
@@ -460,6 +463,33 @@ public struct InjectionPlanner: Sendable {
         case .ended, .cancelled, .forcedEnd:
             guard magnifyOpen else { counters.droppedNotHeld += 1; return }
             closeMagnify(&out)
+        }
+    }
+
+    /// Pad swipe (decision 0043): Control+arrow pressed and released in ONE list, so nothing is held between messages
+    /// and neither the shadow state nor release-all has anything to track. The events carry explicit flags: Control
+    /// (left side bit) and for the arrow `secondaryFn | numericPad` like a real keyboard; whatever else the user holds
+    /// (Command from the Ctrl mapping, Shift, ...) is NOT in them. Control gets its own `flagsChanged` pair because
+    /// some system shortcuts look at the modifier state, not only at the key's flags; the release carries the flags
+    /// of what the user still holds, so the Mac's modifier view returns to it. A Control the user already holds
+    /// (Meta mapping) is left alone: no extra events, it is already down.
+    private mutating func applyPadSwipe(_ direction: PadSwipeDirection, _ env: InjectionEnvironment,
+                                        _ out: inout [MacEvent]) {
+        guard openGate(env) != nil else { return }
+        let arrow = direction.arrowKeyCode
+        // The user holds that very arrow: a second press of it would be taken for a repeat and its release for theirs.
+        guard !heldKeys.contains(arrow) else { counters.droppedNotHeld += 1; return }
+        let heldControls = heldModifiers.filter { $0 == .leftControl || $0 == .rightControl }
+        let ownControl = heldControls.isEmpty
+        let control = ownControl ? KeyFlags(holding: [ModifierKey.leftControl]) : KeyFlags(holding: heldControls)
+        let arrowFlags = control.union([.secondaryFn, .numericPad])
+        if ownControl {
+            out.append(.key(MacKey(kind: .modifierDown, keyCode: ModifierKey.leftControl.keyCode, flags: control)))
+        }
+        out.append(.key(MacKey(kind: .keyDown, keyCode: arrow, flags: arrowFlags)))
+        out.append(.key(MacKey(kind: .keyUp, keyCode: arrow, flags: arrowFlags)))
+        if ownControl {
+            out.append(.key(MacKey(kind: .modifierUp, keyCode: ModifierKey.leftControl.keyCode, flags: currentFlags)))
         }
     }
 

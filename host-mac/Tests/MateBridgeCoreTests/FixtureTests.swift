@@ -132,6 +132,8 @@ private let validFixtures: [String: Message] = [
     "pinch_began": .pinch(Pinch(timeUs: 1_127_500_800_000, scale: 0, x: 24576, y: 32768, phase: .began, source: .touch)),
     "pinch": .pinch(Pinch(timeUs: 1_127_500_816_000, scale: 0.05, x: 24576, y: 32768, phase: .changed, source: .touch)),
     "pinch_ended": .pinch(Pinch(timeUs: 1_127_500_900_000, scale: 0, x: 0, y: 0, phase: .ended, source: .touchpad)),
+    "pad_swipe_up": .padSwipe(PadSwipe(timeUs: 1_127_501_200_000, direction: .up)),
+    "pad_swipe_left": .padSwipe(PadSwipe(timeUs: 1_127_501_700_000, direction: .left)),
     "release_all": .releaseAll(.background),
     "ping": .ping(Ping(seq: 7, senderTimeUs: 1_127_500_700_000)),
     "pong": .pong(Pong(seq: 7, echoTimeUs: 1_127_500_700_000, responderTimeUs: 98_765_432_100)),
