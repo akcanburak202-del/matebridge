@@ -1,7 +1,7 @@
 ---
 id: T-378
 title: Host — video yazımı geçici `.busy` reddinde kareyi tut ve yeniden dene; tek toparlanma kuşağı (astra öneri 2)
-status: review
+status: done
 phase: 7
 owner: mac-host-dev
 depends_on: [T-370, T-371]
