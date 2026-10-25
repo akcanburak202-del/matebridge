@@ -240,38 +240,25 @@ final class BsdTcpSocketTests: XCTestCase {
         server.listener.cancel()
     }
 
-    /// T-328: the extra admission closes `canSend` on an otherwise idle, writable socket, `notifyReady` wakes the
-    /// sender, and clearing it restores the plain gate. A frame the sender already took is not refused by it.
-    func testAdmissionGatesCanSendOnlyAndWakesThroughNotifyReady() throws {
+    /// T-379: the write observation (the stall signal's input) reports no work on an idle transport, and after a
+    /// finished write the bytes of the record with no write in progress.
+    func testWriteObservationCountsFinishedRecords() throws {
         let server = try Server(options: BsdTcpOptions(notSentLowatBytes: 128 * 1024))
         let client = connectClient(port: server.listener.port)
         defer { close(client) }
         let c = try XCTUnwrap(server.waitAccepted())
         let t = SocketVideoTransport(connection: c, sealer: RecordSealer(key: key,
-                                                                           maxPayload: ProtocolConstants.maxVideoPayload))
-        XCTAssertTrue(t.canSend, "no admission: the plain gate")
+                                                                           maxPayload: ProtocolConstants.maxVideoPayload),
+                                     clockUs: { 42 })
+        XCTAssertEqual(t.writeObservation(), .init(progressBytes: 0, writeStartedUs: nil))
 
-        let open = LockedFlag(false)
-        let asked = Counter()
-        t.setAdmission { asked.increment(); return open.value }
-        XCTAssertFalse(t.canSend)
-        XCTAssertEqual(asked.value, 1)
-
-        let woken = DispatchSemaphore(value: 0)
-        t.setReadyHandler { woken.signal() }
-        open.set(true)
-        t.notifyReady()
-        XCTAssertEqual(woken.wait(timeout: .now() + 2), .success)
-        XCTAssertTrue(t.canSend)
-
-        // Taken while admitted, refused afterwards: `sendFrame` sends anyway and the record counter is used.
-        open.set(false)
         let done = DispatchSemaphore(value: 0)
         XCTAssertEqual(t.sendFrame(frame(0, size: 1000)) { _ in done.signal() }, .sent)
         XCTAssertEqual(done.wait(timeout: .now() + 5), .success)
+        let after = t.writeObservation()
+        XCTAssertNil(after.writeStartedUs)
+        XCTAssertGreaterThan(after.progressBytes, 1000, "the whole sealed record counts")
 
-        t.setAdmission(nil)
-        XCTAssertTrue(waitCanSend(t), "cleared: back to the plain gate")
         let reader = Reader(fd: client)
         c.cancel()
         _ = reader.done.wait(timeout: .now() + 5)

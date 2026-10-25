@@ -23,9 +23,6 @@ public final class VideoLink: @unchecked Sendable {
     private let logger: SessionLogger
     /// Kernel send-queue sampling (T-088), only with `MATEBRIDGE_SENDQ_LOG=1` or `MATEBRIDGE_LAT_TRACE=1`.
     private let sendQueue: SendQueueSampler?
-    /// Wi-Fi congestion control (T-328); nil unless `MATEBRIDGE_WIFI_ADAPT=1` on a network session.
-    private let adaptationLock = NSLock()
-    private var adaptation: WifiAdaptation?
 
     fileprivate init(sessionID: UInt32, configID: UInt16, socket: BsdTcpConnection, logger: SessionLogger,
                      sealer: RecordSealer, sampleSendQueue: Bool) {
@@ -34,7 +31,7 @@ public final class VideoLink: @unchecked Sendable {
         self.logger = logger
         self.sessionID = sessionID
         self.configID = configID
-        self.transport = SocketVideoTransport(connection: socket, sealer: sealer)
+        self.transport = SocketVideoTransport(connection: socket, sealer: sealer, clockUs: { HostClock.nowUs() })
     }
 
     public var canSend: Bool { transport.canSend }
@@ -55,15 +52,6 @@ public final class VideoLink: @unchecked Sendable {
     public func sendResult(_ frame: VideoFrame, completion: @escaping @Sendable (Bool) -> Void = { _ in }) -> VideoSendResult {
         // The backlog this frame will queue behind (T-088); taken before the write.
         if let sendQueue, transport.canSend { sendQueue.sample() }
-        var completion = completion
-        if let a = adaptationLock.withLock({ adaptation }) {
-            let bytes = frame.data.count
-            let inner = completion
-            completion = { ok in
-                if ok { a.frameWritten(bytes: bytes) }
-                inner(ok)
-            }
-        }
         switch transport.sendFrame(frame, completion: completion) {
         case .sent:
             return .accepted
@@ -85,19 +73,11 @@ public final class VideoLink: @unchecked Sendable {
     }
 
     public func cancel() {
-        let a = adaptationLock.withLock { adaptation }
-        a?.stop()
         transport.connection.cancel()
     }
 
-    /// Puts the video connection under Wi-Fi congestion control (T-328): new frames also need the controller's
-    /// in-flight byte budget, and every written frame feeds its frame-size average. Called once, before the sender
-    /// starts. The caller (`WifiAdaptationDriver`) feeds it TCP readings.
-    func attachAdaptation(_ a: WifiAdaptation) {
-        adaptationLock.withLock { adaptation = a }
-        a.setWakeHandler { [weak transport] in transport?.notifyReady() }
-        transport.setAdmission { [a] in a.admit() }
-    }
+    /// Write progress of the video connection for the stall signal (T-379).
+    func writeObservation() -> SocketVideoTransport.WriteObservation { transport.writeObservation() }
 
     /// `tcpi_snd_sbbytes` of the connection (kernel send buffer: unsent plus unacknowledged); nil when unreadable.
     func sendBufferBytes() -> UInt32? { transport.connection.connectionInfo()?.tcpi_snd_sbbytes }

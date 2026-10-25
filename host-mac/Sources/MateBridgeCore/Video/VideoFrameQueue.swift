@@ -44,6 +44,12 @@ public final class VideoFrameQueue: @unchecked Sendable {
     /// A popped frame that is charged (`setChargesPops`) and not yet settled counts too.
     public var queuedCount: Int { lock.withLock { policy.reservedCount } }
 
+    /// When the frame at the head of the queue was enqueued (`FrameTrace.enqueuedUs`, host clock); nil when the queue
+    /// is empty or the frame carries no stamp (T-379: the age of the head is part of the stall signal).
+    public var headEnqueuedUs: UInt64? {
+        lock.withLock { policy.first.flatMap { $0.trace.enqueuedUs > 0 ? $0.trace.enqueuedUs : nil } }
+    }
+
     /// T-378: the sender charges the frame it popped to `queuedCount` until it `settlePop()`s or `unpop`s it.
     /// Turning it off releases any charge.
     public func setChargesPops(_ on: Bool) {

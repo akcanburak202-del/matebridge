@@ -38,36 +38,47 @@ public final class SocketVideoTransport: VideoTransport, @unchecked Sendable {
     private var sealer: RecordSealer
     private var inFlight = 0
     private var readyHandler: (@Sendable () -> Void)?
-    /// Extra admission of new frames (T-328, Wi-Fi congestion control); nil = the gate above only, exactly as before.
-    private var admission: (@Sendable () -> Bool)?
+    /// Write progress for the stall signal (T-379): the record being written and the bytes of finished records.
+    private let clockUs: @Sendable () -> UInt64
+    private var writeStartedUs: UInt64?
+    private var writeBytes = 0
+    private var completedBytes: UInt64 = 0
 
-    public init(connection: BsdTcpConnection, sealer: RecordSealer) {
+    /// - Parameter clockUs: monotone microseconds; stamps the start of a write for `writeObservation`. The owner of
+    ///   the stall detector reads the same clock.
+    public init(connection: BsdTcpConnection, sealer: RecordSealer,
+                clockUs: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds / 1_000 }) {
         self.connection = connection
         self.sealer = sealer
+        self.clockUs = clockUs
         connection.setWritableHandler { [weak self] in self?.fireReady() }
     }
 
     public var canSend: Bool {
-        let (inFlight, admission) = lock.withLock { (self.inFlight, self.admission) }
+        let inFlight = lock.withLock { self.inFlight }
         // A record of ours is still in user space: its completion wakes the sender, no need to ask the socket (which
         // would arm its writable notification).
         guard inFlight < SocketVideoGate.maxRecordsInFlight else { return false }
         guard SocketVideoGate.canSend(recordsInFlight: inFlight, socketBelowLowat: connection.isWritableForNewRecord)
         else { return false }
-        // T-328: the in-flight byte budget, asked last and only here. `sendFrame` does not ask again: a frame the
-        // sender already took must not be refused (it would be lost and ask for a keyframe), and the sender asks
-        // before every frame.
-        return admission?() ?? true
+        return true
     }
 
-    /// Sets (or clears) the extra admission of new frames. The closure runs on the sender's thread, outside this
-    /// transport's lock, and must wake the sender through `notifyReady` when a refusal may pass later.
-    public func setAdmission(_ admission: (@Sendable () -> Bool)?) {
-        lock.withLock { self.admission = admission }
+    /// What the stall signal needs (T-379): bytes the kernel has accepted from this connection's video writes (a
+    /// record in progress counts for what it has handed over so far) and when the record in progress started.
+    public struct WriteObservation: Equatable, Sendable {
+        public var progressBytes: UInt64
+        public var writeStartedUs: UInt64?
     }
 
-    /// Fires the ready handler: the sender asks `canSend` again. For an admission that was refused earlier.
-    public func notifyReady() { fireReady() }
+    public func writeObservation() -> WriteObservation {
+        let (done, started, size) = lock.withLock { (completedBytes, writeStartedUs, writeBytes) }
+        guard started != nil else { return WriteObservation(progressBytes: done, writeStartedUs: nil) }
+        // `pendingBytes` takes the connection's lock, after ours was released. If the record finished meanwhile the
+        // pending count is 0 and the sum is the true total; it never goes backwards.
+        let pending = min(connection.pendingBytes, size)
+        return WriteObservation(progressBytes: done + UInt64(size - pending), writeStartedUs: started)
+    }
 
     public func setReadyHandler(_ handler: (@Sendable () -> Void)?) {
         lock.withLock { readyHandler = handler }
@@ -107,11 +118,16 @@ public final class SocketVideoTransport: VideoTransport, @unchecked Sendable {
             return .invalid
         }
         inFlight += 1
+        writeStartedUs = clockUs()
+        writeBytes = bytes.count
+        let recordBytes = bytes.count
         // Never calls back inside `write`, so holding `lock` here cannot deadlock.
         let queued = connection.write(bytes) { [weak self] ok in
             guard let self else { return completion(ok) }
             let ready = lock.withLock {
                 inFlight -= 1
+                writeStartedUs = nil
+                if ok { completedBytes += UInt64(recordBytes) }
                 return readyHandler
             }
             completion(ok)
