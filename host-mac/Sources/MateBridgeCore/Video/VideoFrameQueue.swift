@@ -40,8 +40,14 @@ public final class VideoFrameQueue: @unchecked Sendable {
         }
     }
 
-    /// Frames waiting in the queue (T-370: the encoder's input back pressure).
+    /// Frames waiting in the queue (T-370: the encoder's input back pressure), a handed-back frame included.
     public var queuedCount: Int { lock.withLock { policy.count } }
+
+    /// T-378: the consumer popped a frame, the transport answered `.busy` (nothing sealed or sent) and it gives the
+    /// frame back: it is the next one `tryPop`/`next` return, and it counts in `queuedCount`. See
+    /// `BoundedFrameQueue.unpop`. Returns false (and holds nothing) when one is already held.
+    @discardableResult
+    public func unpop(_ frame: EncodedVideoFrame) -> Bool { lock.withLock { policy.unpop(frame) } }
 
     public var isFinished: Bool { lock.withLock { finished } }
 

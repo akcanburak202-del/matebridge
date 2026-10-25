@@ -30,6 +30,12 @@ files:
 
 ## Plan
 
+1. `VideoSendResult` (`accepted | busy | refused(write|seal|invalid|other)`) + `VideoTransport.sendResult` (varsayılan: Bool'dan `.refused(.other)`); `SocketVideoTransport` `SendOutcome`'u eşler.
+2. Tutma kuyrukta: `BoundedFrameQueue.unpop` tek bir "held" kare saklar; `pop`/`first` önce onu verir, `count`/`capacity`/`queuedCount` içinde sayılır (T-370 ayrılması kendiliğinden görür, ek yuva yok), taşmada düşmez, `startNewConsumer`'da temizlenir, `breakChain` held keyframe'i korur / held delta'yı atar.
+3. `VideoSender`: `.busy` -> `unpop`, `seq` ilerlemez, keyframe yok, `busyRetries++` (art arda 2. busy'den sonra 1 ms uyku, sıcak döngü yok). `.refused(kind)` -> bugünkü yol, `refusals[kind]++`, isteğe bağlı `requestKeyframeForRefusal(kind)`.
+4. Koalesör: zorlanan IDR çıkış kuyruğuna ulaştıysa (`keyframesPushed` ilerledi) yazımı bitene kadar yoldadır; `request` ve `evaluateHost` zamanlayıcıyla ikinci IDR zorlamaz. Kodlayıcıda kalan IDR için eski zaman aşımı güvenlik ağı duruyor. `ForceNote.refusal` -> `idr_forced ... refusal=`.
+5. Testler `BusyRetainTests.swift`; LOGGING.md.
+
 ## Handoff
 
 ## Open questions

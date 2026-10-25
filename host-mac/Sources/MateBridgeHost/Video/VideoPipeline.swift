@@ -333,9 +333,11 @@ public final class VideoPipeline: @unchecked Sendable {
 
     /// Host-side keyframe (the sender's transport refused a frame): always forced, and recorded so that the client's
     /// requests caused by the same hiccup coalesce with it.
-    public func requestKeyframe() {
+    public func requestKeyframe(refusal: VideoRefusal? = nil) {
         let pushed = frames.keyframesPushed
-        keyframes.update { $0.internalForce(nowUs: HostClock.nowUs(), keyframesPushed: pushed, cause: .transportRefused) }
+        keyframes.update {
+            $0.internalForce(nowUs: HostClock.nowUs(), keyframesPushed: pushed, cause: .transportRefused, refusal: refusal)
+        }
         box.encoder?.requestKeyframe(resubmitNow: true, view: .main)
     }
 

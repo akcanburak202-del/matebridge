@@ -78,6 +78,16 @@ public final class SocketVideoTransport: VideoTransport, @unchecked Sendable {
         sendFrame(frame, completion: completion) == .sent
     }
 
+    public func sendResult(_ frame: VideoFrame, completion: @escaping @Sendable (Bool) -> Void) -> VideoSendResult {
+        switch sendFrame(frame, completion: completion) {
+        case .sent: return .accepted
+        case .busy: return .busy
+        case .writeRefused: return .refused(.write)
+        case .invalid: return .refused(.invalid)
+        case .sealFailed: return .refused(.seal)
+        }
+    }
+
     /// Seals and queues one frame; see `SendOutcome`. `completion(true)` once the kernel accepted the whole record.
     public func sendFrame(_ frame: VideoFrame, completion: @escaping @Sendable (Bool) -> Void = { _ in }) -> SendOutcome {
         let message = Message.videoFrame(frame)

@@ -30,18 +30,24 @@ public struct BoundedFrameQueue: Sendable {
     /// Every frame the queue discarded for any reason: overflow, purge, refusal, `breakChain` (T-258 loss accounting).
     public var discardedCount: Int { droppedCount + refusedCount + purgedByBreakCount }
     private var awaitingKeyframe = false
+    /// T-378: the one frame the consumer popped, could not send (`.busy`) and handed back. It is the head: `pop()`
+    /// returns it first, and it counts toward `count` / `capacity`, so downstream reservations (T-370) see it.
+    /// Overflow never drops it: it is the oldest frame and was neither sealed nor sent, so the chain stays intact.
+    private var held: EncodedVideoFrame?
 
     public init(capacity: Int = BoundedFrameQueue.defaultCapacity) {
         precondition(capacity >= 1)
         self.capacity = capacity
     }
 
-    public var count: Int { frames.count }
-    public var isEmpty: Bool { frames.isEmpty }
+    public var count: Int { frames.count + (held == nil ? 0 : 1) }
+    public var isEmpty: Bool { frames.isEmpty && held == nil }
+    /// A frame is handed back and waits to be offered again (T-378).
+    public var hasHeldFrame: Bool { held != nil }
     /// Delta frames are refused until a keyframe is pushed (after a chain-breaking drop, a new consumer or a resync).
     public var isAwaitingKeyframe: Bool { awaitingKeyframe }
     /// A keyframe waits in the queue (it is about to be written).
-    public var hasQueuedKeyframe: Bool { frames.contains(where: \.isKeyframe) }
+    public var hasQueuedKeyframe: Bool { held?.isKeyframe == true || frames.contains(where: \.isKeyframe) }
 
     /// Adds a frame; returns how many frames were dropped to make room (0 or 1).
     @discardableResult
@@ -63,7 +69,7 @@ public struct BoundedFrameQueue: Sendable {
             if !frames.isEmpty, frames.allSatisfy(\.isCodecConfig) { frames.removeAll() }
         }
         frames.append(frame)
-        guard frames.count > capacity else { return 0 }
+        guard frames.count + (held == nil ? 0 : 1) > capacity else { return 0 }
         // Oldest first: plain delta frame, else oldest non-config keyframe, else oldest overall.
         let idx = frames.firstIndex(where: { !$0.isProtected })
             ?? frames.firstIndex(where: { !$0.isCodecConfig })
@@ -93,7 +99,21 @@ public struct BoundedFrameQueue: Sendable {
     }
 
     public mutating func pop() -> EncodedVideoFrame? {
-        frames.isEmpty ? nil : frames.removeFirst()
+        if let h = held {
+            held = nil
+            return h
+        }
+        return frames.isEmpty ? nil : frames.removeFirst()
+    }
+
+    /// T-378: gives back the frame `pop()` just returned because the transport was busy: it becomes the head again,
+    /// with no change to the reference chain. At most one frame can be held (the consumer sends one at a time);
+    /// returns false, holding nothing, when one already is.
+    @discardableResult
+    public mutating func unpop(_ frame: EncodedVideoFrame) -> Bool {
+        guard held == nil else { return false }
+        held = frame
+        return true
     }
 
     /// True once after a delta frame was dropped; the caller asks the encoder for a keyframe.
@@ -106,6 +126,7 @@ public struct BoundedFrameQueue: Sendable {
     /// has been pushed, delta frames are refused. The caller must force a keyframe from the encoder.
     public mutating func startNewConsumer(config: EncodedVideoFrame?) {
         frames.removeAll()
+        held = nil  // belongs to the previous consumer's connection
         keyframeNeeded = false
         awaitingKeyframe = true
         if let config { frames.append(config) }
@@ -120,7 +141,7 @@ public struct BoundedFrameQueue: Sendable {
     }
 
     /// The first queued frame, without removing it.
-    public var first: EncodedVideoFrame? { frames.first }
+    public var first: EncodedVideoFrame? { held ?? frames.first }
 
     /// The reference chain was broken outside the queue (the sender dropped a frame, T-258 auxiliary stream): queued
     /// deltas are purged and deltas are refused until a keyframe is pushed. The caller asks the encoder for one.
@@ -128,18 +149,31 @@ public struct BoundedFrameQueue: Sendable {
         // Every queued frame is later than the lost one. Deltas up to the first queued keyframe are useless; that
         // keyframe restarts the chain (so recovery is already satisfied and later deltas stay valid). Without one,
         // deltas are refused until a keyframe is pushed.
+        // The held frame is the oldest: a keyframe restarts the chain (the deltas behind it stay valid); a held delta
+        // is later than the lost frame and so is as useless as the queued ones before the next keyframe.
         let before = frames.count
-        var i = 0
+        var heldDropped = 0
         var restarted = false
+        if let h = held {
+            if h.isKeyframe {
+                restarted = true
+            } else if !h.isProtected {
+                held = nil
+                heldDropped = 1
+            }
+        }
+        var i = 0
+        if restarted { i = frames.count }  // nothing to purge behind a held keyframe
         while i < frames.count {
             if frames[i].isKeyframe { restarted = true; break }
             if frames[i].isProtected { i += 1 } else { frames.remove(at: i) }
         }
-        purgedByBreakCount += before - frames.count
+        purgedByBreakCount += before - frames.count + heldDropped
         if !restarted { awaitingKeyframe = true }
     }
 
     public mutating func removeAll() {
         frames.removeAll()
+        held = nil
     }
 }
