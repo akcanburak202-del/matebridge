@@ -1,7 +1,7 @@
 ---
 id: T-377
 title: Tasarım incelemesi — gpt-6-astra (high), Wi-Fi'da oyun: anlık kötüleşmede takılmadan geçiş ve toparlanma
-status: in_progress
+status: done
 phase: 7
 owner: orchestrator
 depends_on: [T-327, T-328, T-369, T-370, T-371]
