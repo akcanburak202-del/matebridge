@@ -2094,3 +2094,9 @@ Wi-Fi kaybı azalmadı (retx saniyesi daha da çok), ama artık zorunlu IDR zinc
 
 - Host fdb78527 (12:10), daily APK aynı commit (12:13), Wi-Fi.
 - Kullanıcı: yukarı (Mission Control), aşağı (uygulama pencereleri), sola/sağa (masaüstü geçişi), iki parmak kaydırma/yakınlaştırma "her şey sorunsuz". HarmonyOS üç parmak touchpad olaylarını pointer capture altında uygulamaya iletiyor; sentetik Control+ok sistem kısayolunu tetikliyor (0043 riskleri kapandı). Control+Shift/Command basılıyken kaydırma ayrıca denenmedi.
+
+## 2026-10-25 ~14:30 — Ev modemi: kanal değişikliği ertelendi
+
+- Modem aslında **Aidata WR854GVR** (önceki notta FiberHGW yazıyordu; SSID adı yanıltıcı). 5 GHz: Auto(DFS) → 36, 80 MHz.
+- Yeniden tarama (Mac konumu): 5 GHz'de yalnızca 36–48 bloğu dolu (bizim + 1 komşu ch48); 52–64 ve 100–140 boş.
+- Kanal 100'e geçiş denendi, kaydedilmedi: firmware kayıtta mevcut WPA parolasını doğruluyor ("rakam içermiyor"). Parola değişimi kullanıcıya zahmetli → kanal 36'da kalıyor. Önce T-378 ile Wi-Fi oyun oturumu; takılma sürerse yeniden ele alınır.
