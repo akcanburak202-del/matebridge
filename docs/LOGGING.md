@@ -387,6 +387,12 @@ Yalnız ölçüm; girdinin nasıl ve ne zaman uygulandığını değiştirmez. H
 - Karar eşiği (kart T-175): mesaj başına > ~50 µs ya da `deliver_us_p99` birkaç ms'nin üstündeyse optimizasyon kartı açılır (geometri önbelleği, tek `CGEventSource`, ses boşaltmayı oturum kuyruğundan almak). Altındaysa gerek yok.
 - Koordinat, tuş, keycode ya da karakter yazılmaz; yalnız aşama adı, süre ve sayı.
 
+## Touchpad üç parmak kaydırma (Mac, `input`, T-375, karar 0043)
+
+- `I input ev=pad_swipe dir=up|down|left|right`: hareket tanındı ve Control+ok kısayolu enjekte edilmek üzere planlandı (izin ya da sanal ekran yoksa olay çıkmaz, bu satır yine yazılır).
+- `I input ev=pad_swipe ignored=rate|drag|fingers|dir`: yok sayıldı. `rate`: önceki kaydırmadan sonraki 250 ms içinde; `drag`: sol düğmenin sahibi var (sürükleme); `fingers`: parmak sayısı 3 değil; `dir`: bilinmeyen yön değeri.
+- Tuş kodu, karakter, koordinat yazılmaz; yalnız yön adı ya da yok sayma nedeni. Açık scroll/pinch'i bitirmek `pinch_forced_end cause=pad_swipe` (pinch için) olarak görünür.
+
 ## USB'ye geçişte kimlik kapısı (tablet, `MB/session`, T-205, karar 0018)
 
 Aday (USB) bağlantı, ilk doğrulanmış kaydı gelene kadar terfi etmez; o sürede Wi-Fi oturumu geçerli kalır ve input oradan akar (hiçbir bırakma kaybolmaz).

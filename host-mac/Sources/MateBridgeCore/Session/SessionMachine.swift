@@ -913,7 +913,7 @@ public struct SessionMachine: Sendable {
             // Decision 0038: the link of the last STREAM_PREFS sets this session's heartbeat timings.
             if isActive { connections[id]?.remote = prefs.isRemote }
             return isActive ? [.deliver(id, message)] : []
-        case .pen, .key, .pointerRel, .pointerAbs, .scroll, .pinch, .penGesture, .stats, .keyframeRequest, .clipboard, .displayRate,
+        case .pen, .key, .pointerRel, .pointerAbs, .scroll, .pinch, .padSwipe, .penGesture, .stats, .keyframeRequest, .clipboard, .displayRate,
              .filesInfo, .cursorPrefs, .cameraPrefs:
             // Before ACCEPTED input is ignored and nothing is injected (PROTOCOL.md section 3).
             return isActive ? [.deliver(id, message)] : []

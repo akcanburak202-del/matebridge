@@ -142,11 +142,26 @@ struct MacEventModel {
                 guard let m = ModifierKey(rawValue: k.keyCode) else { fail("not a modifier", event); return }
                 if !modifiers.contains(m) { fail("modifier up without down", event) }
                 modifiers.remove(m)
+            case .flagsRefresh:
+                guard let m = ModifierKey(rawValue: k.keyCode), modifiers.contains(m) else { fail("flags refresh of a modifier that is not held", event); return }
             }
             // The flags are exactly the modifiers the Mac holds after the event (Caps Lock aside).
             var flags = k.flags
             flags.remove(.capsLock)
-            if flags != KeyFlags(holding: modifiers) { fail("flags do not match the held modifiers", event) }
+            let held = KeyFlags(holding: modifiers)
+            let ctrl = KeyFlags(holding: [ModifierKey.leftControl])
+            if flags.contains(.secondaryFn) {
+                // PAD_SWIPE arrow (decision 0043): Control plus the real keyboard's arrow bits, and none of the other
+                // modifiers the user holds; whatever it carries must be held.
+                let base = flags.subtracting([.secondaryFn, .numericPad])
+                if !(0x7B...0x7E).contains(k.keyCode) || !base.contains(.control) || !held.isSuperset(of: base) {
+                    fail("pad swipe arrow flags", event)
+                }
+            } else if k.kind == .modifierDown, k.keyCode == ModifierKey.leftControl.keyCode, flags == ctrl {
+                // PAD_SWIPE Control press: Control only, even when the user holds other modifiers.
+            } else if flags != held {
+                fail("flags do not match the held modifiers", event)
+            }
         }
     }
 }

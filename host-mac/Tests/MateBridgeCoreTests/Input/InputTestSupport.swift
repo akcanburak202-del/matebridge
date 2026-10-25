@@ -193,6 +193,10 @@ struct MacInputModel {
                 if !pinchOpen { fail("pinch end while closed", action) }
                 pinchOpen = false
             }
+        case .padSwipe:
+            // An atomic shortcut: a gesture or a drag in progress must have been ended / refused before it.
+            if scrollOpen || pinchOpen { fail("pad swipe while a scroll or pinch is open", action) }
+            if leftIsDown { fail("pad swipe while the left button is down", action) }
         case .scrollWheel, .setCapsLock:
             break
         case .keyDown(let code, let autorepeat):

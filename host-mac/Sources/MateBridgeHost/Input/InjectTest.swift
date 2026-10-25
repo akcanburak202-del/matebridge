@@ -10,6 +10,7 @@ import MateBridgeCore
 ///     MateBridgeApp --inject-test --tap 2            (touch taps at the display center; 2 = double click)
 ///     MateBridgeApp --inject-test --scroll           (one precise scroll gesture at the display center, finger moving down)
 ///     MateBridgeApp --inject-test --pinch in|out     (one magnify gesture at the display center: BEGAN, 20 CHANGED, ENDED)
+///     MateBridgeApp --inject-test --pad-swipe up|down|left|right  (one three-finger swipe = Control+arrow shortcut; opens Mission Control on up!)
 ///     MateBridgeApp --inject-test --wheel 5          (5 mouse-wheel steps at the display center)
 ///     MateBridgeApp --inject-test --keys "cmd+a,tab"  (keyboard combos, see below; goes to the focused app)
 ///
@@ -35,6 +36,8 @@ public enum InjectTest {
         public var scrollGesture = false
         /// "in" (fingers closing, zoom out) or "out" (fingers spreading, zoom in).
         public var pinch: String?
+        /// up, down, left or right (T-375).
+        public var padSwipe: String?
         public var wheelSteps = 0
         public var keys: String?
         public var keyHoldMs = 60
@@ -48,7 +51,7 @@ public enum InjectTest {
 
     public static let usage = """
         usage: MateBridgeApp --inject-test [--fixture NAME]... [--stroke ramp|circle|tilt] [--tap N]
-                             [--scroll] [--pinch in|out] [--wheel N] [--keys COMBOS] [--key-hold MS] [--repeat N] [--countdown S] [--create-display] [--fixtures-dir DIR]
+                             [--scroll] [--pinch in|out] [--pad-swipe up|down|left|right] [--wheel N] [--keys COMBOS] [--key-hold MS] [--repeat N] [--countdown S] [--create-display] [--fixtures-dir DIR]
         """
 
     /// nil when `--inject-test` is absent. Any argument it does not know, or a stray value, is an error.
@@ -74,6 +77,9 @@ public enum InjectTest {
             case "--pinch":
                 guard let v = value(), ["in", "out"].contains(v) else { return fail("--pinch needs in or out") }
                 o.pinch = v; i += 1
+            case "--pad-swipe":
+                guard let v = value(), ["up", "down", "left", "right"].contains(v) else { return fail("--pad-swipe needs up, down, left or right") }
+                o.padSwipe = v; i += 1
             case "--wheel":
                 guard let v = value(), let n = Int(v), (1...50).contains(n) else { return fail("--wheel needs 1...50") }
                 o.wheelSteps = n; i += 1
@@ -102,7 +108,7 @@ public enum InjectTest {
             }
             i += 1
         }
-        if o.fixtures.isEmpty && o.stroke == nil && o.taps == 0 && !o.scrollGesture && o.pinch == nil && o.wheelSteps == 0 && o.keys == nil {
+        if o.fixtures.isEmpty && o.stroke == nil && o.taps == 0 && !o.scrollGesture && o.pinch == nil && o.padSwipe == nil && o.wheelSteps == 0 && o.keys == nil {
             return fail("nothing to inject")
         }
         return .success(o)
@@ -227,6 +233,7 @@ public enum InjectTest {
         }
         if o.scrollGesture { script += scrollScript() }
         if let pinch = o.pinch { script += pinchScript(spreading: pinch == "out") }
+        if let swipe = o.padSwipe { script += padSwipeScript(swipe) }
         if o.wheelSteps > 0 { script += wheelScript(o.wheelSteps) }
         if let keys = o.keys { script += try keyScript(keys, holdMs: o.keyHoldMs) }
         return script
@@ -357,6 +364,12 @@ public enum InjectTest {
         for _ in 0..<20 { script.append(pinch(.changed, scale: spreading ? 0.03 : -0.03, delay: 16)) }
         script.append(pinch(.ended, scale: 0, delay: 16))
         return script
+    }
+
+    /// One three-finger swipe (T-375, decision 0043): the host turns it into a Control+arrow shortcut.
+    private static func padSwipeScript(_ name: String) -> [Step] {
+        let direction: PadSwipeDirection = ["up": .up, "down": .down, "left": .left][name] ?? .right
+        return [Step(delayMs: 1000, message: .padSwipe(PadSwipe(timeUs: 0, direction: direction)))]
     }
 
     private static let modifierScanCodes: [String: UInt16] = ["shift": 42, "cmd": 29, "command": 29, "opt": 56, "alt": 56,

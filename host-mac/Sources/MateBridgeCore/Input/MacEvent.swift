@@ -135,6 +135,9 @@ public struct MacKey: Equatable, Sendable {
         case keyUp
         case modifierDown
         case modifierUp
+        /// A `flagsChanged` that only restates the modifier state (nothing goes down or up): T-375 uses it after a
+        /// pad swipe to put back the flags the swipe left out. `keyCode` is a modifier that stays held.
+        case flagsRefresh
     }
 
     public var kind: Kind
