@@ -2154,3 +2154,10 @@ Yalnız yayının aktığı saniyeler (`sent_kbps` ≥ 1000), host.log, 36 dk; 2
 - `d_jitter_us` medyanı her kolda ~23 ms (tavanı aşıyor), ama tavanı yükseltmek **kötüleştirdi**: `late_drops` azaldı ama geri çağrısı gelmeyen kare (`render_cb_missing`) 10× arttı, uzun tutma (`skip_pct`) %1'den %25–32'ye çıktı, `shown_p95` 33 ms. Yorum [çıkarım]: daha erken bırakılan kareler SurfaceFlinger'da aynı vsync'e düşüp yer değiştiriyor; görünür akıcılık yerleşik ayarda en iyi.
 - Sonuç: Oyun 60 için varsayılan değişmez. 21:18'deki %11,7 `skip_pct` tek pencereydi; bu ölçümde yerleşik kolun pencereleri 0–18 arası, medyan 0,9. Kalan tablet atlamaları için yön D tavanı değil (bkz. T-380 Open questions).
 - Debug yapı ölçümü; üç kol aynı yapıda.
+
+## 2026-10-25 23:40–23:43 — Düşük gecikme cızırtısı: akışı yeniden açmak gideriyor (TotK, Wi-Fi)
+
+- Oturum 23:31:52'de açıldı; ~23:40'ta cızırtı başladı (kullanıcı), sürekliydi. Akış: `api=aaudio sharing=exclusive mmap=1 burst=240 buf=1440 perf_mode=low_latency rate=48000`.
+- Cızırtı sırasında uygulama sayaçları temiz (23:41:12–55): `underruns`/`drops` sabit, `xruns=0`, `underflow_est=0`, headroom hep dolu, seviye 43–65 ms (hedef 40), `write_gap_ms_max` ~5,3.
+- 23:41:58 Uyumlu (`api=track`) → temiz; 23:42:18 Düşük gecikme'ye dönüş (yeni exclusive MMAP akışı, aynı parametreler) → **cızırtı geri gelmedi** (kullanıcı). Önceki ve sonraki AAudio akışının uygulama tarafı değerleri aynı.
+- Sonuç: cızırtı kaynakta değil (2026-10-09 "kaynak taraflı" yorumu bu olay için geçersiz) ve uygulamanın gördüğü tamponlamada değil; exclusive MMAP akışı bir süre sonra uygulamaya görünmeyen bir bozuk duruma giriyor, akışı yeniden açmak düzeltiyor [çıkarım]. Aday denemeler: AAudio `SHARED` paylaşım (MMAP'sız ya da paylaşımlı), ya da bozulmayı ölçebilecek bir sinyal (`getTimestamp` sapması / `audio_clock_raw ts_lag_us`).
