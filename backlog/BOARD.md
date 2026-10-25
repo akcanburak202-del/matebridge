@@ -7,6 +7,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-147](tasks/T-147-recovery-runbook.md) | Write and rehearse the recovery runbook and known-good version pair | 6 | orchestrator | [T-145, T-146] |
+| [T-380](tasks/T-380-pacer-dcap-game-ab.md) | Ölçüm — Oyun 60'ta tablet geç kare atması (late_drops ~%12); pacer D tavanı A/B (pace_dcap_half 2/3/4) | 7 | orchestrator | [] |
 
 ## todo
 
