@@ -2177,3 +2177,8 @@ Yalnız yayının aktığı saniyeler (`sent_kbps` ≥ 1000), host.log, 36 dk; 2
 
 - Denetleyici zararsız: gereksiz düşüş yok (temiz sürede hiç adım yok), tabana kilitlenme yok, IDR artmadı, `sent_kbps` hedefi izledi (adım saniyelerinde düştü).
 - Fayda **kanıtlanmadı**: iki yarının Wi-Fi'ı çok farklıydı (retx %7 vs %41) ve sahne içeriği farklı (p50 42 vs 59 Mbps). KAPALI yarıdaki kötü görünen p99/`overwritten` büyük ölçüde daha kötü radyodan. Varsayılan açma kararı için tekrarlı, sık değişen (örn. 10'ar dk) kollar gerekir.
+
+## 2026-10-26 00:30 — Sonraki oyun oturumu için bekleyen denemeler
+
+- T-381: daily `e4229b0b` kurulu; `am start -n dev.matebridge.client/.MainActivity --ez dev true --es audio_out shared` ile açılınca akış paylaşımlı MMAP uç noktasında (`dumpsys media.aaudio`: Shared Endpoints altında, istemci akışının kendi `XRuns` sayacı var). Anahtar kalıcı değil, panelde yok. Deneme: Düşük gecikme, ≥ 20 dk oyun; cızırtı var mı, gecikme (`audio_clock_raw latency_us`) ne kadar.
+- T-379: `MATEBRIDGE_WIFI_ADAPT=1` A/B'si 10'ar dk sırayla değişen kollarla yeniden (Oyun 60).
