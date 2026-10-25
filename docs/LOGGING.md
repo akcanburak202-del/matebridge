@@ -740,3 +740,8 @@ Kamera görüntüsü hiçbir yerde loglanmaz ya da yazılmaz; yalnız sayaçlar 
 - `ev=connect_stop`: "Durdur" (bağlanma/yeniden bağlanma, bulma kaynaklı bağlanma ve Wake-on-LAN kesildi). Ardından her zamanki `ev=user_disconnect` gelir.
 - `ev=manual_endpoint_migrated`: eski elle adres anahtarı bulundu ve Tailscale adresine taşındı ya da silindi (anahtar gittiği için bir kez).
 - `ev=transport ... origin=tailscale`: veri tasarrufu kapalı Tailscale oturumu (`origin=remote`: tasarruf açık, 0038). Uygulama açılırken "Bağlan"a kadar hiçbir `transport`, `transport_pick`, `wol_*` ya da keşif satırı olmaz.
+
+## Touchpad üç parmak kaydırma (tablet, `MB/input`, T-376, karar 0043)
+- `I input ev=pad_swipe dir=up|down|left|right`: üç parmağın ortak yolu eşiği geçti ve `PAD_SWIPE` gönderildi. Hareket başına en çok bir satır.
+- `I input ev=pad_swipe3_end dx=<n> dy=<n> sent=0|1 max=<n>`: üç parmaklı bir hareketin bitişi (son parmak kalktı). `dx`/`dy`: parmakların ortak yolunun (ağırlık merkezi) başlangıçtan son konuma ham pad birimi farkı (pad eni ~1560). `max`: harekette aynı anda görülen en çok parmak. Bu satır hiç çıkmıyorsa HarmonyOS üç parmak touchpad olayını uygulamaya iletmiyordur. Dört parmakta çıkmaz. Seyrek olduğu için info düzeyindedir (kart debug demişti; `MainActivity` kart kapsamı dışında).
+- Parmak koordinatı ve tuş loglanmaz.

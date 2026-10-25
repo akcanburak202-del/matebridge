@@ -1,9 +1,11 @@
 package dev.matebridge.client.input
 
 import dev.matebridge.client.protocol.Buttons
+import dev.matebridge.client.protocol.PadSwipe
 import dev.matebridge.client.protocol.Pinch
 import dev.matebridge.client.protocol.PointerRel
 import dev.matebridge.client.protocol.Scroll
+import kotlin.math.abs
 import kotlin.math.hypot
 
 /** Every tuning constant of the touchpad and mouse path in one place (T-034). */
@@ -47,6 +49,15 @@ object PadTuning {
 
     /** One wheel notch in Mac points (PROTOCOL.md section 4 SCROLL). */
     const val WHEEL_NOTCH_PT = 10f
+
+    /** T-376 (decision 0043): the shared path of three fingers must exceed this fraction of the pad extent to be a swipe. */
+    const val SWIPE_FRAC = 0.12f
+
+    /** T-376: the dominant axis must be at least this many times the other one. */
+    const val SWIPE_DOMINANCE = 2f
+
+    /** T-376: after the third finger lands, no swipe decision for this long; the path baseline follows the settling contacts. */
+    const val SWIPE_SETTLE_MS = 60L
 
     const val SCROLL_KEEPALIVE_MS = 200L
     const val SCROLL_IDLE_END_MS = 5_000L
@@ -101,13 +112,19 @@ class MouseFrame(
  *  - two fingers moving together scroll (BEGAN, CHANGED, ENDED; keepalive and idle end as in [TouchTracker]), unless the
  *    first meaningful movement changes their distance instead: then it is a pinch (PINCH, source TOUCHPAD, centre 0),
  *    decided once per gesture by [TwoFingerClassifier] (T-037);
- *  - going from two fingers to one, or to three, locks cursor motion until every finger has lifted.
+ *  - going from two fingers to one, or to three, locks cursor motion until every finger has lifted;
+ *  - three fingers (never more, no physical click) moving along one dominant axis send ONE PAD_SWIPE per gesture as soon as
+ *    their shared (centroid) path passes [PadTuning.SWIPE_FRAC] of the pad (T-376, decision 0043).
  * Mouse: relative motion, full button state, wheel notches as SCROLL NONE.
  *
  * Buttons: after [release] (capture or focus loss, release-all) a held physical button is not reported again until a new
  * press event is seen ([ButtonSync]). UI thread only.
  */
-class RelPointerTracker(private val counters: InputCounters = InputCounters()) {
+class RelPointerTracker(
+    private val counters: InputCounters = InputCounters(),
+    /** Rare events for the `MB/input` log (name, key=value fields): never coordinates of single fingers or key data. */
+    private val onEvent: (String, String) -> Unit = { _, _ -> },
+) {
     /** Mac point width of the stream (STREAM_CONFIG); motion and scrolling are off until known. */
     var widthPt = 0
 
@@ -170,6 +187,14 @@ class RelPointerTracker(private val counters: InputCounters = InputCounters()) {
     private var pinch = ScrollMode.NONE
     private var twoD0 = 0f
     private var settleActive = false
+    private var swipeSettleUntilMs = 0L
+    private var swipeBaseX = 0f
+    private var swipeBaseY = 0f
+    private var swipeHasBase = false
+    private var swipeSent = false
+    private var swipeSeen = false // a three-finger path was tracked in this gesture
+    private var swipeDx = 0f
+    private var swipeDy = 0f
     private var settleUntilMs = 0L
     private var prevD = 0f
     private var lastScrollMs = 0L
@@ -227,11 +252,13 @@ class RelPointerTracker(private val counters: InputCounters = InputCounters()) {
             gestureStartMs = nowMs; maxCount = 0; moved = false; clicked = false; locked = false; armed = false
             accX = 0f; accY = 0f; twoX = 0f; twoY = 0f; scroll = ScrollMode.NONE; pinch = ScrollMode.NONE
             settleActive = false
+            swipeHasBase = false; swipeSent = false; swipeSeen = false; swipeDx = 0f; swipeDy = 0f
             downPos.clear()
         }
         for (id in added) downPos[id] = next[id]!!.copyOf()
         if (n > maxCount) maxCount = n
         if (n == 2 && before < 2) { resetTwoBaseline(); settleActive = true; settleUntilMs = nowMs + PadTuning.SETTLE_MS }
+        if (n == 3 && before != 3) { swipeHasBase = false; swipeSettleUntilMs = nowMs + PadTuning.SWIPE_SETTLE_MS }
         if (n >= 3 || (before >= 2 && n in 1 until before)) {
             if (scroll != ScrollMode.NONE || pinch != ScrollMode.NONE) endScroll(timeUs, out)
             locked = true
@@ -240,6 +267,11 @@ class RelPointerTracker(private val counters: InputCounters = InputCounters()) {
         for (fg in f.fingers) downPos[fg.id]?.let { p -> val d = floatArrayOf(fg.x, fg.y); if (hypot(d[0] - p[0], d[1] - p[1]) > slop) moved = true }
 
         updatePadButtons(f, n, nowMs, timeUs, out)
+        if (n == 3 && maxCount == 3) swipeStep(cur.values, nowMs, timeUs, extent, out)
+        else if (f.action == PadAction.UP && before == 3 && f.fingers.size == 3 && maxCount == 3) {
+            // The first UP frame still reports the departing finger: its three contacts count (a fast swipe-and-lift).
+            swipeStep(f.fingers.map { floatArrayOf(it.x, it.y) }, nowMs, timeUs, extent, out)
+        }
 
         // Motion.
         val base = if (widthPt > 0) widthPt * PadTuning.SCREEN_SPAN / extent else 0f
@@ -270,6 +302,32 @@ class RelPointerTracker(private val counters: InputCounters = InputCounters()) {
 
         if (n == 0 && before > 0) finishGesture(nowMs, timeUs, out)
         return out
+    }
+
+    /** Three fingers on the pad: track their centroid path and send the one PAD_SWIPE once it is long and straight enough. */
+    private fun swipeStep(pts: Collection<FloatArray>, nowMs: Long, timeUs: Long, extent: Float, out: MutableList<Outgoing>) {
+        var cx = 0f; var cy = 0f
+        for (p in pts) { cx += p[0]; cy += p[1] }
+        cx /= 3f; cy /= 3f
+        swipeSeen = true
+        if (nowMs < swipeSettleUntilMs || !swipeHasBase) { // the contacts of a fresh third finger still move
+            swipeBaseX = cx; swipeBaseY = cy; swipeHasBase = true
+            return
+        }
+        swipeDx = cx - swipeBaseX
+        swipeDy = cy - swipeBaseY
+        if (swipeSent || clicked || padMask != 0) return
+        val ax = abs(swipeDx); val ay = abs(swipeDy)
+        val thr = extent * PadTuning.SWIPE_FRAC
+        val dir = when {
+            ax >= thr && ax >= ay * PadTuning.SWIPE_DOMINANCE -> if (swipeDx < 0f) PadSwipe.LEFT else PadSwipe.RIGHT
+            ay >= thr && ay >= ax * PadTuning.SWIPE_DOMINANCE -> if (swipeDy < 0f) PadSwipe.UP else PadSwipe.DOWN // screen y grows downwards
+            else -> return
+        }
+        swipeSent = true
+        moved = true
+        out += Outgoing(PadSwipe(timeUs, dir, 3))
+        onEvent("pad_swipe", "dir=" + when (dir) { PadSwipe.UP -> "up"; PadSwipe.DOWN -> "down"; PadSwipe.LEFT -> "left"; else -> "right" })
     }
 
     private fun resetTwoBaseline() {
@@ -374,6 +432,10 @@ class RelPointerTracker(private val counters: InputCounters = InputCounters()) {
             out += Outgoing(PointerRel(timeUs, 0f, 0f, reported or bit))
             out += Outgoing(PointerRel(timeUs, 0f, 0f, reported))
         }
+        if (swipeSeen) { // diagnostics: does the platform deliver three-finger touchpad events, and how far did they travel
+            onEvent("pad_swipe3_end", "dx=${swipeDx.toInt()} dy=${swipeDy.toInt()} sent=${if (swipeSent) 1 else 0} max=$maxCount")
+            swipeSeen = false
+        }
         endScroll(timeUs, out) // a gesture still open (both fingers lifted in one frame) must not stay open on the host
         locked = false; armed = false; maxCount = 0; moved = false; clicked = false
         downPos.clear()
@@ -431,6 +493,7 @@ class RelPointerTracker(private val counters: InputCounters = InputCounters()) {
         scroll = ScrollMode.NONE
         pinch = ScrollMode.NONE
         locked = false; armed = false; moved = false; clicked = false; maxCount = 0
+        swipeHasBase = false; swipeSent = false; swipeSeen = false
         settling = true
         lastFrameUs = NEVER_US
         padDevice = NO_DEVICE; mouseDevice = NO_DEVICE
