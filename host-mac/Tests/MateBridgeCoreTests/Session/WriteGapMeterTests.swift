@@ -174,6 +174,16 @@ final class WriteGapMeterTests: XCTestCase {
         XCTAssertEqual(m.snapshot(nowNs: 1_500_000_000, pendingBytes: 0).longGapsEnded, 0)
     }
 
+    func testMeterKeepsTheEndTimeOfEachLongGap() {
+        var m = WriteGapMeter()
+        m.workQueued(nowNs: 0, wasIdle: true)
+        m.progress(nowNs: 200_000_000, bytes: 1)       // gap 1 ends at 200 ms
+        m.progress(nowNs: 600_000_000, bytes: 1)       // gap 2 (400 ms) ends at 600 ms
+        let s = m.snapshot(nowNs: 700_000_000, pendingBytes: 0)
+        XCTAssertEqual(s.longGapsEnded, 2)
+        XCTAssertEqual(s.recentLongGapEndAgesNs, [500_000_000, 100_000_000])
+    }
+
     func testSnapshotFieldsOfTheMeter() {
         var m = WriteGapMeter()
         XCTAssertEqual(m.snapshot(nowNs: 5, pendingBytes: 0).sinceProgressNs, 0, "nothing happened yet")

@@ -75,7 +75,8 @@ struct V2Replay {
                                               txPacketsDelta: row.tx * K / 10 - row.tx * (K - 1) / 10,
                                               retransmitPacketsDelta: row.retx * K / 10 - row.retx * (K - 1) / 10,
                                               stallEvents: r.events, stallActiveMs: UInt32(r.activeUs / 1_000),
-                                              stallEndedMs: UInt32(r.endedUs / 1_000)))
+                                              stallEndedMs: UInt32(r.endedUs / 1_000),
+                                              stallEventAgesMs: r.eventAgesUs.map { UInt32($0 / 1_000) }))
                 if let s = o.step { steps.append((second, t, s)) }
             }
             targets.append(controller.targetKbps)

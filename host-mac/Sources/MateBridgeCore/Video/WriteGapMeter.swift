@@ -22,6 +22,8 @@ public struct WriteGapMeter: Sendable {
         /// Gaps of at least `thresholdNs` that ended in progress, cumulative; `lastLongGapNs` is the latest one's length.
         public var longGapsEnded: UInt64
         public var lastLongGapNs: UInt64
+        /// How long ago each of the latest (up to 8) long gaps ended, oldest first.
+        public var recentLongGapEndAgesNs: [UInt64]
     }
 
     private var acceptedBytes: UInt64 = 0
@@ -29,6 +31,7 @@ public struct WriteGapMeter: Sendable {
     private var busy = false
     private var longGapsEnded: UInt64 = 0
     private var lastLongGapNs: UInt64 = 0
+    private var recentEndsNs: [UInt64] = []
 
     public init() {}
 
@@ -43,8 +46,7 @@ public struct WriteGapMeter: Sendable {
     public mutating func progress(nowNs: UInt64, bytes: Int) {
         guard bytes > 0 else { return }
         if busy, let last = lastProgressNs, nowNs > last, nowNs - last >= Self.thresholdNs {
-            longGapsEnded += 1
-            lastLongGapNs = nowNs - last
+            recordLongGap(nowNs - last, endedAtNs: nowNs)
         }
         lastProgressNs = nowNs
         acceptedBytes &+= UInt64(bytes)
@@ -57,8 +59,14 @@ public struct WriteGapMeter: Sendable {
         guard !busy, waitNs > 0, let last = lastProgressNs, nowNs > last else { return }
         let gap = min(waitNs, nowNs - last)
         guard gap >= Self.thresholdNs else { return }
+        recordLongGap(gap, endedAtNs: nowNs)
+    }
+
+    private mutating func recordLongGap(_ gap: UInt64, endedAtNs: UInt64) {
         longGapsEnded += 1
         lastLongGapNs = gap
+        recentEndsNs.append(endedAtNs)
+        if recentEndsNs.count > 8 { recentEndsNs.removeFirst(recentEndsNs.count - 8) }
     }
 
     /// Nothing is pending any more.
@@ -68,6 +76,7 @@ public struct WriteGapMeter: Sendable {
         let since = lastProgressNs.map { nowNs > $0 ? nowNs - $0 : 0 } ?? 0
         return Snapshot(acceptedBytes: acceptedBytes, pendingBytes: pendingBytes, busy: busy,
                         openGapNs: busy ? since : 0, sinceProgressNs: since,
-                        longGapsEnded: longGapsEnded, lastLongGapNs: lastLongGapNs)
+                        longGapsEnded: longGapsEnded, lastLongGapNs: lastLongGapNs,
+                        recentLongGapEndAgesNs: recentEndsNs.map { nowNs > $0 ? nowNs - $0 : 0 })
     }
 }

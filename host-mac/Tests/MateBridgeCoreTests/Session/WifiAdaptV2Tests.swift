@@ -367,6 +367,34 @@ final class WifiAdaptV2Tests: XCTestCase {
         XCTAssertFalse(r.steps.dropFirst(before).contains { $0.step.toKbps < $0.step.fromKbps }, "no emergency from one old event")
     }
 
+    func testEventsOfALatePollKeepTheirOwnTimes() {
+        // Two ended stalls 2.3 s apart in one late poll: not "2 in 2 s", hold only.
+        var far = Rig()
+        far.now += 100_000
+        let o1 = far.c.tick(.init(nowUs: far.now, srttMs: 6, sendBufferBytes: 0, txPacketsDelta: 20,
+                                  retransmitPacketsDelta: 0, stallEvents: 2, stallEndedMs: 220,
+                                  stallEventAgesMs: [2_400, 100]))
+        XCTAssertNil(o1.step)
+        // 1.0 s apart: heavy.
+        var near = Rig()
+        near.now += 100_000
+        let o2 = near.c.tick(.init(nowUs: near.now, srttMs: 6, sendBufferBytes: 0, txPacketsDelta: 20,
+                                   retransmitPacketsDelta: 0, stallEvents: 2, stallEndedMs: 220,
+                                   stallEventAgesMs: [1_100, 100]))
+        XCTAssertEqual(o2.step?.toKbps, 42_000)
+    }
+
+    func testDetectorCarriesEachEventsAge() {
+        var d = SendStallDetector()
+        let r = d.observe(.init(writerLongGapsEnded: 2, writerLastLongGapUs: 220_000,
+                                writerRecentEndAgesUs: [2_400_000, 100_000]))
+        XCTAssertEqual(r.eventAgesUs, [2_400_000, 100_000])
+        // An open writer stall reports its start (its open length).
+        var e = SendStallDetector()
+        let o = e.observe(.init(writerBusy: true, writerOpenGapUs: 200_000, sinceProgressUs: 200_000))
+        XCTAssertEqual(o.eventAgesUs, [200_000])
+    }
+
     func testTwoStallEventsInOneSampleAreHeavy() {
         var r = Rig()
         r.now += 100_000

@@ -83,6 +83,10 @@ files:
 - **İz sayıları değişmedi** (20:17: 60/42/35,7/30; 20:55: 60/42/30; temiz: 3 düşüş / 46 dk, min 51).
 - Tam `swift test` (taskpolicy -b): 785 test, 0 hata; `swift build` tamam.
 
+## Handoff — codex round 5 fix (1 x P2)
+
+- **Olay zamanları**: `WriteGapMeter` son 8 uzun boşluğun bitiş zamanını tutar (snapshot'ta yaş olarak), `SendStallDetector.Result.eventAgesUs` her olay için yaş taşır (biten: bitiş, açık: başlangıç), `Sample.stallEventAgesMs` ile denetleyiciye gider; 2 sn penceresi gerçek zamanlarla işler. Testler: `testEventsOfALatePollKeepTheirOwnTimes` (2,3 sn arayla -> adım yok; 1,0 sn arayla -> x0,7), `testDetectorCarriesEachEventsAge`, `testMeterKeepsTheEndTimeOfEachLongGap`. Tam test: 788, 0 hata; iz sayıları değişmedi (aynı assert'ler geçti).
+
 ## Open questions
 
 - B eşiği (20 ms hız, >= 32 KiB) ve acil taban "yeni kanıt" şartı ek metninde yok; yukarıdaki sapma listesi 0023 ekine işlenmeli mi?

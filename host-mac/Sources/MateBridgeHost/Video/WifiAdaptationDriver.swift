@@ -102,7 +102,8 @@ final class WifiAdaptationDriver: @unchecked Sendable {
                                             txPacketsDelta: report.txPacketsDelta,
                                             retransmitPacketsDelta: report.retransmitPacketsDelta,
                                             stallEvents: stall.events, stallActiveMs: activeMs,
-                                            stallEndedMs: endedMs))
+                                            stallEndedMs: endedMs,
+                                            stallEventAgesMs: stall.eventAgesUs.map { UInt32(min($0 / 1_000, UInt64(UInt32.max))) }))
         ticks += 1
         window.sendBufferMax = max(window.sendBufferMax, report.snapshot.sendBufferBytes)
         window.srttMax = max(window.srttMax, report.snapshot.srttMs)

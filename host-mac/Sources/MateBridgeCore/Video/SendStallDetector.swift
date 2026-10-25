@@ -27,18 +27,21 @@ public struct SendStallDetector: Equatable, Sendable {
         /// Writer: gaps of at least the threshold that ended (cumulative) and the latest one's length.
         public var writerLongGapsEnded: UInt64
         public var writerLastLongGapUs: UInt64
+        /// How long ago each of the latest long writer gaps ended, oldest first (up to 8).
+        public var writerRecentEndAgesUs: [UInt64]
         /// Time since the last byte progress, busy or not.
         public var sinceProgressUs: UInt64
         /// Age of the frame at the head of the send queue; nil when the queue is empty.
         public var headAgeUs: UInt64?
 
         public init(nowUs: UInt64 = 0, writerBusy: Bool = false, writerOpenGapUs: UInt64 = 0, writerLongGapsEnded: UInt64 = 0,
-                    writerLastLongGapUs: UInt64 = 0, sinceProgressUs: UInt64 = 0, headAgeUs: UInt64? = nil) {
+                    writerLastLongGapUs: UInt64 = 0, writerRecentEndAgesUs: [UInt64] = [], sinceProgressUs: UInt64 = 0, headAgeUs: UInt64? = nil) {
             self.nowUs = nowUs
             self.writerBusy = writerBusy
             self.writerOpenGapUs = writerOpenGapUs
             self.writerLongGapsEnded = writerLongGapsEnded
             self.writerLastLongGapUs = writerLastLongGapUs
+            self.writerRecentEndAgesUs = writerRecentEndAgesUs
             self.sinceProgressUs = sinceProgressUs
             self.headAgeUs = headAgeUs
         }
@@ -46,7 +49,8 @@ public struct SendStallDetector: Equatable, Sendable {
         /// From a writer snapshot (nanoseconds) and the head frame's age.
         public init(_ s: WriteGapMeter.Snapshot, headAgeUs: UInt64?, nowUs: UInt64 = 0) {
             self.init(nowUs: nowUs, writerBusy: s.busy, writerOpenGapUs: s.openGapNs / 1_000, writerLongGapsEnded: s.longGapsEnded,
-                      writerLastLongGapUs: s.lastLongGapNs / 1_000, sinceProgressUs: s.sinceProgressNs / 1_000,
+                      writerLastLongGapUs: s.lastLongGapNs / 1_000,
+                      writerRecentEndAgesUs: s.recentLongGapEndAgesNs.map { $0 / 1_000 }, sinceProgressUs: s.sinceProgressNs / 1_000,
                       headAgeUs: headAgeUs)
         }
     }
@@ -60,12 +64,15 @@ public struct SendStallDetector: Equatable, Sendable {
         public var activeUs: UInt64
         /// Length of the longest stall that ended since the last observation; 0 when none.
         public var endedUs: UInt64
+        /// How long ago each event happened (end of an ended stall, start of an open one), one per event, oldest first.
+        public var eventAgesUs: [UInt64]
 
         public init(newEvent: Bool, activeUs: UInt64, endedUs: UInt64 = 0) {
             self.init(events: newEvent ? 1 : 0, activeUs: activeUs, endedUs: endedUs)
         }
 
-        public init(events: Int, activeUs: UInt64, endedUs: UInt64 = 0) {
+        public init(events: Int, activeUs: UInt64, endedUs: UInt64 = 0, eventAgesUs: [UInt64] = []) {
+            self.eventAgesUs = eventAgesUs
             self.events = events
             self.activeUs = activeUs
             self.endedUs = endedUs
@@ -82,6 +89,7 @@ public struct SendStallDetector: Equatable, Sendable {
 
     public mutating func observe(_ o: Observation) -> Result {
         var events = 0
+        var ages: [UInt64] = []
         var ended: UInt64 = 0
         var active: UInt64 = 0
 
@@ -90,12 +98,15 @@ public struct SendStallDetector: Equatable, Sendable {
             var n = Int(min(o.writerLongGapsEnded - lastEnded, 1_000))
             // A stall that was open (counted) at an earlier observation is the one that ended: not counted twice.
             if writerOpenCounted || headOpenCounted { n -= 1; writerOpenCounted = false; headOpenCounted = false }
-            events += max(0, n)
+            n = max(0, n)
+            events += n
+            let recent = o.writerRecentEndAgesUs.suffix(n)
+            ages += Array(repeating: 0, count: n - recent.count) + recent
             ended = o.writerLastLongGapUs
         }
         lastEnded = o.writerLongGapsEnded
         if o.writerBusy, o.writerOpenGapUs >= Self.thresholdUs {
-            if !writerOpenCounted { events += 1; writerOpenCounted = true }
+            if !writerOpenCounted { events += 1; ages.append(o.writerOpenGapUs); writerOpenCounted = true }
             active = o.writerOpenGapUs
         } else {
             writerOpenCounted = false
@@ -112,6 +123,7 @@ public struct SendStallDetector: Equatable, Sendable {
                 active = max(active, o.nowUs > headBlockStartUs ? o.nowUs - headBlockStartUs : idle)
             } else if idle >= Self.thresholdUs {
                 events += 1
+                ages.append(idle)
                 headOpenCounted = true
                 headBlockStartUs = o.nowUs > idle ? o.nowUs - idle : 0
                 active = max(active, idle)
@@ -121,6 +133,6 @@ public struct SendStallDetector: Equatable, Sendable {
         } else {
             headOpenCounted = false
         }
-        return Result(events: events, activeUs: active, endedUs: ended)
+        return Result(events: events, activeUs: active, endedUs: ended, eventAgesUs: ages)
     }
 }
