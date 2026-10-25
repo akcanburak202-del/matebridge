@@ -406,7 +406,7 @@ Aday (USB) bağlantı, ilk doğrulanmış kaydı gelene kadar terfi etmez; o sü
 
 ## Durağan ekran iyileştirme ve bit hızı penceresi (Mac, `video`, T-253, T-177)
 
-**Canlı bit hızı (T-177; T-302'de silindi, T-328'de geri geldi, 2026-10-09):** çalışan oturumun bit hızını yeniden başlatmadan değiştiren ayarlayıcı (`setTargetBitrate`) yalnız Wi-Fi uyarlaması (`MATEBRIDGE_WIFI_ADAPT=1`, aşağıdaki bölüm) tarafından çağrılır. `MATEBRIDGE_BITRATE_STEP` geri gelmedi. Kullanıcı değişikliği (`STREAM_PREFS`) hâlâ yeniden başlatma yolundan geçer.
+**Canlı bit hızı (T-177; T-302'de silindi, T-328'de geri geldi, 2026-10-09):** çalışan oturumun bit hızını yeniden başlatmadan değiştiren ayarlayıcı (`setTargetBitrate`) yalnız Wi-Fi uyarlaması (`MATEBRIDGE_WIFI_ADAPT=1`, v2, aşağıdaki bölüm) tarafından çağrılır. `MATEBRIDGE_BITRATE_STEP` geri gelmedi. Kullanıcı değişikliği (`STREAM_PREFS`) hâlâ yeniden başlatma yolundan geçer.
 - `I video ev=bitrate_set kbps=<n> avg_status=<OSStatus> limits_status=<OSStatus> aux_status=<OSStatus>|na`: canlı ayarlayıcı bir değişikliği uyguladı (sahip kuyruğunda, iki kare arasında). `kbps` ana oturumun yeni hedefi; `avg_status` `AverageBitRate`, `limits_status` `DataRateLimits` ayar sonucu (0 = kabul). `aux_status`: paketlenmiş 4:4:4 yardımcı oturumu (`AuxBitratePolicy`), yoksa `na`. Değer şu anki değere eşitse ya da oturum durmuşsa satır yazılmaz. Keyframe istenmez, yeniden başlatma yoktur.
 
 - `I video ev=refine frames=<n> bytes=<n> first_bytes=<n> last_bytes=<n> ms=<n> reason=converged|max_frames|max_bytes|cancelled|queue_busy|timeout|failed|keyframe_pending|keyframe_due` (T-253): durağan ekran iyileştirme treninin (aynı tamponun art arda P kareleri olarak yeniden kodlanması) sonunda tren başına bir satır.
@@ -421,20 +421,13 @@ Tanı ayarı (varsayılan kapalı, karar 0026; docs/KNOBS.md #42, T-298 EN9 öl�
   - Yalnız kodlayıcı kurulurken uygulanır. Sonuç `encoder_set[…DataRateLimits=ok|<OSStatus>…]` içinde görünür.
   - Açıkken `ev=encoder_config` satırına `rate_window_ms=<n>` eklenir. Kapalıyken satır değişmez.
 
-## Wi-Fi uyarlamalı bit hızı (Mac, `video`, T-328, karar 0023 (c) dalı)
+## Wi-Fi uyarlamalı bit hızı (Mac, `video`, T-379 v2, karar 0023 eki 2026-10-25)
 
-Yalnız `MATEBRIDGE_WIFI_ADAPT=1` ve `transport=wifi` oturumunda (varsayılan kapalı; USB'de hiçbir şey yazılmaz, denetleyici kurulmaz). Hepsi yalnız sayı; metin ya da tuş yok.
-- `I video ev=adapt_start ceiling_kbps=<n> floor_kbps=<n> tick_ms=100`: video bağlantısı denetime alındı (video bağlantısı başına bir kez; tavan oturumun yapılandırılmış bit hızı).
-- `I video ev=adapt target_kbps=<n> sbbytes_p95=<bayt> srtt_ms=<n> admits_blocked=<n> blocked_ms=<n> budget_bytes=<n> retx_pkts=<n> queue_drops=<n> down_steps=<n>`: saniyede bir.
-  - Boşta toparlanma (T-328 tur 2): son tetikleyiciden `quietMs` (2 s) sonra, son ~1 s'de yazılan video hızı hedefin %50'sinden azsa (durağan ekran) ve kapı o pencerede reddetmediyse hedef doğrudan tavana atlar (`ev=adapt_step trigger=up`, tek adımda tavan). Yük altında 5 %/s eğim sürer.
-  - Send-buffer tetikleyicisi tek örnekle değil, tamponun 3 bütçenin üstünde **400 ms boyunca sürmesiyle** tetiklenir (bir keyframe patlaması geçicidir).
-  - `target_kbps`: denetleyicinin hedefi (250 kbps adımı; tavan ile taban 12000 arasında). Kodlayıcıya inişte hemen, çıkışta en çok 500 ms'de bir uygulanır; gerçek kodlayıcı değeri için `ev=bitrate_set`.
-  - `sbbytes_p95`: kapının o saniyede okuduğu `tcpi_snd_sbbytes` örneklerinin p95'i (kare başına en çok her 2 ms'de bir okuma; hiç okuma yoksa 0).
-  - `srtt_ms`: son 100 ms tick'inin video soketi `tcpi_srtt` değeri.
-  - `admits_blocked`: kapının açıktan kapalıya geçiş sayısı (engel *bölümü*; aynı bölümdeki tekrar sorgular sayılmaz). `blocked_ms`: o saniyede kapının kapalı kaldığı toplam süre (süren bölüm şimdiye kadar sayılır).
-  - `budget_bytes`: uçuştaki bayt bütçesi (hedef x 20 ms, en az bir ortalama kare). `retx_pkts`: yeniden gönderilen paket. `queue_drops`: host yeni-kare-kazanır kuyruğunda düşen kare (kapının yol açtıkları dahil; denetleyiciye hepsi bildirilmez). `down_steps`: hedefi düşüren tick sayısı.
-- `I video ev=adapt_step from_kbps=<n> to_kbps=<n> trigger=retransmit|queue_delay|send_buffer|queue_drop|blocked|other|up`: hedef kodlayıcıya uygulandı (iniş `I`, çıkış `D`). `trigger` yalnız iniş için neden; çıkışta `up`. Çıkışlar kodlayıcıya 500 ms'de bir uygulanır.
-- Kapının kendi reddi denetleyiciye `queue_drop` diye **bildirilmez**; yalnız kapının son iki tick penceresinde hiç reddetmediği gerçek kuyruk düşüşleri bildirilir (`WifiAdaptation`).
+Yalnız `MATEBRIDGE_WIFI_ADAPT=1` ve `transport=wifi` oturumunda (varsayılan kapalı; USB'de hiçbir şey yazılmaz, denetleyici kurulmaz). Hepsi yalnız sayı; metin ya da tuş yok. v1'in (T-328) `adapt_step`, `sbbytes_p95`, `admits_blocked`, `budget_bytes` alanları ve gönderim kapısı kalktı; açıkken değişen tek şey canlı kodlayıcı bit hızıdır (IDR yok, `config_id` değişmez).
+- `I video ev=adapt_start ceiling_kbps=<n> floor_kbps=<n> tick_ms=100`: video bağlantısı denetime alındı (bağlantı başına bir kez; tavan oturumun yapılandırılmış bit hızı, taban `min(30000, tavan)`).
+- `I|D video ev=adapt from_kbps=<n> to_kbps=<n> reason=severe|moderate|recover|emergency evidence=S,D,L,B`: bit hızı değişti ve kodlayıcıya uygulandı (iniş `I`, çıkış `D`). `evidence` adımı veren sinyaller (`S` takılma, `D` gecikme, `L` kayıp, `B` birikim; `-` yoksa, `recover` için hep `-`). `reason=ceiling` yalnız kullanıcı tavanı değişince (bugün sürücü tavanı oturum boyunca sabit tutar, görünmez).
+- `I video ev=adapt_state target_kbps=<n> srtt_ms_max=<n> base_ms=<n|na> sbbytes_max=<bayt> retx_pkts=<n> stall_events=<n> stall_max_ms=<n> s_ticks=<n> d_ticks=<n> l_ticks=<n> b_ticks=<n> steps=<n>`: saniyede bir. `target_kbps` denetleyicinin hedefi (gerçek kodlayıcı değeri için `ev=bitrate_set`). `base_ms`: D için RTT tabanı (son 30 sn'de tamponu boş örneklerin %10'luk dilimi; yeterli örnek yoksa `na`, D o zaman çalışmaz). `stall_events`: o saniyede başlayan takılma (150 ms bayt ilerlemesiz) sayısı, `stall_max_ms`: süren en uzun takılma. `s_ticks…b_ticks`: o saniyede 100 ms'lik tick'lerden kaçında sinyal görüldü (karar değil, gözlem; karar yasası 0023 ekinde). `steps`: o saniyedeki değişiklik sayısı.
+- S (takılma) ölçümü göndericidedir: `SocketVideoTransport.writeObservation` (kernel'e verilen kümülatif bayt, süren yazımın başlangıcı) ve `VideoFrameQueue.headEnqueuedUs` (kuyruk başındaki karenin yaşı) `SendStallDetector`'a girer.
 - Bağlantı ya da kodlayıcı kapanırken kodlayıcı tavana geri alınır (`ev=bitrate_set` ile görünür).
 
 ## Akış profili (Mac, `encoder`, T-204)

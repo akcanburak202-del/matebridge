@@ -9,7 +9,8 @@
 /// - D (delay): smoothed RTT at least 20 ms above the baseline. The baseline is a low percentile of the RTTs seen in
 ///   the last 30 s while the send buffer was drained (`RttBaseline`); a persistent queue is never learned as baseline.
 /// - L (loss): over the last second retransmitted packets are at least 1 % of the sent ones and at least 4.
-/// - B (backlog): the kernel send buffer holds at least `backlogBytes` and has not fallen over the last 250 ms.
+/// - B (backlog): the kernel send buffer holds at least 20 ms of the target rate and has not fallen over the last
+///   250 ms.
 ///
 /// Law (addendum):
 /// - Heavy: two distinct S events within 2 s, or one S of at least 500 ms, or 3 of the last 5 samples with D >= 50 ms
@@ -42,10 +43,15 @@ public struct WifiAdaptV2Controller: Sendable {
         public static let lossPercent: UInt64 = 1
         /// L window: the last second (ticks).
         public static let lossTicks = 10
-        /// B: the send buffer has at least this much, and did not fall over `backlogTicks` ticks (300 ms >= 250 ms).
-        /// Also the "drained" mark for the RTT baseline. The addendum names no size; one 60 Mbps frame is 125 KB.
-        public static let backlogBytes: UInt32 = 32 * 1024
+        /// B: the send buffer holds at least `backlogMs` of the current target rate (never less than `backlogMinBytes`)
+        /// and did not fall over `backlogTicks` ticks (300 ms >= 250 ms). The addendum names no size; 20 ms is the
+        /// queueing delay it calls significant for D. A smaller buffer is ordinary pacing: the clean 2026-10-25 session
+        /// sat at 60-100 KB for minutes at 60 Mbps (10-13 ms) with srtt up to 70 ms and no visible problem.
+        public static let backlogMs = 20
+        public static let backlogMinBytes: UInt32 = 32 * 1024
         public static let backlogTicks = 4
+        /// "Drained" mark of the RTT baseline: a send buffer below this has no queue of ours.
+        public static let drainedBytes: UInt32 = 32 * 1024
         /// A lone S, D or L holds the climb for this long.
         public static let singleSignalHoldMs: UInt64 = 2_000
         /// After a step, this much without signals before the climb.
@@ -177,7 +183,7 @@ public struct WifiAdaptV2Controller: Sendable {
         let nowMs = now / 1_000
 
         // Rings.
-        baseline.add(nowUs: now, srttMs: s.srttMs, drained: s.sendBufferBytes < Constants.backlogBytes)
+        baseline.add(nowUs: now, srttMs: s.srttMs, drained: s.sendBufferBytes < Constants.drainedBytes)
         let base = baseline.baselineMs
         var excess: UInt32 = 0
         if let base, s.srttMs > base { excess = s.srttMs - base }
@@ -196,7 +202,7 @@ public struct WifiAdaptV2Controller: Sendable {
         let tx = lossRing.reduce(0) { $0 + $1.tx }
         let loss = retx >= Constants.lossMinPackets && retx * 100 >= tx * Constants.lossPercent
         let backlog = backlogRing.count >= Constants.backlogTicks
-            && backlogRing.allSatisfy { $0 >= Constants.backlogBytes }
+            && backlogRing.allSatisfy { $0 >= backlogThreshold }
             && backlogRing.last! >= backlogRing.first!
 
         var seen: Evidence = []
@@ -224,6 +230,8 @@ public struct WifiAdaptV2Controller: Sendable {
         }
 
         func since(_ t: UInt64?) -> UInt64 { t.map { nowMs - min(nowMs, $0 / 1_000) } ?? UInt64.max }
+        // Emergency needs evidence that arrived at this tick, not a leftover pair still inside its 2 s window.
+        let heavyIsNew = s.stallStarted || longStall || (d50 && backlog)
         var step: Step?
         let atNormalFloor = targetKbps <= floorKbps && floorKbps == Constants.normalFloorKbps
         if heavy, atNormalFloor {
@@ -234,7 +242,7 @@ public struct WifiAdaptV2Controller: Sendable {
         }
         if heavy, targetKbps > floorKbps, since(lastStepUs) >= Constants.heavyMinIntervalMs {
             step = lower(to: scaled(targetKbps, Constants.heavyFactor), reason: .severe, used: used, now: now)
-        } else if heavy, atNormalFloor, let first = floorHeavyFirstUs,
+        } else if heavy, heavyIsNew, atNormalFloor, let first = floorHeavyFirstUs,
                   now - first >= Constants.emergencyAfterMs * 1_000, since(lastStepUs) >= Constants.heavyMinIntervalMs {
             step = lower(to: Constants.emergencyFloorKbps, reason: .emergency, used: used, now: now)
         } else if !heavy, moderate, targetKbps > floorKbps, since(lastStepUs) >= Constants.moderateMinIntervalMs {
@@ -271,6 +279,12 @@ public struct WifiAdaptV2Controller: Sendable {
         lossRing.removeAll()
         backlogRing.removeAll()
         stallEventsUs.removeAll()
+    }
+
+    /// Send buffer size that counts as a backlog at the current target rate.
+    private var backlogThreshold: UInt32 {
+        let atRate = UInt64(targetKbps) * 1_000 / 8 * UInt64(Constants.backlogMs) / 1_000
+        return max(Constants.backlogMinBytes, UInt32(min(atRate, UInt64(UInt32.max))))
     }
 
     private func scaled(_ kbps: Int, _ factor: Double) -> Int {

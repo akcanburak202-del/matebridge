@@ -1,7 +1,7 @@
 ---
 id: T-379
 title: Host — WIFI_ADAPT v2: yalnız bit hızı, doğrulanmış tıkanıklık kanıtı, IDR'sız (astra öneri 1)
-status: todo
+status: review
 phase: 7
 owner: mac-host-dev
 depends_on: [T-378]
@@ -46,4 +46,16 @@ files:
 
 ## Handoff
 
+- **Commit**: SHA_PLACEHOLDER (dal `task/T-379-host-wifi-adapt-v2`).
+- **Dosyalar**: yeni `MateBridgeCore/Session/WifiAdaptV2.swift` (saf `WifiAdaptV2Controller` + `RttBaseline`), `MateBridgeCore/Video/SendStallDetector.swift` (S sinyali); `SocketVideoTransport` (`writeObservation`, `setAdmission`/`notifyReady` kaldırıldı), `VideoFrameQueue.headEnqueuedUs`; `MateBridgeHost/Video/WifiAdaptationDriver.swift` (yeniden yazıldı), `SessionServer.swift` (`VideoLink`: `attachAdaptation` kalktı, `writeObservation`); silindi: `CongestionController.swift`, `WifiAdaptation.swift` ve testleri/`CongestionReplayTrace`; testler `WifiAdaptV2Tests`, `WifiAdaptV2ReplayTests`, `WifiAdaptV2Traces` (saniyelik sayısal özet, ham log yok), `BsdTcpSocketTests` (admission testi yerine `writeObservation` testi); `docs/LOGGING.md`, `docs/KNOBS.md` satır 48, `TransportKnobs.swift` yorumu.
+- **S nerede ölçülür**: `SocketVideoTransport.writeObservation()` (kernel'e verilen kümülatif bayt = biten kayıtlar + süren kaydın `size - pendingBytes` kısmı; süren yazımın başlangıcı) ve `VideoFrameQueue.headEnqueuedUs` (kuyruk başı). `SendStallDetector`: bekleyen iş var ve 150 ms bayt ilerlemesi yok -> bir olay; süren aynı takılma tekrar sayılmaz. Büyük keyframe yazımı ilerlediği için sayılmaz. 100 ms örnekleme nedeniyle takılma 150-250 ms içinde görülür (yerleşme aralığı bu).
+- **Eke göre sapma/yorum** (karar kaydına yazılmadı, orkestratör onaylasın): (1) B için eşik: ek boyut vermiyor; B = tamponun hedef hızın 20 ms'i (en az 32 KiB) kadar olması ve son 300 ms'de (4 örnek) düşmemesi. Mutlak 32 KiB ile temiz oturumda 50 düşüş çıktı (o oturum dakikalarca 60-100 KB sndbuf + srtt 30-70 ms ile sorunsuz). (2) "Acil taban": 30'da ağır kanıt ilk görüldükten >= 2 sn sonra ve o tick'te YENİ kanıt (yeni takılma / D>=50&B) varsa. (3) Çıkış: adım sonrası 3 sn, tek S/D/L sonrası 2 sn bekleme; `+2 Mbps` her >= 1 sn. (4) D tabanı: boşalmış = sndbuf < 32 KiB, %10'luk dilim, >= 20 örnek (2 sn) yoksa D çalışmaz. (5) Süren tek takılma 500 ms'e varınca ağır sayılır ve adım sonrası "tüketilmiş" kalır (aynı takılma ikinci kez inmez). (6) Sürücü tavanı oturum boyunca sabit tutar (`setCeiling` denetleyicide var ve test edilmiş, sürücüye bağlanmadı: bit hızı değişimi akışı yeniden başlatıyor).
+- **İz sonuçları** (tekrar testleri; 1 sn -> 100 ms eşlemesi `WifiAdaptV2ReplayTests` başlığında): 20:55:36-41 takılması: iki olay 37.3/38.3 sn, ikinci olayın tick'inde 60 -> 42 Mbps (<= 1 sn), taban altına inmez, ~9 sn'de +2/sn ile 60'a döner. 20:17 takılması: 3 olay görülür (4.'sü 170 ms, 100 ms ızgarasında kaçar), 60 -> 42, sonra takılmanın kendi retx+birikimiyle bir orta adım (35,7), min 35,7, 60'a döner. Temiz oturum (46 dk): 3 düşüş (hepsi x0,85 orta; D,B x1 + L,B x2; en düşük 51), her biri ~5 sn'de geri döner; acil yok.
+- **Test**: `swift test` (taskpolicy -b) sonucu aşağıda/rapor. `./scripts/check.sh` ve Gradle çalıştırılmadı (talimat).
+- **Test edilmedi**: gerçek WLAN/tablet; `VTSessionSetProperty` yolu v1 ile aynı `setTargetBitrate` (değişmedi); `writeObservation` gerçek soket üzerinde yalnız basit birim testle; sürücü (Host hedefi) birim testsiz (build geçti). Cihazda: `sent_kbps`'in `bitrate_set`'i izlemesi, gerçek takılmada `ev=adapt reason=severe`, temiz oturumda gereksiz adım sıklığı, B eşiğinin (20 ms) gerçek 100 ms örneklerde davranışı.
+
 ## Open questions
+
+- B eşiği (20 ms hız, >= 32 KiB) ve acil taban "yeni kanıt" şartı ek metninde yok; yukarıdaki sapma listesi 0023 ekine işlenmeli mi?
+- 100 ms ızgarası 150-170 ms'lik takılmaları kaçırabilir (20:17 olayının 4. saniyesi). Gerekirse detector tick yerine yazım tamamlanma süresini (`writeDoneUs - writeStartUs >= 150 ms`) ek kanıt olarak alabilir; ek karar gerektirir.
+- Temiz oturumda L,B ile 2 düşüş çıktı (retx 4-5 paket/sn, ~190-205 KB tampon): kabul sınırının içinde ama cihaz A/B'sinde izlenmeli.
