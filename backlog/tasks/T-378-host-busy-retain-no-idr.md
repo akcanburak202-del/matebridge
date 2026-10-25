@@ -80,3 +80,8 @@ Yok. Not: bypass kuralı yalnız ana (main) kodlayıcıdaki keyframe'e bakar; au
 
 - (a) Düzeltildi: değişen config, tutulan (`held`) ya da göndericide (`charged`) eski config'i devre dışı bırakır (charged'ın geç `unpop`'u reddedilir); taşmada tek keyframe düşerse (kuyrukta/held'de başka keyframe yok) `awaitingKeyframe` + keyframe isteği ayarlanır. Testler: `testChangedConfigSupersedesAHeldOrChargedOneAndKeepsItsKeyframe`, `testDroppingTheOnlyKeyframeAsksForANewOne`.
 - (b) Kod değişikliği yok: ">1 sn tamamlanmamış IDR yazımı yeni kurtarma IDR'sine izin verir" bilinçli canlılık sınırıdır (orkestratör kararı); kabul 3 metni buna göre güncellendi.
+
+## Codex --high round 5 (e23a8645)
+
+- Taşmada düşen keyframe için "başka keyframe var" muafiyeti yalnız düşenden SONRA kuyrukta duran keyframe ile (`frames[idx...]`); eski held keyframe örtmez. Test: `testOlderHeldKeyframeDoesNotCoverADroppedNewerOne`.
+- check.sh notu: bu turda Mac ağır yük altındaydı (kullanıcı oyunda); `BoundedWaitTests`/`senderStopOnStuckTransportReturnsInTime` (saf zamanlama, 0.2 sn bekleme >2 sn sürdü) ve Android zamanlama testleri tam çalıştırmada başarısız oldu, tek başına geçti. Önceki tur (e23a8645) check.sh ALL OK idi. Yük düşünce check.sh yeniden çalıştırılmalı.

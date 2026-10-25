@@ -280,6 +280,26 @@ final class BusyRetainTests: XCTestCase {
         XCTAssertEqual(q.count, 1, "deltas are refused until a keyframe arrives")
     }
 
+    /// Codex round 5: an older held keyframe does not cover a newer keyframe that overflow drops.
+    func testOlderHeldKeyframeDoesNotCoverADroppedNewerOne() {
+        var q = BoundedFrameQueue(capacity: 2)
+        q.chargesPops = true
+        q.push(key(10))
+        let k0 = q.pop()!
+        XCTAssertTrue(q.unpop(k0))                              // busy: K0 held
+        q.push(EncodedVideoFrame(flags: .codecConfig, captureTimeUs: 0, data: [7]))   // C1
+        q.push(key(11))                                         // K1: held + C1 + K1 = 3 > 2, K1 is dropped
+        XCTAssertTrue(q.takeKeyframeRequest())
+        XCTAssertTrue(q.isAwaitingKeyframe)
+        let before = q.count
+        q.push(delta(12))
+        XCTAssertEqual(q.count, before, "deltas are refused until a new keyframe")
+        _ = q.pop(); q.settle()                                 // the sender takes and finishes K0 ...
+        q.push(key(13))                                         // ... and the new keyframe fits
+        XCTAssertFalse(q.isAwaitingKeyframe)
+        XCTAssertEqual(q.count, 2)
+    }
+
     /// Codex round 3 #2: an auxiliary keyframe counts as written when its write completes, not when it is queued.
     func testAuxKeyframeWrittenIsReportedOnlyWhenTheWriteCompletes() async {
         let transport = ScriptedTransport(script: [.accepted, .busy, .busy, .accepted])

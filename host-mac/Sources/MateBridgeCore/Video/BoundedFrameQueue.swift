@@ -121,7 +121,8 @@ public struct BoundedFrameQueue: Sendable {
         // A protected frame was dropped. Losing the only keyframe of the current chain (none left queued or held)
         // would leave later deltas referencing a missing IDR: ask for a new one and refuse deltas until it arrives,
         // exactly as for an unprotected drop (T-378).
-        if dropped.isKeyframe, held?.isKeyframe != true, !frames.contains(where: \.isKeyframe) {
+        // Only a keyframe queued AFTER the dropped one covers it: a retained (held) or earlier one is older.
+        if dropped.isKeyframe, !frames[idx...].contains(where: \.isKeyframe) {
             keyframeNeeded = true
             awaitingKeyframe = true
         }
