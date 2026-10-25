@@ -2161,3 +2161,19 @@ Yalnız yayının aktığı saniyeler (`sent_kbps` ≥ 1000), host.log, 36 dk; 2
 - Cızırtı sırasında uygulama sayaçları temiz (23:41:12–55): `underruns`/`drops` sabit, `xruns=0`, `underflow_est=0`, headroom hep dolu, seviye 43–65 ms (hedef 40), `write_gap_ms_max` ~5,3.
 - 23:41:58 Uyumlu (`api=track`) → temiz; 23:42:18 Düşük gecikme'ye dönüş (yeni exclusive MMAP akışı, aynı parametreler) → **cızırtı geri gelmedi** (kullanıcı). Önceki ve sonraki AAudio akışının uygulama tarafı değerleri aynı.
 - Sonuç: cızırtı kaynakta değil (2026-10-09 "kaynak taraflı" yorumu bu olay için geçersiz) ve uygulamanın gördüğü tamponlamada değil; exclusive MMAP akışı bir süre sonra uygulamaya görünmeyen bir bozuk duruma giriyor, akışı yeniden açmak düzeltiyor [çıkarım]. Aday denemeler: AAudio `SHARED` paylaşım (MMAP'sız ya da paylaşımlı), ya da bozulmayı ölçebilecek bir sinyal (`getTimestamp` sapması / `audio_clock_raw ts_lag_us`).
+
+## 2026-10-25 22:56–23:52 — T-379 WIFI_ADAPT v2 cihaz A/B (host b5771263, TotK, Oyun 60, Wi-Fi ch36)
+
+| | AÇIK 22:56–23:31 (34 dk) | KAPALI 23:32–23:52 (19 dk) |
+|---|---|---|
+| hedef bit hızı | 60 Mbps sürenin %99,6'sı; 2 olay (22:55:38 açılışta 60→42→30, 23:17:24 60→42), ikisi de `severe evidence=S`, saniyeler içinde 60'a dönüş | sabit 60 |
+| `sent_kbps` p50 | 41,9 (sahne içeriği; hedef 60'tı) | 59,0 |
+| video retx saniyesi | %7 | %41 |
+| fps < 50 sn | %2,7 (fps < 30: 0) | %3,9 (fps < 30: 2) |
+| `cap_dec_ms` p50/p95/p99 | 14,2/20,3/27,2 (> 150: 0) | 14,4/28,2/58,0 (> 150: 0) |
+| `overwritten` | 57 | 608 |
+| IDR | 7 (0,21/dk) | 4 (0,21/dk) |
+| tablet `dropped` | 555 | 678 |
+
+- Denetleyici zararsız: gereksiz düşüş yok (temiz sürede hiç adım yok), tabana kilitlenme yok, IDR artmadı, `sent_kbps` hedefi izledi (adım saniyelerinde düştü).
+- Fayda **kanıtlanmadı**: iki yarının Wi-Fi'ı çok farklıydı (retx %7 vs %41) ve sahne içeriği farklı (p50 42 vs 59 Mbps). KAPALI yarıdaki kötü görünen p99/`overwritten` büyük ölçüde daha kötü radyodan. Varsayılan açma kararı için tekrarlı, sık değişen (örn. 10'ar dk) kollar gerekir.
