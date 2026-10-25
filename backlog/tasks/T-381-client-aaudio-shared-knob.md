@@ -1,7 +1,7 @@
 ---
 id: T-381
 title: İstemci — geliştirici anahtarı `audio_out=shared` (Düşük gecikme'de AAudio SHARED ile başla) — exclusive MMAP cızırtısı A/B
-status: todo
+status: review
 phase: 7
 owner: android-client-dev
 depends_on: []
@@ -39,4 +39,13 @@ NOTES 2026-10-25 23:40: Düşük gecikme (`api=aaudio sharing=exclusive mmap=1 b
 
 ## Handoff
 
+- Kod commit: "T-381: audio_out=shared starts the Düşük gecikme chain at AAudio SHARED" (SHA için dalın ucu; son commit yalnız bu kart).
+- Dosyalar: `audio/SinkPolicy.kt` (yeni `AudioOutPref.SHARED`), `session/DevKnobs.kt` (ids), `SinkPolicyTest`, `DevKnobsTest`, `docs/KNOBS.md`, `docs/LOGGING.md`, bu kart.
+- Davranış: `--ez dev true --es audio_out shared` -> zincir SHARED -> TRACK (EXCLUSIVE hiç denenmez, rebuild/reset sonrası da). Probation yok (akış korunur). MMAP olmayan SHARED reddedilir -> Uyumlu/AudioTrack (karar 0012 Ek, `audio_out_rejected reason=not_mmap`). Panelde herhangi bir Ses çıkışı seçimi override'ı bitirir (mevcut `audioOutFromExtra` davranışı).
+- Log: `audio_out_pref value=shared source=extra`, `audio_out ... requested=shared probation=0 pref=shared`, `ev=profile ... knobs=audio_out:shared`.
+- Testler: hedefli + tam `:app:testDebugUnitTest` (2430 test): yalnız bilinen zamanlama testleri düştü (AacDecodeWorkerTest, DecoderWaitTest, OutputParkTest; yük altında, T-367). check.sh çalıştırılmadı (kullanıcı oyunda).
+- Cihazda kontrol: `adb shell am start -n <paket>/.MainActivity --ez dev true --es audio_out shared`; logda `audio_out` satırında `sharing=shared mmap=1` ve `requested=shared` gör; mmap=0 çıkarsa Uyumlu'ya düşer (not_mmap). 10+ dk Düşük gecikme'de cızırtı olup olmadığına bak.
+
 ## Open questions
+
+- Yok. (MMAP'sız SHARED'ı A/B için kabul etmek 0012 Ek'ini gevşetmek olur; yapılmadı.)
