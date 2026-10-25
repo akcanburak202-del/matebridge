@@ -219,6 +219,16 @@ final class BusyRetainTests: XCTestCase {
         }
     }
 
+    func testStatsFieldsShowOnlyNonZeroDeltas() {
+        var before = VideoSender.Counters()
+        before.busyRetries = 2
+        var now = before
+        XCTAssertEqual(now.retryLogFields(since: before), "")
+        now.busyRetries = 5
+        now.refusals = [.write: 1, .invalid: 2]
+        XCTAssertEqual(now.retryLogFields(since: before), " send_retry=3 refusal_write=1 refusal_invalid=2")
+    }
+
     func testRefusalSubtypeIsLoggedNextToTheCause() {
         var c = KeyframeRequestCoalescer()
         c.internalForce(nowUs: 1_000_000, keyframesPushed: 0, cause: .transportRefused, refusal: .write)

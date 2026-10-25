@@ -11,6 +11,9 @@ files:
   - host-mac/Sources/MateBridgeHost/Video/
   - host-mac/Tests/MateBridgeCoreTests/
   - docs/LOGGING.md
+  - host-mac/Sources/MateBridgeHost/Session/SessionServer.swift
+  - host-mac/Sources/MateBridgeHost/Session/StreamCoordinator.swift
+  - host-mac/Sources/MateBridgeCore/Video/EncoderSubmitOrder.swift
   - backlog/tasks/T-378-host-busy-retain-no-idr.md
 ---
 
@@ -35,23 +38,22 @@ files:
 3. `VideoSender`: `.busy` -> `unpop`, `seq` ilerlemez, keyframe yok, `busyRetries++` (art arda 2. busy'den sonra 1 ms uyku, sıcak döngü yok). `.refused(kind)` -> bugünkü yol, `refusals[kind]++`, isteğe bağlı `requestKeyframeForRefusal(kind)`.
 4. Koalesör: zorlanan IDR çıkış kuyruğuna ulaştıysa (`keyframesPushed` ilerledi) yazımı bitene kadar yoldadır; `request` ve `evaluateHost` zamanlayıcıyla ikinci IDR zorlamaz. Kodlayıcıda kalan IDR için eski zaman aşımı güvenlik ağı duruyor. `ForceNote.refusal` -> `idr_forced ... refusal=`.
 5. Testler `BusyRetainTests.swift`; LOGGING.md.
+6. (Kapsam genişletmesi, orkestratör) `VideoLink.sendResult` (SessionServer.swift), `StreamCoordinator`: `requestKeyframeForRefusal` bağı ve stats satırına `send_retry`/`refusal_*` (stats satırı StreamCoordinator.onStats'ta).
+7. Ayrılma kuralı (`EncoderSubmitOrder.downstreamHasRoomLocked`): kurtarma karesi (`forceKeyframe`/`pendingBypass`) kuyruk deltalarla doluyken de tutulmaz (keyframe onları gereksiz kılar, kuyruk keyframe'den önceki deltaları atar; tutmak kilitlenme olurdu). Ama aynı anda yalnız BİR kurtarma keyframe'i hesabı atlar: önceki keyframe hâlâ kodlayıcıdaysa (`outstanding`) sonraki kurtarma karesi sıradan yakalama gibi yük kontrolünden geçer; keyframe kuyruğa inince yükte sayılır. Yardımcı (aux) yarı sayılmaz: aux-only kurtarma yeniden gönderimi tam bu durum için var. Açlık yok: önceki keyframe kendiliğinden kodlayıcıdan çıkar; takılı gönderici dayanıklılık yolunun işi.
 
 ## Handoff
 
-Kod commit: 332cf60a (bu kart güncellemesi ayrı commit). `./scripts/check.sh`: ALL OK (731 XCTest + 1323 Swift Testing).
+Kod commit: bkz. aşağıdaki SHA (son commit). `./scripts/check.sh` ALL OK.
 
-Dosyalar: Core/Video: `VideoSendResult.swift` (yeni), `VideoSender.swift`, `SocketVideoTransport.swift`, `BoundedFrameQueue.swift`, `VideoFrameQueue.swift`, `KeyframeRequestCoalescer.swift`; Host/Video: `VideoPipeline.swift` (`requestKeyframe(refusal:)`); test `BusyRetainTests.swift`; `docs/LOGGING.md`.
+Dosyalar: Core/Video: `VideoSendResult.swift` (yeni), `VideoSender.swift` (+`Counters.retryLogFields`), `SocketVideoTransport.swift`, `BoundedFrameQueue.swift`, `VideoFrameQueue.swift`, `KeyframeRequestCoalescer.swift`, `EncoderSubmitOrder.swift`; Host/Video: `VideoPipeline.swift`; Host/Session: `SessionServer.swift` (`VideoLink.sendResult`), `StreamCoordinator.swift` (refusal bağı + stats `send_retry`/`refusal_*`); testler `BusyRetainTests.swift`, `EncoderBackPressureTests.swift`; `docs/LOGGING.md`.
 
-Varsayımlar / tasarım:
-- Tutulan kare kuyruğun "held" yuvasında; `count`/`queuedCount`/kapasite içinde sayılır, bu yüzden T-370 `DownstreamBudget` değişmeden onu görür. Taşma held kareyi düşürmez.
-- Kabul 3 kapsamı: istemci KEYFRAME_REQUEST ve host-drop yolları, zorlanan IDR çıkış kuyruğuna ulaştıktan sonra yazımı bitene kadar zamanlayıcıyla ikinci IDR üretmez (`reachedQueue`). Kodlayıcıda kalmış IDR için eski 1 sn güvenlik ağı korundu (T-122/T-176 testleri bunu kilitliyor; kodlayıcı zaten force bayrağını tutar). `EncoderSubmitOrder` bypass (`forceKeyframe`/`pendingBypass`) kapısına DOKUNULMADI: koalesleme ikinci kaçışı engelliyor, ama bypass karelerinin ayrılmaya katılması yapılmadı.
-- Takılı IDR yazımı artık yalnız mevcut dayanıklılık yoluna (T-325 watchdog / yeniden bağlanma) kalır.
+Tasarım:
+- Tutulan kare kuyruğun "held" yuvasında; `count`/`queuedCount`/kapasite içinde sayılır, T-370 `DownstreamBudget` değişmeden görür; taşma onu düşürmez.
+- Koalesör: zorlanan IDR çıkış kuyruğuna ulaştıktan sonra yazımı bitene kadar zamanlayıcı ikinci IDR zorlamaz (kodlayıcıdaki IDR için eski 1 sn güvenlik ağı korundu). Takılı yazım -> T-325 watchdog / yeniden bağlanma.
+- Kabul 3 kalanı: bkz. Plan madde 7 (tek kurtarma keyframe'i hesap dışı; test: `testRecoveryKeyframeEntersAQueueFullOfDeltasItSupersedes`, `testSecondRecoveryKeyframeWaitsWhileTheFirstIsStillInTheEncoder`; mevcut T-368/370/374 testleri geçer).
 
-Gerçek cihazda doğrulanacak: kabul 7 (T-366 `stall-inject.sh` ile tek 200 ms kesinti, `idr_cause_*`, toparlanma süresi). Hiç cihaz testi yapılmadı.
+Cihazda doğrulanacak: kabul 7 (T-366 `stall-inject.sh`, tek 200 ms kesinti; `idr_cause_*`, `refusal_*`, `send_retry`, toparlanma süresi). Cihaz testi yapılmadı.
 
 ## Open questions
 
-KAPSAM DIŞI, üretimde şu iki bağ olmadan özellik etkisiz (varsayılan `sendResult` Bool'a düşer, davranış eskisi gibi):
-1. `host-mac/Sources/MateBridgeHost/Session/SessionServer.swift`: `VideoLink` `transport` özel olduğundan `sendResult`'ı başka dosyadan yazamam. Eklenecek: `VideoLink.send` gövdesinin `switch transport.sendFrame(...)` kısmını `sendResult(_:completion:) -> VideoSendResult` yapan (log satırları aynı; `.busy`->`.busy`, `.writeRefused`->`.refused(.write)`, `.invalid`->`.refused(.invalid)`, `.sealFailed`->`.refused(.seal)`) ve `extension VideoLink: VideoTransport` içinde bunu sunan ~15 satır; `send` onu `isAccepted` ile çağırır.
-2. `StreamCoordinator.swift` (~satır 705): `VideoSender(...)`'a `requestKeyframeForRefusal: { [weak pipeline] in pipeline?.requestKeyframe(refusal: $0) }` ve stats satırına `now.busyRetries - last.busyRetries` -> `send_retry=<n>`.
-Karar bekleyen: bypass IDR karelerini T-370 ayrılmasına katmak (kabul 3 son cümle) ayrı kart olabilir.
+Yok. Not: bypass kuralı yalnız ana (main) kodlayıcıdaki keyframe'e bakar; aux yarısı bilerek sayılmaz (yukarıda).

@@ -704,6 +704,7 @@ public final class StreamCoordinator: @unchecked Sendable {
                                  auxFrames: s.settings.packedChroma ? pipeline.auxFrames : nil,
                                  requestKeyframe: { [weak pipeline] in pipeline?.requestKeyframe() },
                                  requestAuxKeyframe: { [weak pipeline] in pipeline?.requestAuxKeyframe() },
+                                 requestKeyframeForRefusal: { [weak pipeline] in pipeline?.requestKeyframe(refusal: $0) },
                                  auxPairingDropped: { [weak pipeline] in pipeline?.auxPairingDropped() },
                                  onEnded: { [weak self] reason in self?.post(.senderEnded(id: id, reason)) },
                                  // T-170: join keys from the link, not the pipeline (it outlives sessions).
@@ -744,6 +745,7 @@ public final class StreamCoordinator: @unchecked Sendable {
             let kbps = Double(now.bytesSent - lastSent.bytesSent) * 8 / 1000 * 1000 / Double(max(1, stats.intervalMs))
             fields += String(format: " sent_frames=%d sent_kbps=%.0f rejected=%d send_failures=%d",
                              frames, kbps, now.framesRejected, now.sendFailures)
+            fields += now.retryLogFields(since: lastSent)  // T-378
             lastSent = now
         }
         if let pipeline { fields += " " + pipeline.takeKeyframeWindow().logFields }

@@ -341,6 +341,49 @@ final class EncoderBackPressureTests: XCTestCase {
         XCTAssertEqual(rig.needed, 0)
     }
 
+    // MARK: - T-378: one recovery keyframe escapes the accounting at a time
+
+    private func offerPlain(_ rig: Rig) {
+        rig.stamp += 1
+        rig.clock.advance(16_667)
+        rig.order.offer(bypassGate: false) { [stamp = rig.stamp, clock = rig.clock] _ in BPFrame(stamp: stamp, gateUs: clock.now) }
+        drain(rig)
+    }
+
+    func testRecoveryKeyframeEntersAQueueFullOfDeltasItSupersedes() {
+        let rig = makeRig(backPressure: true)
+        offerPlain(rig); rig.backend.complete(); drain(rig)          // the first (start) keyframe is out
+        _ = rig.queue.tryPop()
+        for _ in 0..<2 { rig.queue.push(EncodedVideoFrame(flags: [], captureTimeUs: 1, data: [1])) }   // full of deltas
+        rig.order.requestKeyframe()
+        let before = rig.backend.encoded.count
+        offerPlain(rig)
+        XCTAssertEqual(rig.backend.encoded.count, before + 1, "the recovery keyframe is not held behind the deltas")
+        rig.backend.complete(); drain(rig)
+        XCTAssertEqual(rig.needed, 0, "the keyframe restarts the chain: the deltas it displaced need no new keyframe")
+        XCTAssertTrue(rig.queue.tryPop() != nil)
+    }
+
+    func testSecondRecoveryKeyframeWaitsWhileTheFirstIsStillInTheEncoder() {
+        let rig = makeRig(backPressure: true)
+        offerPlain(rig); rig.backend.complete(); drain(rig)
+        _ = rig.queue.tryPop()
+        for _ in 0..<2 { rig.queue.push(EncodedVideoFrame(flags: [], captureTimeUs: 1, data: [1])) }   // queue full
+        rig.order.requestKeyframe()
+        offerPlain(rig)                                              // recovery keyframe #1: in the encoder
+        let afterFirst = rig.backend.encoded.count
+        rig.order.requestKeyframe()                                  // a repeated request for the same recovery
+        offerPlain(rig)
+        XCTAssertEqual(rig.backend.encoded.count, afterFirst, "the second recovery frame does not escape the accounting")
+        XCTAssertTrue(rig.order.keyframePending, "the request is kept, not lost")
+        // The first keyframe lands and the link drains: nothing deadlocks, the repeated request is served.
+        rig.backend.complete(); drain(rig)
+        while rig.queue.tryPop() != nil {}
+        for _ in 0..<3 { tick(rig, transportOpen: true) }
+        XCTAssertGreaterThan(rig.backend.encoded.count, afterFirst)
+        XCTAssertFalse(rig.order.keyframePending)
+    }
+
     func testPendingKeyframeIsNotHeldBack() {
         let rig = makeRig(backPressure: true)
         for _ in 0..<4 { tick(rig, transportOpen: false) }   // queue full

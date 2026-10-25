@@ -43,6 +43,19 @@ public final class VideoSender: @unchecked Sendable {
         public var auxBytesSent = 0
         public var auxDropped = 0
         public init() {}
+
+        /// T-378: ` send_retry=<n>` and ` refusal_<kind>=<n>` since `previous`, only non-zero ones (nothing when quiet).
+        /// Leading space included.
+        public func retryLogFields(since previous: Counters) -> String {
+            var out = ""
+            let retries = busyRetries - previous.busyRetries
+            if retries > 0 { out += " send_retry=\(retries)" }
+            for k in VideoRefusal.allCases {
+                let n = (refusals[k] ?? 0) - (previous.refusals[k] ?? 0)
+                if n > 0 { out += " refusal_\(k.rawValue)=\(n)" }
+            }
+            return out
+        }
     }
 
     public enum EndReason: Sendable { case queueClosed, transportFailed, cancelled }
