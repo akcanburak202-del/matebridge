@@ -25,7 +25,7 @@ files:
 
 1. Gönderim sonucu türlü (ör. `accepted / busy / failed`). `.busy`: aynı kodlanmış kare tutulur ve hazır olunca yeniden denenir; `seq` ilerlemez, keyframe istenmez. Gerçek hata (yazım/şifreleme/geçersiz) bugünkü yoldan gider.
 2. Tutulan kare aşağı akış ayrılmasında (T-370 `inFlight + queued`) sayılır; hesapsız ek yuva yok, kuyruklar sınırlı kalır.
-3. Tek etkin toparlanma kuşağı: bir IDR yoldayken (kodlayıcı, kuyruk ya da soket) gelen yeni keyframe istekleri birleştirilir (`idr_coalesced`). `forceKeyframe`/`pendingBypass` kareleri hesaba katılır, tekrar tekrar kaçmaz. Yoldaki IDR takılırsa bugünkü sınırlı hata/yeniden bağlanma yolu kullanılır, zamanlayıcı yüzünden ikinci IDR üretilmez.
+3. Tek etkin toparlanma kuşağı: bir IDR yoldayken (kodlayıcı, kuyruk ya da soket) gelen yeni keyframe istekleri birleştirilir (`idr_coalesced`). `forceKeyframe`/`pendingBypass` kareleri hesaba katılır, tekrar tekrar kaçmaz. Birleştirme, yoldaki IDR'nin yazımı bitene kadar ya da zorlamadan en çok 1 sn sonrasına (`pendingTimeoutUs`) kadar sürer, hangisi önce olursa (orkestratör kararı, sert canlılık sınırı); sonrasında T-378 öncesi davranış geçerlidir (yeni istek yeniden IDR zorlar). STARTUP/DECODE_ERROR bu kurala girmez, her zaman IDR zorlar. Takılı yazım uzun sürerse bugünkü sınırlı hata/yeniden bağlanma yolu da işler.
 4. Yazımı kısmen yapılmış şifreli kayıt hiçbir zaman bırakılmaz ya da yeniden sıralanmaz.
 5. Log: `idr_forced cause=` yanına red alt türü (`busy|write|seal|invalid`); `ev=send_retry` sayaçları saniyelik özete. LOGGING.md.
 6. Testler: busy → tutma → yeniden deneme, IDR yok; tekrarlanan istemci KEYFRAME_REQUEST'leri + takılı yazım → en çok bir etkin IDR; T-065/066/072, T-365, T-368, T-370, T-374 testleri geçer. `./scripts/check.sh`. Çalışan uygulamaya dokunma, pencere açma, cihaz testi yok.
@@ -75,3 +75,8 @@ Yok. Not: bypass kuralı yalnız ana (main) kodlayıcıdaki keyframe'e bakar; au
 - Sert sınır: tek-kurtarma-kuşağı bastırması artık yalnız `livePending` (zorlamadan en çok `pendingTimeoutUs` = 1 sn). `reachedQueue` ve `evaluateHost` özel durumu kaldırıldı; IDR takılırsa, overflow'da atılırsa, resync/yeni tüketici/bayat unpop ile gitse de 1 sn sonra gelen istek yeniden IDR zorlar (tek yerde tanımlı sabit). Testler: `testStuckWriteSuppressesRepeatedRequestsOnlyUntilTheBound` (sınırdan önce 0, sonra tam 1), `testHostDropWatchIsBoundedToo`.
 - #1: `BoundedFrameQueue` config tekilleştirmesi held ve charged (göndericide) config'i de sayar (`chargedFrame`). Test: `testHeldOrChargedConfigIsNotDuplicatedByTheEncodersAnnouncement`.
 - #2: aux keyframe artık kuyruğa girince değil, yazımı bitince tamamlanmış sayılır: `VideoSender(auxKeyframeWritten:)` -> `VideoPipeline.auxKeyframeWritten` (bağ `StreamCoordinator`'da). Test: `testAuxKeyframeWrittenIsReportedOnlyWhenTheWriteCompletes`.
+
+## Codex --high round 4 (5b31ff5b)
+
+- (a) Düzeltildi: değişen config, tutulan (`held`) ya da göndericide (`charged`) eski config'i devre dışı bırakır (charged'ın geç `unpop`'u reddedilir); taşmada tek keyframe düşerse (kuyrukta/held'de başka keyframe yok) `awaitingKeyframe` + keyframe isteği ayarlanır. Testler: `testChangedConfigSupersedesAHeldOrChargedOneAndKeepsItsKeyframe`, `testDroppingTheOnlyKeyframeAsksForANewOne`.
+- (b) Kod değişikliği yok: ">1 sn tamamlanmamış IDR yazımı yeni kurtarma IDR'sine izin verir" bilinçli canlılık sınırıdır (orkestratör kararı); kabul 3 metni buna göre güncellendi.

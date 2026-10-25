@@ -80,6 +80,11 @@ public struct BoundedFrameQueue: Sendable {
             if frames.contains(where: { $0.isCodecConfig && $0.data == frame.data })
                 || (held?.isCodecConfig == true && held?.data == frame.data)
                 || (chargedFrame?.isCodecConfig == true && chargedFrame?.data == frame.data) { return 0 }
+            // T-378: a CHANGED config supersedes an older one the sender retained (`held`) or still has (`charged`):
+            // the stale one goes (a charged one's later `unpop` is refused), so it cannot take a slot the new config's
+            // keyframe needs.
+            if held?.isCodecConfig == true { held = nil }
+            if chargedFrame?.isCodecConfig == true { chargedFrame = nil }
             // Changed parameter sets while only configs wait (after a resync): the newer config replaces them, so
             // the queue keeps room for the keyframe that follows. Configs queued behind real frames stay as they are.
             if !frames.isEmpty, frames.allSatisfy(\.isCodecConfig) { frames.removeAll() }
@@ -112,6 +117,13 @@ public struct BoundedFrameQueue: Sendable {
                 awaitingKeyframe = true
             }
             return 1 + purged
+        }
+        // A protected frame was dropped. Losing the only keyframe of the current chain (none left queued or held)
+        // would leave later deltas referencing a missing IDR: ask for a new one and refuse deltas until it arrives,
+        // exactly as for an unprotected drop (T-378).
+        if dropped.isKeyframe, held?.isKeyframe != true, !frames.contains(where: \.isKeyframe) {
+            keyframeNeeded = true
+            awaitingKeyframe = true
         }
         return 1
     }

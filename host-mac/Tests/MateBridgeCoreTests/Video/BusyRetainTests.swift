@@ -241,6 +241,45 @@ final class BusyRetainTests: XCTestCase {
         XCTAssertEqual(q.pop()?.data, [1], "the keyframe was not the overflow victim")
     }
 
+    /// Codex round 4 (a): a changed config supersedes a retained older one, so the new config's keyframe is not the
+    /// overflow victim.
+    func testChangedConfigSupersedesAHeldOrChargedOneAndKeepsItsKeyframe() {
+        var q = BoundedFrameQueue(capacity: 2)
+        q.chargesPops = true
+        let c1 = EncodedVideoFrame(flags: .codecConfig, captureTimeUs: 0, data: [7])
+        let c2 = EncodedVideoFrame(flags: .codecConfig, captureTimeUs: 0, data: [8])
+        q.push(c1)
+        let popped = q.pop()!
+        XCTAssertTrue(q.unpop(popped))                          // busy: C1 is held
+        q.push(c2)                                              // the encoder announces a changed config
+        XCTAssertFalse(q.hasHeldFrame, "the stale config is discarded")
+        q.push(key(1))
+        XCTAssertEqual(q.count, 2)
+        XCTAssertFalse(q.takeKeyframeRequest())
+        XCTAssertFalse(q.isAwaitingKeyframe)
+        XCTAssertEqual([q.pop()?.data, q.pop()?.data], [[8], [1]], "new config, then its keyframe")
+
+        // The charged variant: the stale config is with the sender; its late unpop is refused.
+        var r = BoundedFrameQueue(capacity: 2)
+        r.chargesPops = true
+        r.push(c1)
+        let sent = r.pop()!
+        r.push(c2)
+        XCTAssertFalse(r.unpop(sent))
+        r.push(key(1))
+        XCTAssertEqual(r.count, 2)
+    }
+
+    func testDroppingTheOnlyKeyframeAsksForANewOne() {
+        var q = BoundedFrameQueue(capacity: 1)
+        q.push(key(1))
+        q.push(EncodedVideoFrame(flags: .codecConfig, captureTimeUs: 0, data: [7]))   // overflow drops the keyframe
+        XCTAssertTrue(q.takeKeyframeRequest())
+        XCTAssertTrue(q.isAwaitingKeyframe)
+        q.push(delta(2))
+        XCTAssertEqual(q.count, 1, "deltas are refused until a keyframe arrives")
+    }
+
     /// Codex round 3 #2: an auxiliary keyframe counts as written when its write completes, not when it is queued.
     func testAuxKeyframeWrittenIsReportedOnlyWhenTheWriteCompletes() async {
         let transport = ScriptedTransport(script: [.accepted, .busy, .busy, .accepted])
