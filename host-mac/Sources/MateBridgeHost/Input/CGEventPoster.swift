@@ -108,7 +108,7 @@ enum CGEventFactory {
         guard let e = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(k.keyCode), keyDown: isDown) else {
             return nil
         }
-        if k.kind == .modifierDown || k.kind == .modifierUp { e.type = .flagsChanged }
+        if k.kind == .modifierDown || k.kind == .modifierUp || k.kind == .flagsRefresh { e.type = .flagsChanged }
         e.flags = CGEventFlags(rawValue: k.flags.rawValue)
         e.setIntegerValueField(.keyboardEventKeyboardType, value: isoKeyboardType)
         if k.isRepeat { e.setIntegerValueField(.keyboardEventAutorepeat, value: 1) }

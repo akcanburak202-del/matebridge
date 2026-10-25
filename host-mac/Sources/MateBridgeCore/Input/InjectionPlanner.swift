@@ -490,6 +490,10 @@ public struct InjectionPlanner: Sendable {
         out.append(.key(MacKey(kind: .keyUp, keyCode: arrow, flags: arrowFlags)))
         if ownControl {
             out.append(.key(MacKey(kind: .modifierUp, keyCode: ModifierKey.leftControl.keyCode, flags: currentFlags)))
+        } else if currentFlags != control, let held = heldControls.first {
+            // The user's Control stays down, and so do other modifiers (Shift, Command) that the arrow events left
+            // out: restate the complete modifier state, so the Mac's last flags are not the swipe's.
+            out.append(.key(MacKey(kind: .flagsRefresh, keyCode: held.keyCode, flags: currentFlags)))
         }
     }
 

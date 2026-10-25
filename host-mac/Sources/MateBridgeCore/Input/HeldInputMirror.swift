@@ -36,6 +36,7 @@ public struct HeldInputMirror: Equatable, Sendable {
             case .keyUp: keys.removeAll { $0 == k.keyCode }
             case .modifierDown: if !modifiers.contains(k.keyCode) { modifiers.append(k.keyCode) }
             case .modifierUp: modifiers.removeAll { $0 == k.keyCode }
+            case .flagsRefresh: break
             }
         case .mouse(let m):
             pointer = m.position

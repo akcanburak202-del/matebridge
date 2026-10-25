@@ -142,6 +142,8 @@ struct MacEventModel {
                 guard let m = ModifierKey(rawValue: k.keyCode) else { fail("not a modifier", event); return }
                 if !modifiers.contains(m) { fail("modifier up without down", event) }
                 modifiers.remove(m)
+            case .flagsRefresh:
+                guard let m = ModifierKey(rawValue: k.keyCode), modifiers.contains(m) else { fail("flags refresh of a modifier that is not held", event); return }
             }
             // The flags are exactly the modifiers the Mac holds after the event (Caps Lock aside).
             var flags = k.flags

@@ -210,7 +210,22 @@ struct PadSwipePlannerTests {
         #expect(p.releaseAll(environment: openEnv) == [key(.modifierUp, 0x3B, [])])
     }
 
-    @Test("SWIPE-P5 the user holding that very arrow: the swipe is dropped, the held key stays held")
+    @Test("SWIPE-P4b Control held with Shift or Command: the swipe ends by restating the user's full modifier state")
+    func heldControlPlusOthers() {
+        for other in [ModifierKey.leftShift, .leftCommand] {
+            var p = InjectionPlanner()
+            _ = plan(&p, [.modifierDown(.leftControl), .modifierDown(other)])
+            let held = KeyFlags(holding: [ModifierKey.leftControl, other])
+            let out = plan(&p, [.padSwipe(.up)])
+            #expect(out == [key(.keyDown, 0x7E, ctrlSide.union(arrowExtra)),
+                            key(.keyUp, 0x7E, ctrlSide.union(arrowExtra)),
+                            key(.flagsRefresh, 0x3B, held)], "\(other)")
+            // Nothing was released: both stay held, and the next key carries both.
+            #expect(plan(&p, [.keyDown(keyCode: 0x00, autorepeat: false)]) == [key(.keyDown, 0x00, held)])
+        }
+    }
+
+    @Test("SWIPE-P5the user holding that very arrow: the swipe is dropped, the held key stays held")
     func heldArrow() {
         var p = InjectionPlanner()
         _ = plan(&p, [.keyDown(keyCode: 0x7E, autorepeat: false)])
