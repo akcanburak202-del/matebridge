@@ -341,6 +341,104 @@ final class EncoderBackPressureTests: XCTestCase {
         XCTAssertEqual(rig.needed, 0)
     }
 
+    // MARK: - T-378: one recovery keyframe escapes the accounting at a time
+
+    private func offerPlain(_ rig: Rig) {
+        rig.stamp += 1
+        rig.clock.advance(16_667)
+        rig.order.offer(bypassGate: false) { [stamp = rig.stamp, clock = rig.clock] _ in BPFrame(stamp: stamp, gateUs: clock.now) }
+        drain(rig)
+    }
+
+    func testRecoveryKeyframeEntersAQueueFullOfDeltasItSupersedes() {
+        let rig = makeRig(backPressure: true)
+        offerPlain(rig); rig.backend.complete(); drain(rig)          // the first (start) keyframe is out
+        _ = rig.queue.tryPop()
+        for _ in 0..<2 { rig.queue.push(EncodedVideoFrame(flags: [], captureTimeUs: 1, data: [1])) }   // full of deltas
+        rig.order.requestKeyframe()
+        let before = rig.backend.encoded.count
+        offerPlain(rig)
+        XCTAssertEqual(rig.backend.encoded.count, before + 1, "the recovery keyframe is not held behind the deltas")
+        rig.backend.complete(); drain(rig)
+        XCTAssertEqual(rig.needed, 0, "the keyframe restarts the chain: the deltas it displaced need no new keyframe")
+        XCTAssertTrue(rig.queue.tryPop() != nil)
+    }
+
+    func testSecondRecoveryKeyframeWaitsWhileTheFirstIsStillInTheEncoder() {
+        let rig = makeRig(backPressure: true)
+        offerPlain(rig); rig.backend.complete(); drain(rig)
+        _ = rig.queue.tryPop()
+        for _ in 0..<2 { rig.queue.push(EncodedVideoFrame(flags: [], captureTimeUs: 1, data: [1])) }   // queue full
+        rig.order.requestKeyframe()
+        offerPlain(rig)                                              // recovery keyframe #1: in the encoder
+        let afterFirst = rig.backend.encoded.count
+        rig.order.requestKeyframe()                                  // a repeated request for the same recovery
+        offerPlain(rig)
+        XCTAssertEqual(rig.backend.encoded.count, afterFirst, "the second recovery frame does not escape the accounting")
+        XCTAssertTrue(rig.order.keyframePending, "the request is kept, not lost")
+        // The first keyframe lands and the link drains: nothing deadlocks, the repeated request is served.
+        rig.backend.complete(); drain(rig)
+        while rig.queue.tryPop() != nil {}
+        for _ in 0..<3 { tick(rig, transportOpen: true) }
+        XCTAssertGreaterThan(rig.backend.encoded.count, afterFirst)
+        XCTAssertFalse(rig.order.keyframePending)
+    }
+
+    /// Codex P2 (T-378): a bypass re-submission also waits while an earlier recovery keyframe is in the encoder.
+    func testBypassResubmissionWaitsWhileARecoveryKeyframeIsInTheEncoder() {
+        let rig = makeRig(backPressure: true)
+        offerPlain(rig)                                   // the start keyframe: in the encoder
+        XCTAssertEqual(rig.backend.encoded.count, 1)
+        for _ in 0..<2 { rig.queue.push(EncodedVideoFrame(flags: [], captureTimeUs: 1, data: [1])) }   // queue full
+        rig.stamp += 1
+        rig.clock.advance(16_667)
+        rig.order.offer(bypassGate: true) { [stamp = rig.stamp, clock = rig.clock] _ in BPFrame(stamp: stamp, gateUs: clock.now) }
+        drain(rig)
+        XCTAssertEqual(rig.backend.encoded.count, 1, "no second recovery frame escapes the accounting")
+        // The keyframe lands, the link drains: the re-submission is served (no deadlock).
+        rig.backend.complete(); drain(rig)
+        while rig.queue.tryPop() != nil {}
+        let fires = rig.flushLock.withLock { () -> [@Sendable () -> Void] in defer { rig.flushes = [] }; return rig.flushes }
+        fires.forEach { $0() }
+        drain(rig)
+        XCTAssertEqual(rig.backend.encoded.count, 2)
+    }
+
+    /// Codex P2 (T-378): the frame the sender popped stays charged while the transport decides.
+    func testPoppedFrameStaysInTheReservationUntilSettled() {
+        let rig = makeRig(backPressure: true)
+        rig.queue.setChargesPops(true)
+        offerPlain(rig); rig.backend.complete(); drain(rig)   // start keyframe through (queue: keyframe)
+        rig.queue.push(EncodedVideoFrame(flags: [], captureTimeUs: 2, data: [2]))   // queue: A, B
+        let a = rig.queue.tryPop()!                                                  // sender pops A: B + A charged
+        XCTAssertEqual(rig.queue.queuedCount, 2)
+        let before = rig.backend.encoded.count
+        offerPlain(rig)
+        XCTAssertEqual(rig.backend.encoded.count, before, "A's slot is not free yet: the capture C is held, not admitted")
+        XCTAssertTrue(rig.queue.unpop(a))                                            // busy: A comes back
+        XCTAssertEqual(rig.queue.queuedCount, 2, "held A is still reserved")
+        _ = rig.queue.tryPop()                                                       // retry pops A again ...
+        rig.queue.settlePop()                                                        // ... the transport takes it
+        XCTAssertEqual(rig.queue.queuedCount, 1)
+        XCTAssertEqual(rig.needed, 0)
+        XCTAssertEqual(rig.queue.discardedCount, 0)
+    }
+
+    func testStaleUnpopAfterAResyncIsDiscarded() {
+        let rig = makeRig(backPressure: true)
+        let q = rig.queue!
+        q.setChargesPops(true)
+        let config = EncodedVideoFrame(flags: .codecConfig, captureTimeUs: 0, data: [7])
+        q.push(config)
+        let popped = q.tryPop()!
+        _ = q.resyncCountingKeyframes(config: { config })      // STARTUP resync resets the queue to [config]
+        XCTAssertFalse(q.unpop(popped), "the old config must not come back behind the new one")
+        XCTAssertEqual(q.queuedCount, 1)
+        q.push(EncodedVideoFrame(flags: .keyframe, captureTimeUs: 1, data: [8]))
+        XCTAssertEqual(q.queuedCount, 2)
+        XCTAssertEqual(rig.needed, 0, "the recovery keyframe is not dropped")
+    }
+
     func testPendingKeyframeIsNotHeldBack() {
         let rig = makeRig(backPressure: true)
         for _ in 0..<4 { tick(rig, transportOpen: false) }   // queue full

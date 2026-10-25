@@ -40,8 +40,27 @@ public final class VideoFrameQueue: @unchecked Sendable {
         }
     }
 
-    /// Frames waiting in the queue (T-370: the encoder's input back pressure).
-    public var queuedCount: Int { lock.withLock { policy.count } }
+    /// Frames waiting in the queue (T-370: the encoder's input back pressure), a handed-back frame included.
+    /// A popped frame that is charged (`setChargesPops`) and not yet settled counts too.
+    public var queuedCount: Int { lock.withLock { policy.reservedCount } }
+
+    /// T-378: the sender charges the frame it popped to `queuedCount` until it `settlePop()`s or `unpop`s it.
+    /// Turning it off releases any charge.
+    public func setChargesPops(_ on: Bool) {
+        lock.withLock {
+            policy.chargesPops = on
+            if !on { policy.settle() }
+        }
+    }
+
+    /// The popped frame was accepted or refused for good: releases its charge.
+    public func settlePop() { lock.withLock { policy.settle() } }
+
+    /// T-378: the consumer popped a frame, the transport answered `.busy` (nothing sealed or sent) and it gives the
+    /// frame back: it is the next one `tryPop`/`next` return, and it counts in `queuedCount`. See
+    /// `BoundedFrameQueue.unpop`. Returns false (and holds nothing) when one is already held.
+    @discardableResult
+    public func unpop(_ frame: EncodedVideoFrame) -> Bool { lock.withLock { policy.unpop(frame) } }
 
     public var isFinished: Bool { lock.withLock { finished } }
 

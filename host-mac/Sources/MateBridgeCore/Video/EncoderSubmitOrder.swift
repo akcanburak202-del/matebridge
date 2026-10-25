@@ -200,6 +200,9 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
     private var pendingBypass = false
     private var auxTracking = false
     private var auxOutstanding = Set<UInt64>()
+    /// T-378: tokens reserved as keyframes; "in the encoder" while the token is in `outstanding`
+    /// (pruned when the next keyframe is reserved, so it stays small).
+    private var keyframeTokens = Set<UInt64>()
     private var stats = Stats()
     /// Live bitrate requests (T-177); stopped together with `stopped`.
     private var bitrate: BitrateRequest
@@ -268,7 +271,10 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
         var delay: UInt64?
         // The pacer decides: send now, hold as the single pending frame (newest wins), or drop a stale one.
         // T-370: with the output queue full a capture is held (and replaced by the next one) instead of encoded.
-        let slotFree = encoderFree && (bypassGate || downstreamHasRoomLocked(synthetic: frame.isSynthetic))
+        // T-378: a keyframe re-submission (`bypassGate`) skips the room check only while no earlier recovery keyframe
+        // is inside the encoder (`downstreamHasRoomLocked` states the rule); otherwise it waits like any capture.
+        let slotFree = encoderFree && ((bypassGate && !recoveryKeyframeInEncoderLocked())
+                                       || downstreamHasRoomLocked(synthetic: frame.isSynthetic))
         switch pacer.offer(frame, ptsUs: frame.gateUs, nowUs: nowUs(), slotFree: slotFree, bypassGate: bypassGate,
                          synthetic: frame.isSynthetic) {
         case .submit(let f): reserveOrSkipLocked(f)
@@ -470,6 +476,10 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
         lastReserveUs = nowUs()
         let key = forceKeyframe
         forceKeyframe = false
+        if key {
+            keyframeTokens = keyframeTokens.filter { outstanding.contains($0) }
+            keyframeTokens.insert(nextToken)
+        }
         return Submit(frame: f, keyframe: key, token: EncoderSubmitToken(id: nextToken))
     }
 
@@ -517,7 +527,16 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
     /// the capacity and held the real capture that followed (Wi-Fi with a slow sender); with load 0 a refine frame
     /// adds at most 1, so a real capture always still fits. A refine frame that waits is replaced by the capture.
     private func downstreamHasRoomLocked(synthetic: Bool = false) -> Bool {
-        guard downstreamCapacity < .max, !forceKeyframe, !pendingBypass else { return true }
+        guard downstreamCapacity < .max else { return true }
+        // T-378, the recovery rule: a recovery frame (a requested keyframe, or a keyframe re-submission waiting in the
+        // pacer) is never held for downstream room, even when the output queue is full of deltas: the keyframe
+        // supersedes them (the queue purges the deltas behind the one it drops, `BoundedFrameQueue`), so holding it
+        // behind them would be a deadlock. But only ONE recovery keyframe may escape the accounting at a time: while
+        // an earlier keyframe is still inside the encoder, the next recovery frame is
+        // judged like any capture. Once that keyframe has landed it is counted in the queue load, so a repeated
+        // request cannot stack another 0.5-1 MB IDR on a link that has not drained the first. It cannot starve: the
+        // earlier keyframe leaves the encoder on its own, and a stuck sender is the failure path's job.
+        if (forceKeyframe || pendingBypass) && !recoveryKeyframeInEncoderLocked() { return true }
         // Order matters: the in-flight counts are read first, the queue counts (inside `downstreamLoad`) second. An
         // encoder output is pushed to its queue before its slot / owed entry is released, so a frame landing between
         // the two reads is counted in both (over-count, safe) and never in neither. Main: `completed` pushes, then
@@ -525,6 +544,12 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
         let aux = auxOutstanding.count
         let load = downstreamLoad(inFlight, aux)
         return synthetic ? load == 0 : load < downstreamCapacity
+    }
+
+    /// Must hold `lock`. A keyframe that was reserved is still inside the encoder (its slot is not released). The
+    /// auxiliary half is not counted: an auxiliary-only recovery re-submission exists precisely for that case.
+    private func recoveryKeyframeInEncoderLocked() -> Bool {
+        keyframeTokens.contains { outstanding.contains($0) }
     }
 
     /// Must hold `lock`. A frame is waiting only for downstream room (an encoder slot is free): returns the delay of

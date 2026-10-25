@@ -16,6 +16,11 @@
 ///   inside the encoder (not yet pushed to the queue): the caller's resync puts the config in front of it. This is
 ///   decided from `keyframesPushed`, read under the queue lock together with the resync; a mismatch can only cause an
 ///   extra keyframe, never a missing one.
+/// - One recovery generation (T-378): a forced keyframe that is on its way (`livePending`: forced less than
+///   `pendingTimeoutUs` ago and not yet written) absorbs repeated FRAMES_DROPPED requests and host-side drops. That
+///   timeout is the hard liveness bound for ALL suppression: whatever happens to the in-flight keyframe (a stuck
+///   write, a keyframe discarded by an overflow, a resync or a stale `unpop`), the next request after
+///   `pendingTimeoutUs` forces one again. STARTUP / DECODE_ERROR never join this rule (see `request`).
 /// - Nothing is swallowed forever: a coalesced request is covered by a keyframe on its way (at most
 ///   `pendingTimeoutUs`; after that the next request forces again) or by one written within the last `windowUs`.
 ///
@@ -91,14 +96,21 @@ public struct KeyframeRequestCoalescer: Sendable {
         public var cause: IdrCause
         /// Time since the previous recorded force of this stream; nil for the first.
         public var sinceLastMs: UInt64?
+        /// T-378: for `transport_refused`, why the transport refused (`write|seal|invalid|other`; a `.busy` is retried
+        /// and never forces). nil for every other cause.
+        public var refusal: VideoRefusal?
 
-        public init(cause: IdrCause, sinceLastMs: UInt64?) {
+        public init(cause: IdrCause, sinceLastMs: UInt64?, refusal: VideoRefusal? = nil) {
             self.cause = cause
             self.sinceLastMs = sinceLastMs
+            self.refusal = refusal
         }
 
-        /// `cause=<c> since_last_ms=<n>|-` (the caller prepends `view=`).
-        public var logFields: String { "cause=\(cause.rawValue) since_last_ms=\(sinceLastMs.map { String($0) } ?? "-")" }
+        /// `cause=<c> since_last_ms=<n>|-[ refusal=<kind>]` (the caller prepends `view=`).
+        public var logFields: String {
+            let base = "cause=\(cause.rawValue) since_last_ms=\(sinceLastMs.map { String($0) } ?? "-")"
+            return refusal.map { base + " refusal=\($0.rawValue)" } ?? base
+        }
     }
 
     /// Forces by cause and the requests that were swallowed, since the last `takeCauses()`.
@@ -204,6 +216,9 @@ public struct KeyframeRequestCoalescer: Sendable {
         if reason.resendsCodecConfig {
             // Only a keyframe that will be queued after the resync reaches the rebuilt decoder behind the config.
             let stillInEncoder = livePending(nowUs: nowUs).map { $0.keyframesPushed == keyframesPushed } ?? false
+            // T-378 note: this path is deliberately NOT part of the one-recovery-generation rule. The resync has
+            // just reset the queue (deltas refused until a keyframe is pushed) and dropped any keyframe queued or
+            // held, and an IDR already being written cannot reopen it, so a new keyframe is always needed.
             if stillInEncoder { coalescedTotal += 1 } else {
                 pending = Pending(sinceUs: nowUs, keyframesPushed: keyframesPushed)
                 noteForce(nowUs: nowUs)
@@ -226,10 +241,11 @@ public struct KeyframeRequestCoalescer: Sendable {
 
     /// The host forced a keyframe on its own, outside `hostDrop` (the sender's transport refused a frame). Always
     /// forced by the caller; recorded so that client requests caused by the same hiccup coalesce with it.
-    public mutating func internalForce(nowUs: UInt64, keyframesPushed: UInt64, cause: IdrCause = .other) {
+    public mutating func internalForce(nowUs: UInt64, keyframesPushed: UInt64, cause: IdrCause = .other,
+                                       refusal: VideoRefusal? = nil) {
         pending = Pending(sinceUs: nowUs, keyframesPushed: keyframesPushed)
         noteForce(nowUs: nowUs)
-        recordForce(cause, nowUs: nowUs)
+        recordForce(cause, nowUs: nowUs, refusal: refusal)
     }
 
     /// The bounded queue dropped a delta and now awaits a keyframe (T-176). Forces one only when none is on its way
@@ -288,11 +304,11 @@ public struct KeyframeRequestCoalescer: Sendable {
         return forceNotes
     }
 
-    private mutating func recordForce(_ cause: IdrCause, nowUs: UInt64) {
+    private mutating func recordForce(_ cause: IdrCause, nowUs: UInt64, refusal: VideoRefusal? = nil) {
         let since = lastForceUs.map { nowUs >= $0 ? (nowUs - $0) / 1000 : 0 }
         lastForceUs = nowUs
         causeCounts[cause, default: 0] += 1
-        forceNotes.append(ForceNote(cause: cause, sinceLastMs: since))
+        forceNotes.append(ForceNote(cause: cause, sinceLastMs: since, refusal: refusal))
         if forceNotes.count > 32 { forceNotes.removeFirst(forceNotes.count - 32) }
     }
 

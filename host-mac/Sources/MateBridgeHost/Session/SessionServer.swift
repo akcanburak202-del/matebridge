@@ -48,6 +48,11 @@ public final class VideoLink: @unchecked Sendable {
     /// (logged). `completion(true)` means written.
     @discardableResult
     public func send(_ frame: VideoFrame, completion: @escaping @Sendable (Bool) -> Void = { _ in }) -> Bool {
+        sendResult(frame, completion: completion).isAccepted
+    }
+
+    /// `send` with the reason (T-378): `.busy` sent nothing and may be offered again; `.refused` is a loss.
+    public func sendResult(_ frame: VideoFrame, completion: @escaping @Sendable (Bool) -> Void = { _ in }) -> VideoSendResult {
         // The backlog this frame will queue behind (T-088); taken before the write.
         if let sendQueue, transport.canSend { sendQueue.sample() }
         var completion = completion
@@ -61,21 +66,21 @@ public final class VideoLink: @unchecked Sendable {
         }
         switch transport.sendFrame(frame, completion: completion) {
         case .sent:
-            return true
+            return .accepted
         case .busy:
-            return false
+            return .busy
         case .writeRefused:  // the transport already cancelled the connection; the completion reports false
             logger.log(.warning, "video_write_refused", sessionID: sessionID, generation: configID)
-            return false
+            return .refused(.write)
         case .invalid:
             logger.log(.warning, "video_frame_refused", sessionID: sessionID, generation: configID,
                        fields: "reason=invalid_or_oversized")
-            return false
+            return .refused(.invalid)
         case .sealFailed(let error):
             logger.log(.error, "video_seal_failed", sessionID: sessionID, generation: configID,
                        fields: "reason=\(error == .counterExhausted ? "counter" : "crypto")")
             transport.connection.cancel()  // the counter is exhausted: this connection cannot continue
-            return false
+            return .refused(.seal)
         }
     }
 
