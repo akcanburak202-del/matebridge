@@ -115,6 +115,24 @@ final class WifiAdaptV2Tests: XCTestCase {
         XCTAssertEqual(end.endedUs, 320_000)
     }
 
+    func testStallKeepsItsIdentityWhenTheHeadIsReplacedMidBlockage() {
+        var d = SendStallDetector()
+        func head(since: UInt64, age: UInt64?) -> SendStallDetector.Result {
+            d.observe(.init(sinceProgressUs: since * 1_000, headAgeUs: age.map { $0 * 1_000 }))
+        }
+        XCTAssertFalse(head(since: 100, age: 100).newEvent)
+        XCTAssertTrue(head(since: 200, age: 200).newEvent, "blocked 200 ms")
+        // A resync replaces the head by a young config; bytes still do not move.
+        let r1 = head(since: 300, age: 20)
+        XCTAssertFalse(r1.newEvent, "the same blockage")
+        XCTAssertEqual(r1.activeUs, 300_000)
+        XCTAssertFalse(head(since: 400, age: 120).newEvent)
+        XCTAssertFalse(head(since: 500, age: 220).newEvent)
+        // Bytes move: the stall is over; a later blockage is a new event.
+        XCTAssertEqual(head(since: 50, age: 10), .init(newEvent: false, activeUs: 0))
+        XCTAssertTrue(head(since: 200, age: 200).newEvent)
+    }
+
     func testNoWorkIsNeverAStall() {
         var d = SendStallDetector()
         for _ in 0..<20 {
@@ -293,6 +311,36 @@ final class WifiAdaptV2Tests: XCTestCase {
         r.tick(stall: true, active: 200)
         for ms in stride(from: 300, through: 500, by: 100) { r.tick(active: UInt32(ms)) }
         XCTAssertEqual(r.downSteps, 2)
+    }
+
+    func testHeavyEvidenceInsideTheMinimumIntervalWaitsForAnEligibleStep() {
+        var r = Rig()
+        r.stallEvent(); r.stallEvent()  // 60 -> 42
+        XCTAssertEqual(r.downSteps, 1)
+        let at = r.now
+        r.tick()
+        // A stall that is already over, 600 ms long, is reported 200 ms after the step: too soon to act on.
+        r.tick(stall: true, active: 0, ended: 600)
+        XCTAssertEqual(r.downSteps, 1)
+        while r.downSteps < 2 && r.now - at < 2_000_000 { r.tick() }
+        XCTAssertEqual(r.downSteps, 2, "kept until a step is allowed")
+        XCTAssertGreaterThanOrEqual(r.steps[1].atUs - at, 500_000)
+        XCTAssertEqual(r.lastStep?.toKbps, 30_000)
+        // Consumed: it does not step again.
+        r.quiet(ticks: 30)
+        XCTAssertEqual(r.downSteps, 2)
+    }
+
+    func testHeavyEvidenceThatIsNotActedOnWithinTwoSecondsIsDropped() {
+        var r = Rig()
+        r.stallEvent(); r.stallEvent()  // 60 -> 42, then 30 at floor below
+        r.quiet(ticks: 6)
+        r.stallEvent(); r.stallEvent()  // 42 -> 30
+        XCTAssertEqual(r.c.targetKbps, 30_000)
+        let before = r.steps.count
+        r.tick(stall: true, active: 0, ended: 700)  // heavy, but at the floor: nothing to lower to
+        r.quiet(ticks: 40)
+        XCTAssertFalse(r.steps.dropFirst(before).contains { $0.step.toKbps < $0.step.fromKbps }, "no emergency from one old event")
     }
 
     func testStallThatEndedBetweenSamplesCountsByItsLength() {

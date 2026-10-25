@@ -146,6 +146,7 @@ public struct WifiAdaptV2Controller: Sendable {
     private var backlogRing: [UInt32] = []
     private var stallEventsUs: [UInt64] = []
     /// The stall running at the last step was used for it; it cannot count again.
+    private var pendingHeavy: (atUs: UInt64, used: Evidence)?
     private var stallConsumed = false
     private var stallActiveNow = false
     private var lastStepUs: UInt64?
@@ -228,12 +229,21 @@ public struct WifiAdaptV2Controller: Sendable {
         let longStall = (!stallConsumed && s.stallActiveMs >= UInt32(Constants.longStallMs))
             || (!consumedBefore && s.stallEndedMs >= UInt32(Constants.longStallMs))
         let heavyStall = freshStalls >= 2 || longStall
-        let heavy = heavyStall || (d50 && backlog)
+        let heavyNow = heavyStall || (d50 && backlog)
+        // Heavy evidence waits for an eligible step (the 500 ms spacing) for as long as the 2 s evidence window; a
+        // step, or a connection change, clears it.
+        var usedHeavy: Evidence = []
+        if heavyStall { usedHeavy.insert(.stall) }
+        if d50 && backlog { usedHeavy.formUnion([.delay, .backlog]) }
+        if heavyNow { pendingHeavy = (now, usedHeavy) }
+        var heavy = false
+        if let p = pendingHeavy {
+            if now > p.atUs, now - p.atUs > Constants.stallEventWindowMs * 1_000 { pendingHeavy = nil } else { heavy = true }
+        }
         let moderate = (d20 && backlog) || (loss && backlog)
         var used: Evidence = []
         if heavy {
-            if heavyStall { used.insert(.stall) }
-            if d50 && backlog { used.formUnion([.delay, .backlog]) }
+            used = pendingHeavy?.used ?? usedHeavy
         } else if moderate {
             if d20 && backlog { used.formUnion([.delay, .backlog]) }
             if loss && backlog { used.formUnion([.loss, .backlog]) }
@@ -244,7 +254,7 @@ public struct WifiAdaptV2Controller: Sendable {
         let heavyIsNew = s.stallStarted || longStall || (d50 && backlog)
         var step: Step?
         let atNormalFloor = targetKbps <= floorKbps && floorKbps == Constants.normalFloorKbps
-        if heavy, atNormalFloor {
+        if heavyNow, atNormalFloor {
             if floorHeavyFirstUs == nil || now - floorHeavyLastUs > Constants.emergencyAfterMs * 1_000 {
                 floorHeavyFirstUs = now
             }
@@ -252,7 +262,7 @@ public struct WifiAdaptV2Controller: Sendable {
         }
         if heavy, targetKbps > floorKbps, since(lastStepUs) >= Constants.heavyMinIntervalMs {
             step = lower(to: scaled(targetKbps, Constants.heavyFactor), reason: .severe, used: used, now: now)
-        } else if heavy, heavyIsNew, atNormalFloor, let first = floorHeavyFirstUs,
+        } else if heavyNow, heavyIsNew, atNormalFloor, let first = floorHeavyFirstUs,
                   now - first >= Constants.emergencyAfterMs * 1_000, since(lastStepUs) >= Constants.heavyMinIntervalMs {
             step = lower(to: Constants.emergencyFloorKbps, reason: .emergency, used: used, now: now)
         } else if !heavy, moderate, targetKbps > floorKbps, since(lastStepUs) >= Constants.moderateMinIntervalMs {
@@ -289,6 +299,7 @@ public struct WifiAdaptV2Controller: Sendable {
         lossRing.removeAll()
         backlogRing.removeAll()
         stallEventsUs.removeAll()
+        pendingHeavy = nil
     }
 
     /// Send buffer size that counts as a backlog at the current target rate.

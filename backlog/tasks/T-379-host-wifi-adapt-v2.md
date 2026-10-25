@@ -69,6 +69,13 @@ files:
 - **İz sayıları**: değişmedi (iz satırlarında kuyruk-başı bileşeni yok): 20:17 -> 60/42/35,7/30; 20:55 -> 60/42/30; temiz oturum 3 düşüş / 46 dk, min 51.
 - Tam `swift test` (taskpolicy -b): 779 test, 0 hata; `swift build` tamam.
 
+## Handoff — codex round 3 fixes (2 x P2)
+
+1. **Kuyruk-başı kimliği**: `SendStallDetector` kuyruk-başı takılmasını kareye değil bayt ilerlemesizliğine bağlar; sayılmış bir takılma, baş kare (resync config'i vb.) değişse bile `sinceProgress >= 150 ms` sürdükçe aynı takılmadır, bayt ilerleyince biter. Test: `testStallKeepsItsIdentityWhenTheHeadIsReplacedMidBlockage`.
+2. **Ağır kanıt bekletme**: `WifiAdaptV2Controller` ağır kanıtı (uzun takılma, 2 olay, D>=50&B) 2 sn pencere boyunca saklar (`pendingHeavy`); 500 ms aralığı yüzünden o tick'te inilemediyse uygun ilk tick'te iner, adım/bağlantı değişimi temizler, 2 sn'de eskir. Acil taban (30'da) yalnız o tick'in kendi kanıtıyla çalışır (bekletilen kanıt acili tetiklemez). Testler: `testHeavyEvidenceInsideTheMinimumIntervalWaitsForAnEligibleStep`, `testHeavyEvidenceThatIsNotActedOnWithinTwoSecondsIsDropped`.
+- **İz sayıları değişmedi** (20:17: 60/42/35,7/30; 20:55: 60/42/30; temiz: 3 düşüş / 46 dk, min 51).
+- Tam `swift test` (taskpolicy -b): 782 test, 0 hata.
+
 ## Open questions
 
 - B eşiği (20 ms hız, >= 32 KiB) ve acil taban "yeni kanıt" şartı ek metninde yok; yukarıdaki sapma listesi 0023 ekine işlenmeli mi?

@@ -91,11 +91,16 @@ public struct SendStallDetector: Equatable, Sendable {
         }
 
         // Head of the queue, only while nothing is being written (otherwise the writer's view covers it).
+        // The stall's identity is the missing byte progress, not the frame: a head replaced mid-blockage (a resync puts a
+        // config at the head) keeps the stall that is already counted, until bytes move again.
         if !o.writerBusy, let age = o.headAgeUs {
-            let idle = min(age, o.sinceProgressUs)
-            if idle >= Self.thresholdUs {
-                if !headOpenCounted { events += 1; headOpenCounted = true }
-                active = max(active, idle)
+            let blocked = o.sinceProgressUs >= Self.thresholdUs
+            if headOpenCounted, blocked {
+                active = max(active, o.sinceProgressUs)
+            } else if min(age, o.sinceProgressUs) >= Self.thresholdUs {
+                events += 1
+                headOpenCounted = true
+                active = max(active, min(age, o.sinceProgressUs))
             } else {
                 headOpenCounted = false
             }
