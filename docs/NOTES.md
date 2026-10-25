@@ -2100,3 +2100,24 @@ Wi-Fi kaybı azalmadı (retx saniyesi daha da çok), ama artık zorunlu IDR zinc
 - Modem aslında **Aidata WR854GVR** (önceki notta FiberHGW yazıyordu; SSID adı yanıltıcı). 5 GHz: Auto(DFS) → 36, 80 MHz.
 - Yeniden tarama (Mac konumu): 5 GHz'de yalnızca 36–48 bloğu dolu (bizim + 1 komşu ch48); 52–64 ve 100–140 boş.
 - Kanal 100'e geçiş denendi, kaydedilmedi: firmware kayıtta mevcut WPA parolasını doğruluyor ("rakam içermiyor"). Parola değişimi kullanıcıya zahmetli → kanal 36'da kalıyor. Önce T-378 ile Wi-Fi oyun oturumu; takılma sürerse yeniden ele alınır.
+
+## 2026-10-25 14:25–15:11 — T-378 cihaz doğrulaması (host eced2a99, TotK, Oyun 60, Wi-Fi kanal 36)
+
+Yalnız yayının aktığı saniyeler (`sent_kbps` ≥ 1000), host.log, 36 dk; 2026-10-23 40dac735 ölçümüyle aynı yöntem:
+
+| | 40dac735 (80 dk) | eced2a99 (36 dk) |
+|---|---|---|
+| takılma (`cap_dec_ms` > 150) | 2 (0,03/dk) | 0 |
+| `cap_dec_ms` > 100 | 12 (0,15/dk) | 5 (0,14/dk) |
+| `cap_dec_ms` p50/p95/p99 | 14,0/30,8/60,4 | 13,7/33,6/64,9 |
+| IDR | 20 (0,25/dk) | 14 (0,38/dk; 9 periodic, 5 consumer, 2 client_request) |
+| `queue_drops` | 0 | 0 |
+| `send_retry` (busy → kare tutuldu, IDR yok) | — | 8 |
+| `refusal_*` | — | 0 (1 `transport_refused` satırı) |
+| video retx saniyesi | %41 | %18 |
+| srtt p50/p95 | 7/12 | 7/24 |
+
+- T-378'in doğrudan etkisi: 8 geçici `busy`, hiçbiri IDR'e dönmedi (önceden her biri `transport_refused` IDR'i olurdu). `idr_coalesced` 3.
+- Dikkat: bu oturumda Wi-Fi daha temizdi (retx saniyesi %18 vs %41); takılma farkının bir kısmı ağdan. Kabul 7'deki `stall-inject.sh` 200 ms denemesi yapılmadı.
+- Ayrı, bilinen: tablet `dropped` 258 saniyede > 0 (80 saniyede ≥ 5); ağ değil, istemci sunum/decode tarafı (T-310 ile ilgili olabilir [çıkarım]).
+- Aynı oturumda: ses Düşük gecikme'de cızırdadı, Uyumlu'da düzeldi (kullanıcı). Tablet logcat halkası ~10 sn tuttuğu için cızırtı anı kaydedilemedi.
