@@ -8,8 +8,9 @@
 ///   the span is exact: an open gap is measured to the microsecond, and a gap of at least the threshold that ended
 ///   between two polls is still reported (`writerLongGapsEnded`). Sampling phase does not matter.
 /// - A frame at the head of the send queue while no record is pending (the sender is held back by the socket's
-///   low-water mark). Its age is exact too; the last progress comes from the writer (`sinceProgressUs`). Only a
-///   stall still open at a poll is seen (a stall of 150-250 ms can end between two polls).
+///   low-water mark). Its age is exact too; the last progress comes from the writer (`sinceProgressUs`). When the
+///   frame is finally written, the sender hands the wait to the connection (`WriteGapMeter.headWaitEnded`), which
+///   counts it as an ended gap, so a head-of-queue stall that ended between two polls is found too.
 ///
 /// - A large keyframe that is being written makes progress all the time: not a stall, however long it takes.
 /// - One stall is one event, however long it lasts; `activeUs` keeps growing until progress resumes.
@@ -76,7 +77,8 @@ public struct SendStallDetector: Equatable, Sendable {
         // Writer: gaps that ended since the last observation (the one we already counted as open is not counted twice).
         if o.writerLongGapsEnded > lastEnded {
             var n = Int(min(o.writerLongGapsEnded - lastEnded, 1_000))
-            if writerOpenCounted { n -= 1; writerOpenCounted = false }
+            // A stall that was open (counted) at an earlier observation is the one that ended: not counted twice.
+            if writerOpenCounted || headOpenCounted { n -= 1; writerOpenCounted = false; headOpenCounted = false }
             events += max(0, n)
             ended = o.writerLastLongGapUs
         }

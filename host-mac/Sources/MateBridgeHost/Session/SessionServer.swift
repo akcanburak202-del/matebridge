@@ -50,9 +50,15 @@ public final class VideoLink: @unchecked Sendable {
 
     /// `send` with the reason (T-378): `.busy` sent nothing and may be offered again; `.refused` is a loss.
     public func sendResult(_ frame: VideoFrame, completion: @escaping @Sendable (Bool) -> Void = { _ in }) -> VideoSendResult {
+        sendResult(frame, queueWaitUs: 0, completion: completion)
+    }
+
+    /// `sendResult` with how long the frame waited at the head of the send queue (T-379: stall timing).
+    public func sendResult(_ frame: VideoFrame, queueWaitUs: UInt64, completion: @escaping @Sendable (Bool) -> Void = { _ in })
+        -> VideoSendResult {
         // The backlog this frame will queue behind (T-088); taken before the write.
         if let sendQueue, transport.canSend { sendQueue.sample() }
-        switch transport.sendFrame(frame, completion: completion) {
+        switch transport.sendFrame(frame, queueWaitUs: queueWaitUs, completion: completion) {
         case .sent:
             return .accepted
         case .busy:

@@ -110,6 +110,68 @@ final class WriteGapMeterTests: XCTestCase {
         }
     }
 
+    /// A frame sits at the head of the send queue from 1010 ms for `waitMs` with nothing pending in the writer (the last
+    /// record finished at 1000 ms), then is written. Polls pass the head age as the driver does.
+    private func headRun(waitMs: Double, phase: Int) -> (events: Int, maxActiveMs: Double, maxEndedMs: Double) {
+        var meter = WriteGapMeter()
+        var det = SendStallDetector()
+        meter.workQueued(nowNs: 990_000_000, wasIdle: true)
+        meter.progress(nowNs: 1_000_000_000, bytes: 1_000)
+        meter.idle()
+        let enqueued = 1_010.0
+        let acceptedAt = enqueued + waitMs
+        var accepted = false
+        var events = 0
+        var maxActive = 0.0
+        var maxEnded = 0.0
+        var t = 1_000 + phase
+        while t <= 3_000 {
+            if !accepted, Double(t) >= acceptedAt {
+                accepted = true
+                meter.headWaitEnded(nowNs: UInt64(acceptedAt * 1_000_000), waitNs: UInt64(waitMs * 1_000_000))
+                meter.workQueued(nowNs: UInt64(acceptedAt * 1_000_000), wasIdle: true)
+                meter.progress(nowNs: UInt64((acceptedAt + 1) * 1_000_000), bytes: 5_000)
+                meter.idle()
+            }
+            let age: UInt64? = (!accepted && Double(t) >= enqueued) ? UInt64((Double(t) - enqueued) * 1_000) : nil
+            let r = det.observe(.init(meter.snapshot(nowNs: UInt64(t) * 1_000_000, pendingBytes: 0), headAgeUs: age))
+            if r.newEvent { events += 1 }
+            maxActive = max(maxActive, Double(r.activeUs) / 1_000)
+            maxEnded = max(maxEnded, Double(r.endedUs) / 1_000)
+            t += 100
+        }
+        return (events, maxActive, maxEnded)
+    }
+
+    func testQueueHeadStallsAreFoundOnceAtEverySamplingPhase() {
+        for waitMs in [160.0, 220.0, 520.0] {
+            for phase in 0..<100 {
+                XCTAssertEqual(headRun(waitMs: waitMs, phase: phase).events, 1, "head wait \(waitMs) ms, phase \(phase)")
+            }
+        }
+    }
+
+    func testQueueHeadWaitsUnderTheThresholdAreNeverFound() {
+        for phase in 0..<100 { XCTAssertEqual(headRun(waitMs: 140, phase: phase).events, 0, "phase \(phase)") }
+    }
+
+    func testAnEndedQueueHeadStallKeepsItsRealLength() {
+        for phase in stride(from: 0, to: 100, by: 11) {
+            let r = headRun(waitMs: 520, phase: phase)
+            XCTAssertGreaterThanOrEqual(r.maxEndedMs, 519, "phase \(phase): \(r)")
+        }
+    }
+
+    func testWaitBehindAWriterThatWasStillProgressingIsNotAStall() {
+        var m = WriteGapMeter()
+        m.workQueued(nowNs: 1_390_000_000, wasIdle: true)
+        m.progress(nowNs: 1_400_000_000, bytes: 10)  // bytes moved 100 ms before the next record
+        m.idle()
+        // The frame waited 500 ms, but the no-progress gap is only 100 ms.
+        m.headWaitEnded(nowNs: 1_500_000_000, waitNs: 500_000_000)
+        XCTAssertEqual(m.snapshot(nowNs: 1_500_000_000, pendingBytes: 0).longGapsEnded, 0)
+    }
+
     func testSnapshotFieldsOfTheMeter() {
         var m = WriteGapMeter()
         XCTAssertEqual(m.snapshot(nowNs: 5, pendingBytes: 0).sinceProgressNs, 0, "nothing happened yet")

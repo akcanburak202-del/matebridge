@@ -50,6 +50,17 @@ public struct WriteGapMeter: Sendable {
         acceptedBytes &+= UInt64(bytes)
     }
 
+    /// A record was queued after `waitNs` at the head of the send queue with nothing pending in the writer (the sender
+    /// was held back by the socket). The wait overlaps a no-progress gap of `min(waitNs, time since the last
+    /// progress)`; if that is at least the threshold it is a stall that ended now. Call before `workQueued`.
+    public mutating func headWaitEnded(nowNs: UInt64, waitNs: UInt64) {
+        guard !busy, waitNs > 0, let last = lastProgressNs, nowNs > last else { return }
+        let gap = min(waitNs, nowNs - last)
+        guard gap >= Self.thresholdNs else { return }
+        longGapsEnded += 1
+        lastLongGapNs = gap
+    }
+
     /// Nothing is pending any more.
     public mutating func idle() { busy = false }
 

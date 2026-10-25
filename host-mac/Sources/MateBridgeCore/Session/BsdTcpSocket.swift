@@ -431,7 +431,8 @@ public final class BsdTcpConnection: @unchecked Sendable {
         }
     }
 
-    /// Queues one record. `completion(true)` once all of it was accepted by the kernel, `completion(false)` if the
+    /// Queues one record. `headWaitNs` (T-379) is how long its frame waited at the head of the send queue; it feeds the
+    /// stall timing (`WriteGapMeter.headWaitEnded`). `completion(true)` once all of it was accepted by the kernel, `completion(false)` if the
     /// connection closed first (including when it is already closed) or the record was refused. Called exactly once,
     /// on the write queue, never inside `write`.
     ///
@@ -439,14 +440,16 @@ public final class BsdTcpConnection: @unchecked Sendable {
     /// or queueing it would exceed `maxPendingRecords` / `maxPendingBytes` (bounded queue; the connection stays open
     /// and the caller decides, e.g. drop the frame).
     @discardableResult
-    public func write(_ bytes: [UInt8], completion: @escaping Completion) -> Bool {
+    public func write(_ bytes: [UInt8], headWaitNs: UInt64 = 0, completion: @escaping Completion) -> Bool {
         var done: [Completion] = []
         var failure: Int32?
         let accepted: Bool = lock.withLock {
             guard !cancelled, !finishing,
                   outbound.admits(byteCount: bytes.count, maxRecords: maxPendingRecords, maxBytes: maxPendingBytes)
             else { return false }
-            gapMeter.workQueued(nowNs: Self.nowNs(), wasIdle: outbound.isEmpty)
+            let nowNs = Self.nowNs()
+            if outbound.isEmpty, headWaitNs > 0 { gapMeter.headWaitEnded(nowNs: nowNs, waitNs: headWaitNs) }
+            gapMeter.workQueued(nowNs: nowNs, wasIdle: outbound.isEmpty)
             outbound.append(bytes, token: completion)
             let (outcome, completed) = drainLocked()
             done = completed

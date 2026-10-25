@@ -68,7 +68,12 @@ public final class SocketVideoTransport: VideoTransport, @unchecked Sendable {
     }
 
     public func sendResult(_ frame: VideoFrame, completion: @escaping @Sendable (Bool) -> Void) -> VideoSendResult {
-        switch sendFrame(frame, completion: completion) {
+        sendResult(frame, queueWaitUs: 0, completion: completion)
+    }
+
+    public func sendResult(_ frame: VideoFrame, queueWaitUs: UInt64, completion: @escaping @Sendable (Bool) -> Void)
+        -> VideoSendResult {
+        switch sendFrame(frame, queueWaitUs: queueWaitUs, completion: completion) {
         case .sent: return .accepted
         case .busy: return .busy
         case .writeRefused: return .refused(.write)
@@ -78,7 +83,8 @@ public final class SocketVideoTransport: VideoTransport, @unchecked Sendable {
     }
 
     /// Seals and queues one frame; see `SendOutcome`. `completion(true)` once the kernel accepted the whole record.
-    public func sendFrame(_ frame: VideoFrame, completion: @escaping @Sendable (Bool) -> Void = { _ in }) -> SendOutcome {
+    public func sendFrame(_ frame: VideoFrame, queueWaitUs: UInt64 = 0,
+                          completion: @escaping @Sendable (Bool) -> Void = { _ in }) -> SendOutcome {
         let message = Message.videoFrame(frame)
         lock.lock()
         defer { lock.unlock() }
@@ -97,7 +103,7 @@ public final class SocketVideoTransport: VideoTransport, @unchecked Sendable {
         }
         inFlight += 1
         // Never calls back inside `write`, so holding `lock` here cannot deadlock.
-        let queued = connection.write(bytes) { [weak self] ok in
+        let queued = connection.write(bytes, headWaitNs: queueWaitUs &* 1_000) { [weak self] ok in
             guard let self else { return completion(ok) }
             let ready = lock.withLock {
                 inFlight -= 1
