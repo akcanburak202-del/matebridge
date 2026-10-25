@@ -34,8 +34,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-334](tasks/T-334-dav-copy-put-concurrency.md) | WebDAV — eşzamanlı COPY/MOVE geri alması başka bağlantının başarılı PUT'unu silmesin | 7 | android-client-dev | [T-288] |
 | [T-335](tasks/T-335-host-pipeline-stop-join.md) | Host — pipeline teardown sürerken ikinci stop çağıranı beklesin; hata zamanı teardown'dan önce alınsın | 7 | mac-host-dev | [T-325, T-293] |
 | [T-367](tasks/T-367-android-timing-tests-flaky.md) | Android — zamanlama testleri yük altında kırmızı (DecoderWaitTest, OutputParkTest, AacDecodeWorkerTest) | 7 | android-client-dev | [] |
-| [T-375](tasks/T-375-host-pad-swipe.md) | Host — PAD_SWIPE (0x18) çöz, Control+ok sistem kısayolu olarak enjekte et | 7 | mac-host-dev | [] |
-| [T-376](tasks/T-376-client-pad-swipe.md) | İstemci — touchpad'de üç parmak kaydırmayı tanı, PAD_SWIPE (0x18) gönder | 7 | android-client-dev | [] |
 | [T-378](tasks/T-378-host-busy-retain-no-idr.md) | Host — video yazımı geçici `.busy` reddinde kareyi tut ve yeniden dene; tek toparlanma kuşağı (astra öneri 2) | 7 | mac-host-dev | [T-370, T-371] |
 | [T-379](tasks/T-379-host-wifi-adapt-v2.md) | Host — WIFI_ADAPT v2: yalnız bit hızı, doğrulanmış tıkanıklık kanıtı, IDR'sız (astra öneri 1) | 7 | mac-host-dev | [T-378] |
 
@@ -386,4 +384,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-370](tasks/T-370-encoder-input-backpressure.md) | Host — kodlayıcı girişinde geri basınç: kuyruk/aktarım doluyken yakalamayı VT'ye verme (zorunlu IDR zincirini kes) | 7 | mac-host-dev | [T-368, T-369] |
 | [T-371](tasks/T-371-idr-cause-log.md) | Host — her zorunlu IDR için neden günlüğü (ev=idr_forced cause=...) | 7 | mac-host-dev | [T-369] |
 | [T-374](tasks/T-374-capture-waits-behind-refine.md) | Host — durağan ekran iyileştirme (refine) treni sırasında gelen gerçek kare 10–12 ms bekliyor (Oyun modunda masaüstü imleç takılması) | 7 | mac-host-dev | [T-370] |
+| [T-375](tasks/T-375-host-pad-swipe.md) | Host — PAD_SWIPE (0x18) çöz, Control+ok sistem kısayolu olarak enjekte et | 7 | mac-host-dev | [] |
+| [T-376](tasks/T-376-client-pad-swipe.md) | İstemci — touchpad'de üç parmak kaydırmayı tanı, PAD_SWIPE (0x18) gönder | 7 | android-client-dev | [] |
 | [T-377](tasks/T-377-astra-wifi-game-stalls.md) | Tasarım incelemesi — gpt-6-astra (high), Wi-Fi'da oyun: anlık kötüleşmede takılmadan geçiş ve toparlanma | 7 | orchestrator | [T-327, T-328, T-369, T-370, T-371] |

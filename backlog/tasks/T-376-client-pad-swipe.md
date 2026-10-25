@@ -1,7 +1,7 @@
 ---
 id: T-376
 title: İstemci — touchpad'de üç parmak kaydırmayı tanı, PAD_SWIPE (0x18) gönder
-status: review
+status: done
 phase: 7
 owner: android-client-dev
 depends_on: []

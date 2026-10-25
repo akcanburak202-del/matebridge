@@ -1,7 +1,7 @@
 ---
 id: T-375
 title: Host — PAD_SWIPE (0x18) çöz, Control+ok sistem kısayolu olarak enjekte et
-status: review
+status: done
 phase: 7
 owner: mac-host-dev
 depends_on: []
