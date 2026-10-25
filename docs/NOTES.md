@@ -2142,3 +2142,15 @@ Yalnız yayının aktığı saniyeler (`sent_kbps` ≥ 1000), host.log, 36 dk; 2
 - 30'da kalan iki kaynak:
   1. 21:17:26–29 radyo sıçraması: srtt 46, `snd_cwnd` 9,9 MB → 278 KB, yazım bloklanmadı ama `cap_dec_ms` 88–114, tablet `dropped` 18–22/s. Bit hızından bağımsız; T-379 bunu önlemez.
   2. **Ağ temizken tablet kare atıyor:** 21:09:02–06, 21:16:58–21:17:01 host 60 kare gönderiyor, srtt ~10, retx 0, ama tablet `dropped` 9–18/s. Tablet `render ev=stats` (21:18:25, 10,5 sn): `skip_pct=11.7`, `late_drops=85`, `slot_dups=85`, `d_jitter_us=21335`, `lead_ms=6.00`, `net_p50/p95/p99` 16,8/24,1/28,0 ms, `shown_p95` 33 ms, decode p95 11 ms (`dec_over=0`). Yorum [çıkarım]: varış aralığı oynaması (~8–10 ms) 6 ms öncülü aşınca kare vsync yuvasını kaçırıyor, sunucu geç kareyi atıp öncekini tekrarlıyor. Decode değil, sunum zamanlaması.
+
+## 2026-10-25 21:47–22:00 — T-380 pacer D tavanı A/B (TotK, Oyun, 30 Mbps, Wi-Fi, debug APK 9171c677)
+
+| kol | süre | `late_drops`/dk | `render_cb_missing` | `skip_pct` 10 sn pencereleri (medyan) | `shown_p95` | latency p50 | cap_dec p50/p95 |
+|---|---|---|---|---|---|---|---|
+| yerleşik (`d_cap` 16,7 ms) | 226 sn | 380 | 198 | 0,9 (0–18) | 16,7 | 9,8 | 9,6/20,9 |
+| `pace_dcap_half 3` (25 ms) | 260 sn | 350 | 2024 | 25 (5–31) | 33,3 | 10,3 | 9,8/21,5 |
+| `pace_dcap_half 4` (33 ms) | 200 sn | 55 | 2564 | 32 (3–45) | 33,3 | 11,2 | 10,6/22,5 |
+
+- `d_jitter_us` medyanı her kolda ~23 ms (tavanı aşıyor), ama tavanı yükseltmek **kötüleştirdi**: `late_drops` azaldı ama geri çağrısı gelmeyen kare (`render_cb_missing`) 10× arttı, uzun tutma (`skip_pct`) %1'den %25–32'ye çıktı, `shown_p95` 33 ms. Yorum [çıkarım]: daha erken bırakılan kareler SurfaceFlinger'da aynı vsync'e düşüp yer değiştiriyor; görünür akıcılık yerleşik ayarda en iyi.
+- Sonuç: Oyun 60 için varsayılan değişmez. 21:18'deki %11,7 `skip_pct` tek pencereydi; bu ölçümde yerleşik kolun pencereleri 0–18 arası, medyan 0,9. Kalan tablet atlamaları için yön D tavanı değil (bkz. T-380 Open questions).
+- Debug yapı ölçümü; üç kol aynı yapıda.

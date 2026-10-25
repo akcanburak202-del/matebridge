@@ -1,7 +1,7 @@
 ---
 id: T-380
 title: Ölçüm — Oyun 60'ta tablet geç kare atması (late_drops ~%12); pacer D tavanı A/B (pace_dcap_half 2/3/4)
-status: in-progress
+status: done
 phase: 7
 owner: orchestrator
 depends_on: []
@@ -27,4 +27,8 @@ files:
 
 ## Handoff
 
+- Ölçüm 2026-10-25 21:47–22:00, sonuç NOTES aynı tarih. Yerleşik ayar en iyi (skip medyan 0,9; dcap 3/4: %25–32, cb_missing 10×). Varsayılan değişmez, kod yok.
+
 ## Open questions
+
+- `late_drops` yerleşik kolda ~6/sn iken `fps` medyanı 59,5 ve `skip_pct` medyanı 0,9: sayaçlar aynı şeyi saymıyor gibi; görünür atlamanın asıl ölçütü hangisi (SurfaceFlinger `--latency` ile çapraz kontrol) ayrı incelenmeli.

@@ -7,7 +7,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-147](tasks/T-147-recovery-runbook.md) | Write and rehearse the recovery runbook and known-good version pair | 6 | orchestrator | [T-145, T-146] |
-| [T-380](tasks/T-380-pacer-dcap-game-ab.md) | Ölçüm — Oyun 60'ta tablet geç kare atması (late_drops ~%12); pacer D tavanı A/B (pace_dcap_half 2/3/4) | 7 | orchestrator | [] |
 
 ## todo
 
@@ -388,3 +387,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-376](tasks/T-376-client-pad-swipe.md) | İstemci — touchpad'de üç parmak kaydırmayı tanı, PAD_SWIPE (0x18) gönder | 7 | android-client-dev | [] |
 | [T-377](tasks/T-377-astra-wifi-game-stalls.md) | Tasarım incelemesi — gpt-6-astra (high), Wi-Fi'da oyun: anlık kötüleşmede takılmadan geçiş ve toparlanma | 7 | orchestrator | [T-327, T-328, T-369, T-370, T-371] |
 | [T-378](tasks/T-378-host-busy-retain-no-idr.md) | Host — video yazımı geçici `.busy` reddinde kareyi tut ve yeniden dene; tek toparlanma kuşağı (astra öneri 2) | 7 | mac-host-dev | [T-370, T-371] |
+| [T-380](tasks/T-380-pacer-dcap-game-ab.md) | Ölçüm — Oyun 60'ta tablet geç kare atması (late_drops ~%12); pacer D tavanı A/B (pace_dcap_half 2/3/4) | 7 | orchestrator | [] |
