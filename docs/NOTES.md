@@ -2182,3 +2182,11 @@ Yalnız yayının aktığı saniyeler (`sent_kbps` ≥ 1000), host.log, 36 dk; 2
 
 - T-381: daily `e4229b0b` kurulu; `am start -n dev.matebridge.client/.MainActivity --ez dev true --es audio_out shared` ile açılınca akış paylaşımlı MMAP uç noktasında (`dumpsys media.aaudio`: Shared Endpoints altında, istemci akışının kendi `XRuns` sayacı var). Anahtar kalıcı değil, panelde yok. Deneme: Düşük gecikme, ≥ 20 dk oyun; cızırtı var mı, gecikme (`audio_clock_raw latency_us`) ne kadar.
 - T-379: `MATEBRIDGE_WIFI_ADAPT=1` A/B'si 10'ar dk sırayla değişen kollarla yeniden (Oyun 60).
+
+## 2026-10-26 18:15 — T-381 cihaz denemesi: shared MMAP'te cızırtı yok
+
+- Daily `e4229b0b`, Wi-Fi, oyun, Düşük gecikme, `--ez dev true --es audio_out shared`. 17:31–18:14 (~42 dk) tek akış: `ev=audio_out sharing=shared mmap=1 requested=shared`, yeniden açılma yok.
+- Kullanıcı: cızırtı **yok**. Gecikme farkı hissedilmiyor ("belki, ama fark edilemeyecek düzeyde").
+- `dumpsys media.aaudio`: Shared Endpoints, XRuns = 0. Uygulama sayaçları oturum sonunda: xruns=1 (priming'den), underruns=22, drops=8, rebuffers=0, resyncs=0; av_offset çoğunlukla 55–90 ms.
+- Tek küme 17:35:04–10: ses varışında owd 250–350 ms (Wi-Fi), birkaç underrun/drop. Ses akışından değil. Kalan underrun'lar ~10 dk'da bir, sessizlik/idle sonrası.
+- Sonuç: exclusive MMAP ~8 dk sonra bozuluyordu, shared MMAP 42 dk temiz. Düşük gecikme zincirini shared'den başlatmayı varsayılan yapmak karar 0012 eki ister.
