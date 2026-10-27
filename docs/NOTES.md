@@ -2190,3 +2190,13 @@ Yalnız yayının aktığı saniyeler (`sent_kbps` ≥ 1000), host.log, 36 dk; 2
 - `dumpsys media.aaudio`: Shared Endpoints, XRuns = 0. Uygulama sayaçları oturum sonunda: xruns=1 (priming'den), underruns=22, drops=8, rebuffers=0, resyncs=0; av_offset çoğunlukla 55–90 ms.
 - Tek küme 17:35:04–10: ses varışında owd 250–350 ms (Wi-Fi), birkaç underrun/drop. Ses akışından değil. Kalan underrun'lar ~10 dk'da bir, sessizlik/idle sonrası.
 - Sonuç: exclusive MMAP ~8 dk sonra bozuluyordu, shared MMAP 42 dk temiz. Düşük gecikme zincirini shared'den başlatmayı varsayılan yapmak karar 0012 eki ister.
+
+## 2026-10-27 23:00–23:45 — İkinci tablet: Xiaomi Pad Mini 2025 ilk deneme
+
+- Cihaz: 25079RPDCG, HyperOS 3 / Android 16, MediaTek Dimensity 9400 / Mali-G925, 3008×1880 8.8", ≤165 Hz, HDR. Daily 50df229e, sonra 822db87f.
+- Eşleşme: başsız Mac'te onay penceresi görünmedi (ekransızken ortalandı) → T-383; kullanıcı bu sefer Parsec'le onayladı.
+- Host HELLO boyutunu kullanıyor: sanal ekran 3008×1880@2x, 120 Hz, değişiklik gerekmedi. Kullanıcı: Oyun modunda 120 fps, takılma yok; HDR sorunsuz.
+- Çözücü `c2.mtk.hevc.decoder` (low_latency=unsupported; `.lowlatency` varyantı var, seçilmiyor). Boşta decode_avg ~10.9 ms.
+- Ses: AAudio SHARED `mmap=0 perf_mode=none` → reddedildi (not_mmap) → AudioTrack low_latency, burst 256. Exclusive denenmedi.
+- Tam renk öz testi: `raw_compare exact=0 ahb_fmt=0x7f000010 y_mis=36785/36864 y_max=237` (cb/cr de ~tamamı) → "Bu cihazda yok". T-384 probu.
+- Yan bulgu: artımlı derlemede `BuildConfig.GIT_SHA` Kotlin'e sabit olarak gömülüp eskide kalıyor (app_start sha=8f56a36b, versionName 50df229e). Öz test anahtarı buna bağlı olduğu için yeni APK'da test yeniden koşmadı. `clean` sonrası doğru. Kart açılacak.
