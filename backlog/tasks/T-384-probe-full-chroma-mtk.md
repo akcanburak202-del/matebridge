@@ -35,6 +35,12 @@ Hemen her örnek farklı: küçük bir sapma değil, ham okuma yolu (`GL_EXT_YUV
 
 ## Plan
 
+1. Probe'a yeni test `t5` (matris): `MatrixTest.kt`. Klip: istemcinin gomulu 256x144 intra karesi (`files/clip256.h265`, Mac'te base64'ten uretilip adb push) ve istege bagli buyuk klip. Referans: `c2.android.hevc.decoder` -> YUV_420_888 CPU planlari (HEVC cozumu bit-tam, referans budur).
+2. Her kombinasyon (cozucu x ImageReader {YUV_420_888 GPU|CPU, PRIVATE GPU, YUV + YCBCR usage varyanti} x MediaFormat {varsayilan, color-format Flexible}): tek `Y444PROBE t5` satiri: cozucu, reader biçimi/usage, ahb_fmt, CPU-vs-ref ve GPU(ham)-vs-ref Y/Cb/Cr mismatch+max, ilk 8 Y / 4 Cb / 4 Cr ve orta satir ornekleri (ref, CPU, GPU), `samplerExternalOES` (donusumlu) ciktisinin referanstan beklenen BT.601/709 limited RGB'ye farki.
+3. Native: `gpuRender(hwb,w,h,mode,half)` (ham/OES, tam/yari cozunurluk, RGBA geri) eklenir; karsilastirma Kotlin'de.
+4. MTK satici parametreleri `MediaCodec.getSupportedVendorParameters()` ile listelenir (bilgi satiri).
+5. Derle (gradle assembleDebug), Xiaomi'ye kur (MateBridge force-stop), calistir, sonuc Handoff'a, paketi kaldir.
+
 ## Handoff
 
 ## Open questions
