@@ -50,6 +50,7 @@ class ProbeRunner(
             try {
                 when (k) {
                     TestKind.T2 -> runT2()
+                    TestKind.T5 -> MatrixTest(dir, args, log).run()
                     TestKind.T1 -> runT1()
                     TestKind.DIRECT -> runDirect()
                     TestKind.T3 -> runT3(long = false)

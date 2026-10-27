@@ -19,6 +19,10 @@ object Native {
     /** Raw Y/Cb/Cr of [hwb] through GL_EXT_YUV_target vs tightly packed CPU planes; one result line. */
     @JvmStatic external fun rawCompare(hwb: HardwareBuffer, w: Int, h: Int, y: ByteArray, u: ByteArray, v: ByteArray): String
 
+    /** T-384: RGBA bytes of [hwb] rendered raw (mode 0) or driver-converted (mode 1), full or half (w/2 x h/2) size. */
+    @JvmStatic external fun gpuRender(hwb: HardwareBuffer, w: Int, h: Int, mode: Int, half: Int): ByteArray
+    @JvmStatic external fun gpuInfo(): String
+
     /** Empty on success, else the failure text. [mode] is [GlMode.native]. */
     @JvmStatic external fun presentInit(surface: Surface, w: Int, h: Int, mode: Int, swapInterval: Int): String
     @JvmStatic external fun presentFeatures(): String
