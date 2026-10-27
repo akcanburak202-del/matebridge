@@ -26,6 +26,11 @@ NOTES 2026-10-27: daily 50df229e kuruluyken `app_start sha=8f56a36b built=2026-1
 
 ## Plan
 
+1. Sebebi baz kodda yeniden uret: A'da `assembleDaily`, bos commit B, `clean` olmadan `assembleDaily`, APK dex'inde sha'ya bak.
+2. Duzeltme: BuildConfig alanlarinin Java ifadesi sabit olmayan `new String("...")` olur; derleyici bunu compile-time constant saymaz, bu yuzden BuildInfo.kt'ye gomulmez, her zaman BuildConfig sinifindan okunur. Gradle girdileri/configuration cache degismez.
+3. Ayni A / bos commit B / clean'siz build dizisini duzeltmeyle tekrarla (JVM testinde sabit gomme gozlenemez; mevcut BuildInfoTest davranisi korur).
+4. check.sh.
+
 ## Handoff
 
 ## Open questions
