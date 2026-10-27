@@ -8,7 +8,10 @@ enum class TestKind(val key: String) {
     T3("t3"),
     DIRECT("direct"),
     T1("t1"),
-    T4("t4");
+    T4("t4"),
+
+    /** T-384: decoder / ImageReader / MediaFormat matrix for the raw GPU read. */
+    T5("t5");
 
     companion object {
         const val DEFAULT = "t2,t1,direct,t3"

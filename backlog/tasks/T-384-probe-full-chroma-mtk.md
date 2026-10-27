@@ -1,7 +1,7 @@
 ---
 id: T-384
 title: Probe (Xiaomi Pad Mini, MTK) — tam renk ham GPU okuması neden tutmuyor; çalışan bir yol var mı
-status: todo
+status: review
 phase: 7
 owner: android-client-dev
 depends_on: [T-254, T-259]
@@ -43,4 +43,29 @@ Hemen her örnek farklı: küçük bir sapma değil, ham okuma yolu (`GL_EXT_YUV
 
 ## Handoff
 
+Branch `task/T-384-probe-mtk-full-chroma` (SHA: son commit "T-384: t5 matrix probe + results").
+
+**Sonuc: GPU ham okuma (`__samplerExternal2DY2YEXT`) Xiaomi/MTK'de BIT-TAM. Hata GPU yolunda degil, CPU REFERANSINDA: oz test MTK'nin varsayilan cikis tamponunu (`ahb_fmt=0x7f000010`, satici ozel duzen, CPU'dan okununca ref ile eslesmiyor) `Image.getPlanes()` ile okuyup GPU ile karsilastiriyor.** Referans olarak yazilim cozucu (`c2.android.hevc.decoder`, YV12 0x32315659) CPU ciktisi alindi (HEVC cozumu bit-tam); MTK GPU Y/Cb/Cr'si ona gore 0 mismatch.
+
+Dosyalar: `probes/yuv444-probe/android/app/src/main/kotlin/dev/matebridge/yuv444probe/{MatrixTest.kt (yeni), Plan.kt, ProbeRunner.kt, Native.kt}`, `.../cpp/y444native.cpp` (`gpuRender`, `gpuInfo`, rawInit'te OES programi), bu kart.
+
+Derleme/calistirma (check.sh bu probeyi kapsamiyor): `cd probes/yuv444-probe/android && ANDROID_HOME=~/Library/Android/sdk JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew assembleDebug` (sonra `./gradlew --stop`). Klipler `files/` altina: `clip256.h265` (istemcinin gomulu 256x144 karesi, `FullChromaSelfTestClip` base64'ten uretildi, 5122 bayt) ve `big.h265` (= main_1848x1214_60.h265, yalniz ilk IDR kullanilir). `am start -n dev.matebridge.yuv444probe/.Y444ProbeActivity --es test t5 [--es clip big.h265 --es w 1848 --es h 1214]`; sonuc `files/y444-results.txt`, satirlar `Y444PROBE t5 codec=... reader=... fmt=...`. Probe Xiaomi'den kaldirildi, gradle daemon durduruldu, MateBridge o sirada force-stop edildi.
+
+Sonuc tablosu (256x144; 1848x1214 ayni; her satir `GPU_EXACT=1`: gpu_y/cb/cr_mis = 0):
+
+| cozucu | ImageReader | MediaFormat | ahb_fmt | CPU planlari = ref? | GPU ham = ref? | OES (donusumlu) vs beklenen |
+|---|---|---|---|---|---|---|
+| c2.mtk.hevc.decoder, .lowlatency, OMX.MTK.VIDEO.DECODER.HEVC | YUV_420_888 GPU+CPU, YUV GPU-only, PRIVATE GPU, YCBCR_420_888 GPU+CPU, YCBCR GPU-only | varsayilan | 0x7f000010 | HAYIR (cpu_y_mis 36785/36864, max 237; PRIVATE'ta CPU yok) | EVET | max fark 1 (601 limited 256x144; 709 full 1848 klipi) |
+| ayni | ayni 5 okuyucu | color-format=Flexible | 0x32315659 (YV12) | EVET (0 mismatch; stride Y 256/1, Cb/Cr 128/1) | EVET | max fark 1 |
+| c2.android.hevc.decoder / OMX.google (yazilim) | 5 okuyucu | iki bicim | 0x32315659 | EVET | EVET | max fark 1 |
+| c2.mtk.hevc.decoder.secure | - | - | - | - | - | acilamaz (crypto ister) |
+
+CPU hatasi turu (varsayilan MTK tamponu): `Image` stride'lari 256/1,256/2,256/2 raporlanir ama veri anlamsiz (Y0: cpu=191.12.14.74.142.8.157.79, ref=185.189.38.39.56.63.64.66; yani satici/sikistirilmis duzen, CPU okuma yolu bu tampon icin guvenilmez). GPU ornekleri (ilk 8 Y, 4 Cb/Cr, orta satir) ref ile ozdes. Not: `kind=` etiketi her satirda `scrambled_or_converted`; yalniz GPU yanlis oldugunda anlamli, burada GPU dogru. Vendor parametreleri: 53 adet `vendor.mtk.ext.vdec.*` (satira `info vendor_params`); sikistirmayi kapatan bir tanesi denenmedi, gerek yok cunku `color-format=Flexible` CPU'yu da duzeltiyor.
+
+Oneri (ayri uygulama karti; client-android/.../FullChromaSelfTest.kt): oz testte GPU ham okumasi CPU `Image`'a degil bilinen referansa karsilastirilsin: (a) gomulu klibin Y/Cb/Cr'si yazilim cozucu ile bir kez uretilip sabit olarak gomulur (uretim yoluyla ayni 0x7f000010 tamponunu sinar; tercih), ya da (b) test cozucusu `KEY_COLOR_FORMAT=COLOR_FormatYUV420Flexible` ile acilir (MTK CPU'dan dogru okunur ama tampon YV12 olur, uretim duzenini sinamaz). Uretim ImageReader'i PRIVATE+GPU_SAMPLED zaten, ham okuma bit-tam. Ikinci cozucu da her kombinasyonda acildi. Bu cihazda Tam renk kapali kalmasina gerek yok.
+
+Test EDILMEDI: yalniz tek IDR karesi (256x144 ve 1848x1214); 2800x1840 yardimci akisli surekli akis, P kareleri, performans/gecikme (T-254 t1/t3 kosullari) Xiaomi'de olculmedi. MatePad'e dokunulmadi.
+
 ## Open questions
+
+- Oz test duzeltmesi icin uygulama karti acilmali (orkestrator karari).

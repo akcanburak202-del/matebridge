@@ -508,6 +508,8 @@ JNIEXPORT jstring JNICALL Java_dev_matebridge_yuv444probe_Native_rawInit(JNIEnv*
         return str(env, e);
     }
     gRaw->progs[0] = p;
+    std::string err2;
+    gRaw->progs[1] = program(kFsOes, err2);  // T-384: driver-converted comparison path (0 when unsupported)
     return str(env, "");
 }
 
@@ -592,6 +594,70 @@ JNIEXPORT jstring JNICALL Java_dev_matebridge_yuv444probe_Native_rawCompare(
                         "cr_mis=%lld/%lld cr_max=%d fullres_cb_mis=%lld/%lld fullres_cr_mis=%lld/%lld glerr=0x%x",
                         bestFlip, desc.format, desc.width, desc.height, y.mis, y.total, y.maxd, cb.mis, cb.total,
                         cb.maxd, cr.mis, cr.total, cr.maxd, upCb.mis, upCb.total, upCr.mis, upCr.total, err));
+}
+
+// T-384: renders [hwb] with the raw dump program (mode 0) or the driver-converting samplerExternalOES program (mode 1),
+// nearest filtering, at w x h (half=0) or (w/2) x (h/2) (half=1), and returns the RGBA bytes (row 0 = GL row 0 = top of the
+// buffer for uFlip=0), or a 16-byte "ERR..." array. Info about the last call is in gpuInfo().
+std::string gGpuInfo;
+
+JNIEXPORT jbyteArray JNICALL Java_dev_matebridge_yuv444probe_Native_gpuRender(
+    JNIEnv* env, jclass, jobject hwb, jint w, jint h, jint mode, jint half) {
+    auto fail = [&](const std::string& e) {
+        gGpuInfo = "err=" + e;
+        jbyteArray a = env->NewByteArray(0);
+        return a;
+    };
+    if (!gRaw) return fail("not_initialised");
+    Ctx& c = *gRaw;
+    if (mode == 1 && !c.progs[1]) return fail("oes_program_unavailable");
+    AHardwareBuffer* ahb = AHardwareBuffer_fromHardwareBuffer(env, hwb);
+    if (!ahb) return fail("no_ahb");
+    AHardwareBuffer_Desc desc;
+    AHardwareBuffer_describe(ahb, &desc);
+    // Fresh import every call: the cache is keyed by pointer, which can be reused by another buffer.
+    for (auto& kv : c.cache) {
+        glDeleteTextures(1, &kv.second.tex);
+        if (pDestroyImage) pDestroyImage(c.dpy, kv.second.image);
+    }
+    c.cache.clear();
+    GLuint tex = importBuffer(c, ahb);
+    if (!tex) return fail(c.lastError);
+    const int ow = half ? w / 2 : w, oh = half ? h / 2 : h;
+    if (c.fboW != w || c.fboH != h) {
+        if (c.fbo) glDeleteFramebuffers(1, &c.fbo);
+        if (c.fboTex) glDeleteTextures(1, &c.fboTex);
+        glGenTextures(1, &c.fboTex);
+        glBindTexture(GL_TEXTURE_2D, c.fboTex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glGenFramebuffers(1, &c.fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, c.fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, c.fboTex, 0);
+        c.fboW = w;
+        c.fboH = h;
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, c.fbo);
+    GLuint prog = c.progs[mode == 1 ? 1 : 0];
+    glUseProgram(prog);
+    glUniform1f(glGetUniformLocation(prog, "uFlip"), 0.0f);
+    glUniform1i(glGetUniformLocation(prog, "uMain"), 0);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_EXTERNAL_OES, tex);
+    glDisable(GL_BLEND);
+    glViewport(0, 0, ow, oh);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    std::vector<uint8_t> px((size_t)ow * oh * 4);
+    glReadPixels(0, 0, ow, oh, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+    GLenum e = glGetError();
+    gGpuInfo = fmt("ahb_fmt=0x%x ahb=%ux%u ahb_usage=0x%llx glerr=0x%x", desc.format, desc.width, desc.height,
+                   (unsigned long long)desc.usage, e);
+    jbyteArray a = env->NewByteArray((jsize)px.size());
+    env->SetByteArrayRegion(a, 0, (jsize)px.size(), (const jbyte*)px.data());
+    return a;
+}
+
+JNIEXPORT jstring JNICALL Java_dev_matebridge_yuv444probe_Native_gpuInfo(JNIEnv* env, jclass) {
+    return str(env, gGpuInfo);
 }
 
 // ---- presentation ----
