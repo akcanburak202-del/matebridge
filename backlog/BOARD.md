@@ -34,8 +34,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-334](tasks/T-334-dav-copy-put-concurrency.md) | WebDAV — eşzamanlı COPY/MOVE geri alması başka bağlantının başarılı PUT'unu silmesin | 7 | android-client-dev | [T-288] |
 | [T-335](tasks/T-335-host-pipeline-stop-join.md) | Host — pipeline teardown sürerken ikinci stop çağıranı beklesin; hata zamanı teardown'dan önce alınsın | 7 | mac-host-dev | [T-325, T-293] |
 | [T-367](tasks/T-367-android-timing-tests-flaky.md) | Android — zamanlama testleri yük altında kırmızı (DecoderWaitTest, OutputParkTest, AacDecodeWorkerTest) | 7 | android-client-dev | [] |
-| [T-385](tasks/T-385-client-full-chroma-selftest-reference.md) | İstemci — tam renk öz testi GPU ham okumasını gömülü sabit referansla karşılaştırsın (MTK CPU okuması güvenilmez) | 7 | android-client-dev | [T-384] |
-| [T-386](tasks/T-386-client-buildconfig-sha-stale.md) | İstemci — BuildConfig.GIT_SHA/BUILD_TIME_UTC artımlı derlemede eskide kalmasın | 7 | android-client-dev | [] |
 
 ## done
 
@@ -394,3 +392,5 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-382](tasks/T-382-client-audio-shared-default.md) | İstemci — Düşük gecikme varsayılanı shared MMAP; panelde "Düşük gecikme (eski)" (exclusive zinciri) | 7 | android-client-dev | [T-381] |
 | [T-383](tasks/T-383-host-approval-panel-offscreen.md) | Host — onay penceresi ekransızken açılınca ekran gelince görünür olsun | 7 | mac-host-dev | [] |
 | [T-384](tasks/T-384-probe-full-chroma-mtk.md) | Probe (Xiaomi Pad Mini, MTK) — tam renk ham GPU okuması neden tutmuyor; çalışan bir yol var mı | 7 | android-client-dev | [T-254, T-259] |
+| [T-385](tasks/T-385-client-full-chroma-selftest-reference.md) | İstemci — tam renk öz testi GPU ham okumasını gömülü sabit referansla karşılaştırsın (MTK CPU okuması güvenilmez) | 7 | android-client-dev | [T-384] |
+| [T-386](tasks/T-386-client-buildconfig-sha-stale.md) | İstemci — BuildConfig.GIT_SHA/BUILD_TIME_UTC artımlı derlemede eskide kalmasın | 7 | android-client-dev | [] |

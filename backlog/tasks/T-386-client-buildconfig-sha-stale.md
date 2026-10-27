@@ -1,7 +1,7 @@
 ---
 id: T-386
 title: İstemci — BuildConfig.GIT_SHA/BUILD_TIME_UTC artımlı derlemede eskide kalmasın
-status: review
+status: done
 phase: 7
 owner: android-client-dev
 depends_on: []
