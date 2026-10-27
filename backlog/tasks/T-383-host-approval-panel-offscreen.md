@@ -9,6 +9,9 @@ decisions: [0018]
 files:
   - host-mac/Sources/MateBridgeApp/ApprovalPanel.swift
   - host-mac/Sources/MateBridgeApp/main.swift
+  - host-mac/Sources/MateBridgeCore/PanelPlacement.swift
+  - host-mac/Tests/MateBridgeCoreTests/PanelPlacementTests.swift
+  - docs/LOGGING.md
   - backlog/tasks/T-383-host-approval-panel-offscreen.md
 ---
 
@@ -26,6 +29,8 @@ files:
 6. `./scripts/check.sh` geçer.
 
 ## Plan
+
+Saf yardımcı `PanelPlacement.isOffscreen` (Core, test edilir): pencerenin ≥%50'si tek bir ekranda değilse true. `ApprovalPanel.show()` ekran var mı kaydeder ve `didChangeScreenParametersNotification` gözlemcisi ekler; bildirimde: show ekransız yapıldıysa koşulsuz yeniden ortala (`screen_change`), değilse yalnızca offscreen ise ortala (`offscreen`; kullanıcının konumu korunur, kabul 3). Ortalarken `.floating` + öne getir. Gözlemci `dismiss()`'te kalkar (cevap da dismiss'ten geçer). main.swift `approval_repositioned` loglar. Dosya listesine Core yardımcısı, test ve LOGGING.md eklendi.
 
 ## Handoff
 
