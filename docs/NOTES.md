@@ -2200,3 +2200,9 @@ Yalnız yayının aktığı saniyeler (`sent_kbps` ≥ 1000), host.log, 36 dk; 2
 - Ses: AAudio SHARED `mmap=0 perf_mode=none` → reddedildi (not_mmap) → AudioTrack low_latency, burst 256. Exclusive denenmedi.
 - Tam renk öz testi: `raw_compare exact=0 ahb_fmt=0x7f000010 y_mis=36785/36864 y_max=237` (cb/cr de ~tamamı) → "Bu cihazda yok". T-384 probu.
 - Yan bulgu: artımlı derlemede `BuildConfig.GIT_SHA` Kotlin'e sabit olarak gömülüp eskide kalıyor (app_start sha=8f56a36b, versionName 50df229e). Öz test anahtarı buna bağlı olduğu için yeni APK'da test yeniden koşmadı. `clean` sonrası doğru. Kart açılacak.
+
+## 2026-10-27 23:57 – 2026-10-28 00:11 — Xiaomi: T-385 öz test geçti, Tam renk yük altında
+
+- Daily f83422d6 (T-385 + T-386): `raw_compare exact=1 ahb_fmt=0x7f000010 y_mis=0 cb_mis=0 cr_mis=0 ref=embedded` → pass; app_start sha doğru. MatePad'e kurulamadı (uykuda/kilitli, install-apk zaman aşımı).
+- Günlük 60, Tam renk (host `packed444`), kaydırma + pencere sürükleme ~3 dk: aux_lost=0, fallback 0. Tablet decode_avg 7.6–10.4 ms (darboğaz değil). İstemci fps 34–56, latency 45–60 ms (boşta 25–30), skip_pct 17–27.
+- Host: bazı aralıklarda cap_fps 32–38 / cap_late 16–24 (kaynak tarafı; içerik mi, yakalama mı ayrılmadı), aux_enc p50 ~6.8 ms, pack ~1.7 ms. Video TCP srtt yük altında 36–72 ms, retx ~0 → Wi-Fi kuyruklanması/uyku olası. Aynı test MatePad'de A/B yapılmadı.
