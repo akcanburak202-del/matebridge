@@ -1,7 +1,7 @@
 ---
 id: T-383
 title: Host — onay penceresi ekransızken açılınca ekran gelince görünür olsun
-status: todo
+status: review
 phase: 7
 owner: mac-host-dev
 depends_on: []
@@ -33,5 +33,11 @@ files:
 Saf yardımcı `PanelPlacement.isOffscreen` (Core, test edilir): pencerenin ≥%50'si tek bir ekranda değilse true. `ApprovalPanel.show()` ekran var mı kaydeder ve `didChangeScreenParametersNotification` gözlemcisi ekler; bildirimde: show ekransız yapıldıysa koşulsuz yeniden ortala (`screen_change`), değilse yalnızca offscreen ise ortala (`offscreen`; kullanıcının konumu korunur, kabul 3). Ortalarken `.floating` + öne getir. Gözlemci `dismiss()`'te kalkar (cevap da dismiss'ten geçer). main.swift `approval_repositioned` loglar. Dosya listesine Core yardımcısı, test ve LOGGING.md eklendi.
 
 ## Handoff
+
+- Branch `task/T-383-approval-panel-onscreen` (plan commit + kod commit + handoff commit; uç SHA orkestratöre raporlandı).
+- Dosyalar: ApprovalPanel.swift, main.swift, Core/PanelPlacement.swift (+ PanelPlacementTests), docs/LOGGING.md, bu kart.
+- Varsayım: `isOffscreen` = pencerenin <%50'si tek bir ekranda. `show()` ekransız çağrıldıysa ilk ekran bildiriminde koşulsuz ortalanır (`screen_change`), sonrasında yalnızca offscreen ise (`offscreen`). Kullanıcı taşıdıysa konum korunur.
+- check.sh: ALL OK.
+- Gerçek donanımda doğrulanmadı (GUI testi yok): başsız Mac'te onay penceresi aç, sonra sanal ekran kur, pencerenin göründüğünü ve `approval_repositioned` logunu kontrol et. Gözlemci dismiss'te (cevap dahil) kalkar.
 
 ## Open questions
