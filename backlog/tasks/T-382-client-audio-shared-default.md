@@ -1,7 +1,7 @@
 ---
 id: T-382
 title: İstemci — Düşük gecikme varsayılanı shared MMAP; panelde "Düşük gecikme (eski)" (exclusive zinciri)
-status: review
+status: done
 phase: 7
 owner: android-client-dev
 depends_on: [T-381]
