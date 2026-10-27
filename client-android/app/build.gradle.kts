@@ -118,6 +118,11 @@ android {
     }
 }
 
+// T-386: a `public static final String X = "literal"` is a compile-time constant, so Kotlin inlines it into BuildInfo.class
+// and an incremental build that does not recompile BuildInfo.kt keeps the old SHA (app_start logged a stale sha). A
+// `new String(..)` initializer is not a constant: every read goes through the regenerated BuildConfig class.
+fun nonConstant(value: String): String = "new String(\"$value\")"
+
 androidComponents {
     onVariants { variant ->
         // T-301: versionCode is build-time minutes, not the commit count: a non-debuggable app cannot be downgraded, and
@@ -130,11 +135,11 @@ androidComponents {
         }
         variant.buildConfigFields?.put(
             "GIT_SHA",
-            sharedSha.map { BuildConfigField("String", "\"$it\"", "Short commit SHA, -dirty suffix, or unknown (T-146)") },
+            sharedSha.map { BuildConfigField("String", nonConstant(it), "Short commit SHA, -dirty suffix, or unknown (T-146)") },
         )
         variant.buildConfigFields?.put(
             "BUILD_TIME_UTC",
-            sharedTime.map { BuildConfigField("String", "\"$it\"", "UTC build time, minute precision (T-146)") },
+            sharedTime.map { BuildConfigField("String", nonConstant(it), "UTC build time, minute precision (T-146)") },
         )
     }
 }
