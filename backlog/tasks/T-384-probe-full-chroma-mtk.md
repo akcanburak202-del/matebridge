@@ -1,7 +1,7 @@
 ---
 id: T-384
 title: Probe (Xiaomi Pad Mini, MTK) — tam renk ham GPU okuması neden tutmuyor; çalışan bir yol var mı
-status: review
+status: done
 phase: 7
 owner: android-client-dev
 depends_on: [T-254, T-259]
