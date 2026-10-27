@@ -66,6 +66,7 @@ Her süreç başlangıcında tam olarak bir satır. Hangi build'in çalıştığ
 ## Onay penceresi (Mac, `session`, T-043/T-155)
 
 - `ev=approval_pending replaced=none|same|other`: yeni bir eşleşme isteği Mac'te onay penceresi açtı. `same`: açık bir öksüz pencerenin yerini aynı cihazın yeni isteği aldı (kod değişti). `other`: farklı bir cihaz aldı; pencerede kırmızı "FARKLI bir cihaz" uyarısı ve cihaz parmak izi görünür. `other` bayrağı o pencere için kullanıcı karar verene ya da süre dolana kadar kalır. Ad, kod ve parmak izi loglanmaz.
+- `ev=approval_repositioned conn=N reason=screen_change|offscreen` (info): T-383, the open approval window was re-centered onto a screen. `screen_change`: it was opened while no screen existed. `offscreen`: a screen change left it mostly off every screen.
 
 ## Kontrol ve video soketlerinin TCP durumu (Mac, `net`, T-126)
 

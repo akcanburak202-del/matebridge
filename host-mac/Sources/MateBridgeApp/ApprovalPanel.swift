@@ -9,6 +9,11 @@ final class ApprovalPanel: NSObject {
     private let panel: NSPanel
     private var onAnswer: ((Bool) -> Void)?
     private let notice = NSTextField(wrappingLabelWithString: "")
+    private var screenObserver: NSObjectProtocol?
+    /// True when `show()` ran with no screen at all, so the first screen change must re-center unconditionally.
+    private var shownWithoutScreen = false
+    /// Called with `screen_change` or `offscreen` after the window was moved back onto a screen.
+    var onRepositioned: ((String) -> Void)?
 
     /// `replaced` and `fingerprint` (T-155): a request that replaced an open window says so, so a returning user does
     /// not click "İzin ver" out of habit for a different device.
@@ -69,8 +74,39 @@ final class ApprovalPanel: NSObject {
 
     func show() {
         NSApp.activate(ignoringOtherApps: true)
+        shownWithoutScreen = NSScreen.screens.isEmpty
         panel.center()
         panel.makeKeyAndOrderFront(nil)
+        // T-383: a window opened while the Mac was headless must follow the virtual display that appears later.
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.screensChanged() }
+        }
+    }
+
+    /// Re-centers only when needed: the window was placed without any screen, or it no longer sits on one.
+    /// A window the user moved onto a screen stays where it is.
+    private func screensChanged() {
+        guard !NSScreen.screens.isEmpty else { return }
+        let reason: String
+        if shownWithoutScreen {
+            reason = "screen_change"
+        } else if PanelPlacement.isOffscreen(frame: panel.frame, screens: NSScreen.screens.map(\.frame)) {
+            reason = "offscreen"
+        } else {
+            return
+        }
+        shownWithoutScreen = false
+        panel.center()
+        panel.level = .floating
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+        onRepositioned?(reason)
+    }
+
+    private func removeObserver() {
+        if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
+        screenObserver = nil
     }
 
     /// The tablet left while this request was open (e.g. the user switched to another app). The window stays; "İzin ver"
@@ -88,6 +124,7 @@ final class ApprovalPanel: NSObject {
     /// Closes without answering (request cancelled or replaced).
     func dismiss() {
         onAnswer = nil
+        removeObserver()
         panel.orderOut(nil)
     }
 
