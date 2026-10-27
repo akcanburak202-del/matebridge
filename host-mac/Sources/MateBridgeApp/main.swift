@@ -495,6 +495,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             self?.server?.resolveApproval(id: request.id, approved: approved)
         }
         approvalPanel = panel
+        panel.onRepositioned = { [weak self] reason in
+            self?.log("approval_repositioned", "conn=\(request.id) reason=\(reason)")
+        }
         panel.show()
         log("approval_shown", "conn=\(request.id)")
     }
