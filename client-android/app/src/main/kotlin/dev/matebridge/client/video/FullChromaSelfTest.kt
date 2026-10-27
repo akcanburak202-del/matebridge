@@ -43,7 +43,9 @@ object RawVerdict {
  * The full colour capability self-test (decision 0034, T-259; T-254 `t2` logic). Runs once per APK build on a background
  * thread; the result goes to [FullChromaCapability]. It checks, on this tablet:
  *  1. `GL_EXT_YUV_target` and the EGL image import are there (the native `rawInit`);
- *  2. a decoder's output image read raw by the GPU is bit-identical to a CPU read of the same image (Y, Cb, Cr);
+ *  2. a decoder's output image (PRIVATE, GPU-sampled, like production) read raw by the GPU is bit-identical to the clip's
+ *     embedded reference planes ([FullChromaSelfTestClip.referencePlanes]; T-385: not to a CPU read, which MediaTek's
+ *     vendor buffer fails);
  *  3. a SECOND HEVC decoder can be opened next to the first (the auxiliary stream needs one).
  * The clip is one embedded intra frame ([FullChromaSelfTestClip]); the picture itself is irrelevant.
  *
@@ -107,8 +109,8 @@ object FullChromaSelfTest {
         val ht = HandlerThread("mb-fc-selftest-img").also { it.start() }
         val handler = Handler(ht.looper)
         try {
-            first = Decoder.open(w, h, config.data.value, ImageFormat.YUV_420_888,
-                HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE or HardwareBuffer.USAGE_CPU_READ_OFTEN, handler)
+            // The production buffer kind (PRIVATE + GPU_SAMPLED): the GPU read is compared with the embedded reference, so no CPU read.
+            first = Decoder.open(w, h, config.data.value, ImageFormat.PRIVATE, HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE, handler)
                 ?: return Outcome.Inconclusive("decoder_open")
             // The second decoder is opened while the first one is alive (the auxiliary stream's situation).
             second = Decoder.open(w, h, config.data.value, ImageFormat.PRIVATE, HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE, handler)
@@ -120,7 +122,7 @@ object FullChromaSelfTest {
             val secondImg = second.decodeOne(frame.data.value)
             secondImg?.close()
             val line = try { compare(img, w, h) } finally { img.close() }
-            log("raw_compare $line second_output=${if (secondImg != null) 1 else 0}")
+            log("raw_compare $line ref=embedded second_output=${if (secondImg != null) 1 else 0}")
             return when (RawVerdict.exact(line)) {
                 true -> if (secondImg != null) Outcome.Pass else Outcome.Inconclusive("second_decoder_no_output")
                 false -> Outcome.Fail("raw_samples_differ")
@@ -137,13 +139,13 @@ object FullChromaSelfTest {
         }
     }
 
+    /** GPU raw read of [img] against the embedded reference planes (T-385; the CPU `Image` read is not trusted on MTK). */
     private fun compare(img: Image, w: Int, h: Int): String {
-        val p = img.planes
-        val y = PlaneCopy.tight(p[0].buffer, p[0].rowStride, p[0].pixelStride, w, h)
-        val u = PlaneCopy.tight(p[1].buffer, p[1].rowStride, p[1].pixelStride, w / 2, h / 2)
-        val v = PlaneCopy.tight(p[2].buffer, p[2].rowStride, p[2].pixelStride, w / 2, h / 2)
         val hw = img.hardwareBuffer ?: return "ok=0 err=no_hardware_buffer"
-        return try { FullChromaNative.rawCompare(hw, w, h, y, u, v) } finally { hw.close() }
+        return try {
+            FullChromaNative.rawCompare(hw, w, h, FullChromaSelfTestClip.referenceY,
+                FullChromaSelfTestClip.referenceCb, FullChromaSelfTestClip.referenceCr)
+        } finally { hw.close() }
     }
 
     /** One synchronous HEVC decoder into its own ImageReader. */

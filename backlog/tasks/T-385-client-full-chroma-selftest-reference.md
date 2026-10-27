@@ -1,7 +1,7 @@
 ---
 id: T-385
 title: İstemci — tam renk öz testi GPU ham okumasını gömülü sabit referansla karşılaştırsın (MTK CPU okuması güvenilmez)
-status: todo
+status: review
 phase: 7
 owner: android-client-dev
 depends_on: [T-384]
@@ -29,6 +29,21 @@ T-384 (Handoff'taki tablo): Xiaomi/MTK'de `__samplerExternal2DY2YEXT` ham GPU ok
 
 ## Plan
 
+1. Referans: gomulu klip `ffmpeg -f hevc -i clip.h265 -pix_fmt yuv420p -f rawvideo` ile Mac'te cozulur (HEVC bit-tam; cihaz gerekmez). 55296 bayt (Y 256x144 + Cb + Cr 128x72), zlib + base64 (~36 KB, satir listesi) `FullChromaSelfTestClip`'e eklenir; klip degisirse birlikte degisir (KDoc + birim testi her iki sha256'yi sabitler).
+2. Native degismez: `rawCompare` zaten Y/U/V dizilerini aliyor; artik CPU `Image` yerine gomulu referans verilir (`ref=embedded` Kotlin'den log satirina eklenir).
+3. Birinci cozucunun ImageReader'i PRIVATE + GPU_SAMPLED olur (uretim yolu; CPU_READ yok, CPU okumasi zaten kullanilmiyor, `cpu_mis` atlanir). Ikinci cozucu, Inconclusive/Fail ayrimi ve build anahtari ayni.
+4. Birim testi: referans boyutu/sha256, klip sha256, duzlem sinirlari.
+
 ## Handoff
+
+Commit: bkz. branch `task/T-385-fc-selftest-reference` ucu (SHA orkestratore raporlandi).
+
+Dosyalar: `FullChromaSelfTest.kt`, `FullChromaSelfTestClip.kt` (referans eklendi), `app/src/test/.../FullChromaSelfTestReferenceTest.kt` (yeni), bu kart. Native (`mbfullchroma.cpp`) DEGISMEDI: `rawCompare` zaten dizi aliyor, artik gomulu referans veriliyor.
+
+Varsayimlar: referans 55296 bayt (Y+Cb+Cr), zlib+base64 (~36 KB), ffmpeg 9.0.2 `-pix_fmt yuv420p` ile Mac'te uretildi (HEVC bit-tam); sha256'lar test ile sabit. Birinci cozucu reader'i PRIVATE + GPU_SAMPLED (uretim yolu); CPU okumasi tamamen kaldirildi, `cpu_mis` yok. Log satiri `raw_compare ... ref=embedded second_output=..`.
+
+Tablette bakilacak (orkestrator): (1) Xiaomi: temiz kurulum/oz test verisi sifirlandiktan sonra logda `full_chroma_selftest_detail raw_compare ok=1 exact=1 ahb_fmt=0x7f000010 ... ref=embedded`, Tam renk acik. (2) MatePad: ayni, exact=1 bekleniyor. (3) PRIVATE reader'dan `Image.hardwareBuffer` alinmasi ilk kez bu testte kullaniliyor: `no_hardware_buffer` donerse bu bir sorun.
+
+Test EDILMEDI: cihaz. Yalniz check.sh (JVM birim testleri) gecti.
 
 ## Open questions
