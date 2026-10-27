@@ -49,7 +49,7 @@ data class DevKnobs(
     val audio: Boolean = true,
     /** `--es transport auto|usb|wifi` raw value (T-096); null = absent. */
     val transport: String? = null,
-    /** `--es audio_out aaudio|shared|track|auto` raw value (T-100/T-101); null = absent. */
+    /** `--es audio_out aaudio|exclusive|shared|track|auto` raw value (T-100/T-101); null = absent. */
     val audioOut: String? = null,
     /** `--ei audio_buf_bursts N` (T-110); null = absent. */
     val audioBufBursts: Int? = null,
@@ -123,7 +123,7 @@ data class DevKnobs(
             Spec("ping_ms", Kind.INT, debugOnly = true),
             Spec("audio", Kind.BOOL, debugOnly = true),
             Spec("transport", Kind.STRING, debugOnly = true, ids = setOf("auto", "usb", "wifi")),
-            Spec("audio_out", Kind.STRING, debugOnly = true, ids = setOf("auto", "aaudio", "shared", "track", "audiotrack")),
+            Spec("audio_out", Kind.STRING, debugOnly = true, ids = setOf("auto", "aaudio", "shared", "exclusive", "track", "audiotrack")),
             Spec("audio_buf_bursts", Kind.INT, debugOnly = true),
             Spec("audio_idle_pause", Kind.STRING, debugOnly = true, ids = setOf("off", "pause", "stop")),
             Spec("quickack", Kind.BOOL, debugOnly = true),

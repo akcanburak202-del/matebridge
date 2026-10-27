@@ -15,24 +15,26 @@ class SinkPolicyTest {
         assertEquals(AudioOutPref.AUTO, AudioOutPref.parse(null))
         assertEquals(AudioOutPref.AUTO, AudioOutPref.parse(""))
         assertEquals(AudioOutPref.AUTO, AudioOutPref.parse("auto"))
+        assertEquals(AudioOutPref.EXCLUSIVE, AudioOutPref.parse(" Exclusive "))
         assertEquals(AudioOutPref.AAUDIO, AudioOutPref.parse("aaudio"))
         assertEquals(AudioOutPref.AAUDIO, AudioOutPref.parse(" AAudio "))
         assertEquals(AudioOutPref.TRACK, AudioOutPref.parse("track"))
-        assertEquals(AudioOutPref.SHARED, AudioOutPref.parse(" Shared "))
-        assertEquals("shared", AudioOutPref.SHARED.id)
+        assertEquals(AudioOutPref.AUTO, AudioOutPref.parse(" Shared "))
+        assertEquals("auto", AudioOutPref.AUTO.id) // "shared" is only a launch alias of auto since T-382
+        assertEquals("exclusive", AudioOutPref.EXCLUSIVE.id)
         assertNull(AudioOutPref.parse("oboe"))
     }
 
-    @Test fun sharedPrefStartsAtSharedWithoutProbation() {
-        val p = SinkPolicy(AudioOutPref.SHARED, true)
+    @Test fun autoStartsAtSharedWithoutProbation() {
+        val p = SinkPolicy(AudioOutPref.AUTO, true)
         assertEquals(shared, p.next())
         assertEquals(SinkPolicy.Verdict.ACCEPT, p.onOpened(shared, exclusive = false, mmap = 1))
         p.reset()
         assertEquals(shared, p.next()) // a rebuild starts at SHARED again, never EXCLUSIVE
     }
 
-    @Test fun sharedPrefFallsToTrackWhenSharedCannotOpenOrIsNotMmap() {
-        val p = SinkPolicy(AudioOutPref.SHARED, true)
+    @Test fun autoFallsToTrackWhenSharedCannotOpenOrIsNotMmap() {
+        val p = SinkPolicy(AudioOutPref.AUTO, true)
         p.onOpenFailed(shared)
         assertEquals(track, p.next())
         p.reset()
@@ -41,18 +43,30 @@ class SinkPolicyTest {
         assertEquals(track, p.next())
     }
 
-    @Test fun sharedPrefOnlyChangesTheChainWhileSelected() {
-        val p = SinkPolicy(AudioOutPref.SHARED, true)
-        assertTrue(p.setPref(AudioOutPref.AUTO))
-        assertEquals(excl, p.next()) // the panel's Düşük gecikme: the normal chain
+    @Test fun autoAndExclusiveChainsFollowThePreference() {
+        val p = SinkPolicy(AudioOutPref.AUTO, true)
+        assertTrue(p.setPref(AudioOutPref.EXCLUSIVE))
+        assertEquals(excl, p.next()) // Düşük gecikme (eski): the old chain
         assertTrue(p.setPref(AudioOutPref.TRACK))
         assertEquals(track, p.next())
-        assertEquals(excl, SinkPolicy(AudioOutPref.AUTO, true).next()) // unchanged without the knob
-        assertEquals(track, SinkPolicy(AudioOutPref.SHARED, aaudioAvailable = false).next())
+        assertEquals(excl, SinkPolicy(AudioOutPref.EXCLUSIVE, true).next()) // the old chain starts at EXCLUSIVE
+        assertEquals(track, SinkPolicy(AudioOutPref.AUTO, aaudioAvailable = false).next())
     }
 
-    @Test fun autoPrefersExclusiveMmap() {
-        val p = SinkPolicy(AudioOutPref.AUTO, aaudioAvailable = true)
+    @Test fun autoNeverTriesExclusiveAndRejectsNonMmap() {
+        val p = SinkPolicy(AudioOutPref.AUTO, true)
+        assertEquals(shared, p.next())
+        p.onOpenFailed(shared)
+        assertEquals(track, p.next())
+        for (m in listOf(0, -1)) {
+            val q = SinkPolicy(AudioOutPref.AUTO, true)
+            assertEquals(SinkPolicy.Verdict.REJECT, q.onOpened(shared, exclusive = false, mmap = m))
+            assertEquals(track, q.next())
+        }
+    }
+
+    @Test fun exclusivePrefPrefersExclusiveMmap() {
+        val p = SinkPolicy(AudioOutPref.EXCLUSIVE, aaudioAvailable = true)
         assertEquals(excl, p.next())
         assertEquals(SinkPolicy.Verdict.ACCEPT, p.onOpened(excl, exclusive = true, mmap = 1))
         assertEquals(excl, p.next())
@@ -60,7 +74,7 @@ class SinkPolicyTest {
 
     @Test fun nonMmapOrUnknownAaudioIsRejectedInEveryPreferenceAndTrackIsNext() {
         // T-100 review M1: a legacy AAudio stream ignores the write timeout, so a stop could hang.
-        for (pref in listOf(AudioOutPref.AUTO, AudioOutPref.AAUDIO)) {
+        for (pref in listOf(AudioOutPref.EXCLUSIVE, AudioOutPref.AAUDIO)) {
             for (mmap in listOf(0, -1)) {
                 for ((choice, exclusive) in listOf(excl to true, excl to false, shared to false)) {
                     val p = SinkPolicy(pref, true)
@@ -82,7 +96,7 @@ class SinkPolicyTest {
     }
 
     @Test fun exclusiveOpenFailureFallsToSharedThenTrack() {
-        val p = SinkPolicy(AudioOutPref.AUTO, true)
+        val p = SinkPolicy(AudioOutPref.EXCLUSIVE, true)
         p.onOpenFailed(excl)
         assertEquals(shared, p.next())
         p.onOpenFailed(shared)
@@ -90,15 +104,15 @@ class SinkPolicyTest {
     }
 
     @Test fun exclusiveGrantedAsSharedIsOnProbationAndRejectionGoesToTrack() {
-        val p = SinkPolicy(AudioOutPref.AUTO, true)
+        val p = SinkPolicy(AudioOutPref.EXCLUSIVE, true)
         assertEquals(SinkPolicy.Verdict.PROBATION, p.onOpened(excl, exclusive = false, mmap = 1))
         assertEquals(shared, p.next())
         p.onProbationFailed()
         assertEquals(track, p.next())
     }
 
-    @Test fun sharedIsOnProbationInAuto() {
-        val p = SinkPolicy(AudioOutPref.AUTO, true)
+    @Test fun sharedIsOnProbationInExclusivePref() {
+        val p = SinkPolicy(AudioOutPref.EXCLUSIVE, true)
         p.onOpenFailed(excl)
         assertEquals(SinkPolicy.Verdict.PROBATION, p.onOpened(shared, exclusive = false, mmap = 1))
     }
@@ -118,7 +132,7 @@ class SinkPolicyTest {
 
     @Test fun trackPrefAndMissingLibraryUseTrackOnly() {
         assertEquals(track, SinkPolicy(AudioOutPref.TRACK, true).next())
-        val p = SinkPolicy(AudioOutPref.AUTO, aaudioAvailable = false)
+        val p = SinkPolicy(AudioOutPref.EXCLUSIVE, aaudioAvailable = false)
         assertTrue(p.aaudioDisabled)
         p.reset()
         assertEquals(track, p.next())
@@ -126,7 +140,7 @@ class SinkPolicyTest {
     }
 
     @Test fun resetRetriesTheChain() {
-        val p = SinkPolicy(AudioOutPref.AUTO, true)
+        val p = SinkPolicy(AudioOutPref.EXCLUSIVE, true)
         p.onOpenFailed(excl)
         p.onProbationFailed()
         assertEquals(track, p.next())
@@ -135,7 +149,7 @@ class SinkPolicyTest {
     }
 
     @Test fun repeatedAaudioFailuresSwitchToTrackForGood() {
-        val p = SinkPolicy(AudioOutPref.AUTO, true, maxFailures = 3, windowMs = 10_000)
+        val p = SinkPolicy(AudioOutPref.EXCLUSIVE, true, maxFailures = 3, windowMs = 10_000)
         assertFalse(p.onAaudioFailure(0))
         assertFalse(p.onAaudioFailure(4_000))
         assertTrue(p.onAaudioFailure(8_000))
@@ -146,7 +160,7 @@ class SinkPolicyTest {
     }
 
     @Test fun spreadOutFailuresDoNotDisableAaudio() {
-        val p = SinkPolicy(AudioOutPref.AUTO, true, maxFailures = 3, windowMs = 10_000)
+        val p = SinkPolicy(AudioOutPref.EXCLUSIVE, true, maxFailures = 3, windowMs = 10_000)
         assertFalse(p.onAaudioFailure(0))
         assertFalse(p.onAaudioFailure(6_000))
         assertFalse(p.onAaudioFailure(12_000)) // the first one left the window
@@ -164,13 +178,13 @@ class SinkPolicyTest {
     // ---- T-101: the panel's "Ses çıkışı" ----
 
     @Test fun setPrefSwitchesBetweenLowLatencyAndCompatible() {
-        val p = SinkPolicy(AudioOutPref.AUTO, true)
+        val p = SinkPolicy(AudioOutPref.EXCLUSIVE, true)
         assertEquals(excl, p.next())
         assertTrue(p.setPref(AudioOutPref.TRACK))
         assertEquals(AudioOutPref.TRACK, p.pref)
         assertEquals(track, p.next())
         assertFalse(p.setPref(AudioOutPref.TRACK)) // no change, no rebuild
-        assertTrue(p.setPref(AudioOutPref.AUTO))
+        assertTrue(p.setPref(AudioOutPref.EXCLUSIVE))
         assertEquals(excl, p.next())
     }
 
@@ -178,24 +192,24 @@ class SinkPolicyTest {
         // AudioPlayout passes aaudioAvailable = true for TRACK (the library is not loaded then): AAUDIO must be possible later.
         val p = SinkPolicy(AudioOutPref.TRACK, aaudioAvailable = true)
         assertEquals(track, p.next())
-        p.setPref(AudioOutPref.AUTO)
+        p.setPref(AudioOutPref.EXCLUSIVE)
         assertEquals(excl, p.next())
     }
 
     @Test fun setPrefRestartsTheChainAndForgetsFailuresButNotABrokenLibrary() {
-        val p = SinkPolicy(AudioOutPref.AUTO, true, maxFailures = 2)
+        val p = SinkPolicy(AudioOutPref.EXCLUSIVE, true, maxFailures = 2)
         p.onOpenFailed(excl)
         p.onAaudioFailure(0)
         assertTrue(p.onAaudioFailure(1))
         assertEquals(track, p.next())
         p.setPref(AudioOutPref.TRACK)
-        p.setPref(AudioOutPref.AUTO) // the user asked for low latency again
+        p.setPref(AudioOutPref.EXCLUSIVE) // the user asked for low latency again
         assertFalse(p.aaudioDisabled)
         assertEquals(excl, p.next())
 
         p.disableAaudio()
         p.setPref(AudioOutPref.TRACK)
-        p.setPref(AudioOutPref.AUTO)
+        p.setPref(AudioOutPref.EXCLUSIVE)
         assertTrue(p.aaudioDisabled)
         assertEquals(track, p.next())
     }
@@ -210,8 +224,10 @@ class SinkPolicyTest {
         assertEquals(AudioOutPref.AAUDIO, extra.pref)
         assertEquals("extra", extra.source)
 
-        assertEquals(AudioOutPref.TRACK, AudioOutPref.resolve("track", AudioOutPref.AUTO).pref)
+        assertEquals(AudioOutPref.TRACK, AudioOutPref.resolve("track", AudioOutPref.EXCLUSIVE).pref)
         assertEquals(AudioOutPref.AUTO, AudioOutPref.resolve("auto", AudioOutPref.TRACK).pref)
+        assertEquals(AudioOutPref.AUTO, AudioOutPref.resolve("shared", AudioOutPref.TRACK).pref)
+        assertEquals(AudioOutPref.EXCLUSIVE, AudioOutPref.resolve("exclusive", AudioOutPref.TRACK).pref)
 
         val bad = AudioOutPref.resolve("oboe", AudioOutPref.TRACK)
         assertEquals(AudioOutPref.TRACK, bad.pref) // unknown extra: the stored setting

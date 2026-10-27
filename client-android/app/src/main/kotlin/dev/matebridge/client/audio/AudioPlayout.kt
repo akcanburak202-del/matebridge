@@ -32,10 +32,10 @@ import java.util.concurrent.locks.LockSupport
  *    [PlayoutCore], so it runs at the device's audio clock. Play position and latency come from the output's
  *    timestamp the same way for both outputs ([OutputClock]). A new stream's writer waits for the previous writer's
  *    cleanup before it opens its output.
- *  - Output choice (decision 0012 point 2): AAudio EXCLUSIVE, else AAudio SHARED on probation
- *    ([SharedLatencyProbe]), else AudioTrack. AAudio is used only with MMAP (its write timeout must hold).
- *    The panel's "Ses çıkışı" setting (`storedOutPref`, T-101) picks AUTO or AudioTrack; `--es audio_out
- *    aaudio|track|auto` overrides it for this launch ([AudioOutPref.resolve]). [setOutPref] applies a panel change: at
+ *  - Output choice (decision 0012 point 2, addendum 2026-10-27): AUTO = AAudio SHARED, else AudioTrack; EXCLUSIVE =
+ *    AAudio EXCLUSIVE, else AAudio SHARED on probation ([SharedLatencyProbe]), else AudioTrack. AAudio is used only with MMAP (its write timeout must hold).
+ *    The panel's "Ses çıkışı" setting (`storedOutPref`, T-101) picks AUTO, EXCLUSIVE or AudioTrack; `--es audio_out
+ *    aaudio|exclusive|shared|track|auto` overrides it for this launch ([AudioOutPref.resolve]). [setOutPref] applies a panel change: at
  *    once if a stream is playing (the output is reopened), otherwise with the next stream.
  *  - AAudio play position (T-101): from AAudio's own counters in AAudio's frame domain ([OutputClock.onDeviceCounters]);
  *    AudioTrack keeps its timestamp. The raw counters are logged twice per AAudio output (`audio_clock_raw`).

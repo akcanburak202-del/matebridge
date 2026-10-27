@@ -24,6 +24,14 @@ class AudioOutSettingTest {
         assertEquals(AudioOutPref.AUTO, settings.audioOut())
     }
 
+    @Test fun persistsExclusiveAndReadsOldSharedAsAuto() { // T-382
+        settings.setAudioOut(AudioOutPref.EXCLUSIVE)
+        assertEquals("exclusive", map["audio_out"])
+        assertEquals(AudioOutPref.EXCLUSIVE, settings.audioOut())
+        map["audio_out"] = "auto"
+        assertEquals(AudioOutPref.AUTO, settings.audioOut())
+    }
+
     @Test fun unknownStoredValueIsLowLatency() {
         map["audio_out"] = "oboe"
         assertEquals(AudioOutPref.AUTO, settings.audioOut())

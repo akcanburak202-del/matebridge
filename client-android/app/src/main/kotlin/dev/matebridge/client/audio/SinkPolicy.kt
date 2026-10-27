@@ -1,23 +1,21 @@
 package dev.matebridge.client.audio
 
 /**
- * Audio output preference. The panel's "Ses çıkışı" setting (T-101) is [AUTO] ("Düşük gecikme", the default) or
- * [TRACK] ("Uyumlu"); the `--es audio_out aaudio|track|auto` launch switch (T-100) overrides it without saving it.
+ * Audio output preference. The panel's "Ses çıkışı" setting is [AUTO] ("Düşük gecikme", the default), [EXCLUSIVE]
+ * ("Düşük gecikme (eski)") or [TRACK] ("Uyumlu"); the `--es audio_out aaudio|exclusive|shared|track|auto` launch
+ * switch (T-100, T-381, T-382) overrides it without saving it.
  */
 enum class AudioOutPref {
-    /** Decision 0012 order: AAudio EXCLUSIVE, then AAudio SHARED if its measured latency is reasonable, then AudioTrack. */
+    /** T-382 (decision 0012 addendum 2026-10-27): AAudio SHARED (MMAP only), no latency probation, else AudioTrack. */
     AUTO,
     /** AAudio MMAP (exclusive, else shared) without the shared latency check; AudioTrack if AAudio MMAP cannot be used. */
     AAUDIO,
-    /**
-     * T-381 (launch extra `--es audio_out shared` only, never offered in the panel): AAudio MMAP starting at SHARED
-     * (EXCLUSIVE skipped), no latency probation, so the shared stream is kept for A/B; AudioTrack if it cannot be used.
-     */
-    SHARED,
+    /** The pre-T-382 AUTO chain: AAudio EXCLUSIVE, then AAudio SHARED if its measured latency is reasonable, then AudioTrack. */
+    EXCLUSIVE,
     /** AudioTrack only (the pre-T-100 path). */
     TRACK;
 
-    /** Stored and logged value (`auto`, `aaudio`, `track`); [parse] reads it back. */
+    /** Stored and logged value (`auto`, `exclusive`, `aaudio`, `track`); [parse] reads it back. */
     val id: String get() = name.lowercase()
 
     /** The preference in effect, and whether it came from the stored setting or the launch extra. */
@@ -32,7 +30,8 @@ enum class AudioOutPref {
         fun parse(raw: String?): AudioOutPref? = when (raw?.trim()?.lowercase()) {
             null, "", "auto" -> AUTO
             "aaudio" -> AAUDIO
-            "shared" -> SHARED
+            "shared" -> AUTO // T-381 launch alias: the same chain as auto since T-382
+            "exclusive" -> EXCLUSIVE
             "track", "audiotrack" -> TRACK
             else -> null
         }
@@ -60,14 +59,14 @@ enum class OutChoice(val logName: String) {
  * Which output to open (decision 0012 point 2), and when to give up on AAudio. Pure; called by the audio writer
  * threads (synchronized because a new stream's writer can overlap a slow previous one).
  *
- *  - The chain is EXCLUSIVE -> SHARED -> TRACK. A step that cannot be opened, or that turns out to be something else
+ *  - The chain is EXCLUSIVE -> SHARED -> TRACK (EXCLUSIVE is skipped in AUTO). A step that cannot be opened, or that turns out to be something else
  *    (an exclusive request granted a shared stream), is skipped until [reset].
  *  - Only MMAP AAudio streams are used (T-100 review M1): a legacy (non-MMAP or unknown) stream is AudioTrack inside
  *    AAudio, whose write ignores the timeout, so a stop could hang. It is [Verdict.REJECT]ed, in every preference,
  *    and both AAudio steps are skipped until [reset].
- *  - A shared MMAP stream (asked for, or granted instead of exclusive) is on probation in [AudioOutPref.AUTO]: the
+ *  - A shared MMAP stream (asked for, or granted instead of exclusive) is on probation in [AudioOutPref.EXCLUSIVE]: the
  *    writer measures its latency ([SharedLatencyProbe]) and calls [onProbationFailed] if it is too high.
- *  - [AudioOutPref.SHARED] (T-381): EXCLUSIVE is never tried; SHARED (MMAP only) is kept without probation.
+ *  - [AudioOutPref.AUTO] (T-382): EXCLUSIVE is never tried; SHARED (MMAP only) is kept without probation.
  *  - [reset]: a new host stream, or the output device changed (disconnect, routing): the chain starts from the top.
  *  - [onAaudioFailure]: an AAudio stream failed while running (disconnected, write error, stall). [MAX_FAILURES]
  *    within [WINDOW_MS] disable AAudio for this policy's lifetime: AudioTrack from then on, the session is unaffected.
@@ -99,7 +98,7 @@ class SinkPolicy(
 
     @Synchronized fun next(): OutChoice = when {
         pref == AudioOutPref.TRACK || aaudioDisabled -> OutChoice.TRACK
-        !exclusiveOut && pref != AudioOutPref.SHARED -> OutChoice.AAUDIO_EXCLUSIVE
+        !exclusiveOut && (pref == AudioOutPref.EXCLUSIVE || pref == AudioOutPref.AAUDIO) -> OutChoice.AAUDIO_EXCLUSIVE
         !sharedOut -> OutChoice.AAUDIO_SHARED
         else -> OutChoice.TRACK
     }
@@ -132,7 +131,7 @@ class SinkPolicy(
         }
         if (choice == OutChoice.AAUDIO_EXCLUSIVE && exclusive) return Verdict.ACCEPT
         exclusiveOut = true
-        return if (pref == AudioOutPref.AAUDIO || pref == AudioOutPref.SHARED) Verdict.ACCEPT else Verdict.PROBATION
+        return if (pref == AudioOutPref.EXCLUSIVE) Verdict.PROBATION else Verdict.ACCEPT
     }
 
     /** The shared stream's latency was not reasonable: skip SHARED until [reset]. */

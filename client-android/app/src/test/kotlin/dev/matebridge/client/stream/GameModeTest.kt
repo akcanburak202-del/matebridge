@@ -122,6 +122,18 @@ class GameModeTest {
         assertEquals(before, g.saved())
     }
 
+    @Test fun exclusiveChosenInTheGameLayerStaysInTheLayer() { // T-382
+        storeUserChoices()
+        val before = stored()
+        val g = GameModeSettings(settings)
+        g.onModeChanged(StreamMode.GAME)
+        assertEquals(AudioOutPref.AUTO, g.audioOut) // the layer default is Düşük gecikme (shared)
+        g.setAudioOut(AudioOutPref.EXCLUSIVE)
+        assertEquals(AudioOutPref.EXCLUSIVE, g.audioOut)
+        assertTrue(store.writes.isEmpty())
+        assertEquals(before, stored())
+    }
+
     @Test fun overriddenSettingsOfTheDrawingLayerOnlyTouchTheLayer() {
         storeUserChoices()
         val before = stored()

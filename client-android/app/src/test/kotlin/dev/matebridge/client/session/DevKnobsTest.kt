@@ -146,6 +146,13 @@ class DevKnobsTest {
         assertFalse(k.knobs.any { it.startsWith("net_bench") })
     }
 
+    @Test fun audioOutExclusiveIsGatedAndListedInTheProfile() { // T-382
+        val on = parse("dev" to true, "audio_out" to "exclusive")
+        assertEquals(listOf("audio_out:exclusive"), on.knobs)
+        assertEquals("exclusive", on.audioOut)
+        assertEquals(null, parse("audio_out" to "exclusive").audioOut)
+    }
+
     @Test fun audioOutSharedIsGatedAndListedInTheProfile() {
         val on = parse("dev" to true, "audio_out" to "shared")
         assertEquals(listOf("audio_out:shared"), on.knobs)

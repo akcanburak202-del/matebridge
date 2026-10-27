@@ -497,11 +497,12 @@ object SettingsCatalog {
                         "audio_out", "Ses çıkışı",
                         listOf(
                             SettingItem.Option(AudioOutPref.AUTO.id, "Düşük gecikme"),
+                            SettingItem.Option(AudioOutPref.EXCLUSIVE.id, "Düşük gecikme (eski)"),
                             SettingItem.Option(AudioOutPref.TRACK.id, "Uyumlu"),
                         ),
-                        { if (h.audioOut == AudioOutPref.TRACK) AudioOutPref.TRACK.id else AudioOutPref.AUTO.id },
+                        { if (h.audioOut == AudioOutPref.EXCLUSIVE || h.audioOut == AudioOutPref.TRACK) h.audioOut.id else AudioOutPref.AUTO.id },
                         layered(GameModeSettings.Override.AUDIO),
-                    ) { id -> h.setAudioOut(if (id == AudioOutPref.TRACK.id) AudioOutPref.TRACK else AudioOutPref.AUTO) },
+                    ) { id -> h.setAudioOut(if (id == AudioOutPref.EXCLUSIVE.id) AudioOutPref.EXCLUSIVE else if (id == AudioOutPref.TRACK.id) AudioOutPref.TRACK else AudioOutPref.AUTO) },
                 ),
             )
         }

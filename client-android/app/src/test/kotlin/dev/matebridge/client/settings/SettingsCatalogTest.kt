@@ -426,12 +426,20 @@ class SettingsCatalogTest {
         assertEquals(listOf("auto", "usb", "wifi"), tr.options.map { it.id })
         tr.select("usb")
         val out = choice(s, "audio_out")
+        assertEquals(listOf("auto", "exclusive", "track"), out.options.map { it.id })
+        assertEquals(listOf("Düşük gecikme", "Düşük gecikme (eski)", "Uyumlu"), out.options.map { it.label })
         assertEquals("auto", out.selected())
         out.select("track")
         assertEquals("track", out.selected())
+        out.select("exclusive")
+        assertEquals(AudioOutPref.EXCLUSIVE, h.out)
+        assertEquals("exclusive", out.selected())
+        out.select("auto")
+        assertEquals(AudioOutPref.AUTO, h.out)
+        assertEquals("auto", out.selected())
         h.out = AudioOutPref.AAUDIO // a launch override shows as "Düşük gecikme"
         assertEquals("auto", out.selected())
-        assertEquals(listOf("mode drawing", "transport usb", "audio_out track"), h.calls)
+        assertEquals(listOf("mode drawing", "transport usb", "audio_out track", "audio_out exclusive", "audio_out auto"), h.calls)
     }
 
     @Test fun gameResolutionChoice() {
