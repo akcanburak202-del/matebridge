@@ -32,6 +32,15 @@ Kullanıcı onayı (2026-10-01): NDK kurulup ölçüldü, sonra "evet, AAudio MM
 ## Ek (2026-10-01, T-100 incelemesi)
 - Madde 3 netleşti: ayrı yazıcı iş parçacığından zaman aşımlı (200 ms; akışın ilk ~0,5 s'sinde 1 s) bloklayan AAudio `write` kabul edildi. Zaman aşımı yalnızca MMAP akışlarında güvenilir; bu yüzden **MMAP olmayan AAudio akışı hiç kullanılmaz** (`mmap != 1` → AudioTrack).
 
+## Ek (2026-10-27, T-381 cihaz sonucu → T-382)
+- Gerekçe: exclusive MMAP akışı ~8 dk sonra cızırdamaya başlıyordu (NOTES 2026-10-25 23:40). Shared MMAP 42 dk temiz çaldı; gecikme farkı hissedilmedi (NOTES 2026-10-26 18:15). Kullanıcı onayı (2026-10-27): shared varsayılan olsun, eski ayara panelden tek tuşla dönülebilsin.
+- Madde 2'deki tercih sırası değişir. Panel "Ses çıkışı" üç seçenekli olur:
+  - **Düşük gecikme** (kayıtlı `auto`, varsayılan): AAudio `SHARED` MMAP → `AudioTrack`. EXCLUSIVE denenmez, gecikme denetimi (probation) yok (T-381'de ölçülen yol).
+  - **Düşük gecikme (eski)** (kayıtlı `exclusive`): bu ekten önceki `auto` zinciri, birebir: EXCLUSIVE → SHARED (probation'lı) → `AudioTrack`.
+  - **Uyumlu** (kayıtlı `track`): değişmez.
+- MMAP olmayan AAudio akışı yine hiç kullanılmaz (2026-10-01 eki).
+- Kayıtlı `auto` olan mevcut kurulumlar yeni varsayılana geçer; geçiş kodu gerekmez.
+
 ## Sonuçlar
 - Ses gecikmesi tahminen ~90–100 ms'ye iner; A/V farkı ~40–50 ms.
 - Proje artık C++ ve NDK araç seti gerektiriyor; yeni bir makinede kurulum adımı var.
