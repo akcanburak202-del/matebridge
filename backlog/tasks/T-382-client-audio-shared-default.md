@@ -1,7 +1,7 @@
 ---
 id: T-382
 title: İstemci — Düşük gecikme varsayılanı shared MMAP; panelde "Düşük gecikme (eski)" (exclusive zinciri)
-status: todo
+status: review
 phase: 7
 owner: android-client-dev
 depends_on: [T-381]
@@ -44,5 +44,11 @@ Karar 0012 eki (2026-10-27): exclusive MMAP ~8 dk sonra cızırdıyor, shared MM
 
 
 ## Handoff
+
+- Commit: (branch tip, bkz. rapor) `task/T-382-audio-shared-default`, taban main db053c3f.
+- Dosyalar: audio/SinkPolicy.kt (enum + zincir), audio/AudioPlayout.kt (yalniz yorum), settings/SettingsCatalog.kt (uc secenek), session/DevKnobs.kt (ids: `exclusive`), docs/KNOBS.md, docs/LOGGING.md, testler (SinkPolicyTest, SettingsCatalogTest, GameModeTest, DevKnobsTest, AudioOutSettingTest). `Settings.kt`, `GameMode.kt` kod degisikligi gerekmedi (parse/AUTO zaten dogru).
+- Varsayimlar: `SHARED` enum degeri kaldirildi; `shared` yalniz `parse` takma adi (-> AUTO), `AUTO.id` = `auto` (loglarda `shared` artik gorunmez; `requested=shared` choice logName'inden gelmeye devam eder). Launch override `aaudio` panelde "Düşük gecikme" gorunur (bugunku gibi; panel kayitli degeri yansitir). Kayitli `shared` (hic yazilmadi) -> auto.
+- check.sh: ALL OK (client gradle testleri gecti, flaky T-367 hatasi gorulmedi).
+- Cihazda kontrol: (1) Panel Ses çıkışı: Düşük gecikme / Düşük gecikme (eski) / Uyumlu, secim kalicilik; (2) varsayilanda logda `audio_out ... requested=shared`, `probation=0`, `dumpsys media.aaudio` SHARED MMAP; (3) "eski" secilince `requested=exclusive` ve `pref=exclusive`; (4) `--es dev true --es audio_out exclusive` calisir; (5) Oyun modunda "eski" secimi katmanda kalir, cikinca eski ayara doner.
 
 ## Open questions
