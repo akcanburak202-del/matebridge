@@ -29,6 +29,11 @@ T-384 (Handoff'taki tablo): Xiaomi/MTK'de `__samplerExternal2DY2YEXT` ham GPU ok
 
 ## Plan
 
+1. Referans: gomulu klip `ffmpeg -f hevc -i clip.h265 -pix_fmt yuv420p -f rawvideo` ile Mac'te cozulur (HEVC bit-tam; cihaz gerekmez). 55296 bayt (Y 256x144 + Cb + Cr 128x72), zlib + base64 (~36 KB, satir listesi) `FullChromaSelfTestClip`'e eklenir; klip degisirse birlikte degisir (KDoc + birim testi her iki sha256'yi sabitler).
+2. Native degismez: `rawCompare` zaten Y/U/V dizilerini aliyor; artik CPU `Image` yerine gomulu referans verilir (`ref=embedded` Kotlin'den log satirina eklenir).
+3. Birinci cozucunun ImageReader'i PRIVATE + GPU_SAMPLED olur (uretim yolu; CPU_READ yok, CPU okumasi zaten kullanilmiyor, `cpu_mis` atlanir). Ikinci cozucu, Inconclusive/Fail ayrimi ve build anahtari ayni.
+4. Birim testi: referans boyutu/sha256, klip sha256, duzlem sinirlari.
+
 ## Handoff
 
 ## Open questions
