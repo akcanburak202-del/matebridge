@@ -35,7 +35,13 @@ Karar 0012 eki (2026-10-27): exclusive MMAP ~8 dk sonra cızırdıyor, shared MM
 
 ## Plan
 
-(ajan doldurur)
+- `AudioOutPref`: yeni `EXCLUSIVE` degeri (`exclusive`); `SHARED` enum degeri kalkar, `parse("shared")` -> `AUTO` (takma ad, ayri deger yok). `AUTO` artik T-381 shared zinciri; `EXCLUSIVE` eski AUTO zinciri.
+- `SinkPolicy`: EXCLUSIVE adimi yalniz `EXCLUSIVE`/`AAUDIO` tercihinde denenir; probation yalniz `EXCLUSIVE` tercihinde. AAUDIO, TRACK degismez.
+- Panel: uc secenek (auto / exclusive / track), gosterim `exclusive`->exclusive, `track`->track, digeri auto. Launch override'i (`aaudio`) panelde gosterilmez (panel kayitli degeri gosterir, bugunku gibi); `shared` = auto zaten.
+- `GameMode` Oyun katmani `AUTO` olarak kalir (artik shared); panelde "eski" secilirse mevcut AUDIO override kuralıyla katmanda saklanir.
+- `Settings`: kayitli `exclusive` okunur/yazilir; bilinmeyen -> auto. `DevKnobs.SPECS` ids'e `exclusive`. KNOBS/LOGGING guncellenir.
+- Testler: SinkPolicyTest (eski AUTO testleri EXCLUSIVE'e, SHARED testleri AUTO'ya), AudioOutSettingTest, SettingsCatalogTest, GameModeTest, DevKnobsTest.
+
 
 ## Handoff
 
