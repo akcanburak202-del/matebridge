@@ -1,7 +1,7 @@
 ---
 id: T-383
 title: Host — onay penceresi ekransızken açılınca ekran gelince görünür olsun
-status: review
+status: done
 phase: 7
 owner: mac-host-dev
 depends_on: []

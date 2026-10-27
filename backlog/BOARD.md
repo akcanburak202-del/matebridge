@@ -390,3 +390,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-380](tasks/T-380-pacer-dcap-game-ab.md) | Ölçüm — Oyun 60'ta tablet geç kare atması (late_drops ~%12); pacer D tavanı A/B (pace_dcap_half 2/3/4) | 7 | orchestrator | [] |
 | [T-381](tasks/T-381-client-aaudio-shared-knob.md) | İstemci — geliştirici anahtarı `audio_out=shared` (Düşük gecikme'de AAudio SHARED ile başla) — exclusive MMAP cızırtısı A/B | 7 | android-client-dev | [] |
 | [T-382](tasks/T-382-client-audio-shared-default.md) | İstemci — Düşük gecikme varsayılanı shared MMAP; panelde "Düşük gecikme (eski)" (exclusive zinciri) | 7 | android-client-dev | [T-381] |
+| [T-383](tasks/T-383-host-approval-panel-offscreen.md) | Host — onay penceresi ekransızken açılınca ekran gelince görünür olsun | 7 | mac-host-dev | [] |
