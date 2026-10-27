@@ -1,7 +1,7 @@
 ---
 id: T-385
 title: İstemci — tam renk öz testi GPU ham okumasını gömülü sabit referansla karşılaştırsın (MTK CPU okuması güvenilmez)
-status: review
+status: done
 phase: 7
 owner: android-client-dev
 depends_on: [T-384]
