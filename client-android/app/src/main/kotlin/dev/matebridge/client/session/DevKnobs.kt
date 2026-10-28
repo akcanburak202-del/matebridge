@@ -88,6 +88,13 @@ data class DevKnobs(
      * Unknown or absent = [UnbufferedSources.OFF] (the pen behaviour is unchanged either way).
      */
     val unbufferedSrc: UnbufferedSources = UnbufferedSources.OFF,
+    /**
+     * `--es decoder <codec name>` (T-388): open the main video decoder by name instead of `createDecoderByType`.
+     * Effective value is the name only when it is a plain codec name ([DECODER_NAME]); anything else reads as absent.
+     */
+    val decoder: String? = null,
+    /** `--ez wifi_ll true` (T-388): hold a `WIFI_MODE_FULL_LOW_LATENCY` Wi-Fi lock while the app is in the foreground. */
+    val wifiLowLatency: Boolean = false,
     /** Keep: `--ez stats_1s true` (T-141). */
     val stats1s: Boolean = false,
     /** Keep: `--ez pace_trace true` (T-069). */
@@ -110,10 +117,15 @@ data class DevKnobs(
         val debugOnly: Boolean,
         val ids: Set<String> = emptySet(),
         val inProfile: Boolean = true,
+        /** A string value matching this is logged as is (a codec name); otherwise as `other`. */
+        val pattern: Regex? = null,
     )
 
     companion object {
         const val EXTRA_DEV = "dev"
+
+        /** T-388: a plain codec component name (`c2.mtk.hevc.decoder.lowlatency`); nothing else reaches `createByCodecName` or a log. */
+        val DECODER_NAME = Regex("[A-Za-z0-9._-]{1,64}")
 
         /** Decision 0026 classes (`docs/KNOBS.md`), in log order. */
         val SPECS: List<Spec> = listOf(
@@ -141,6 +153,8 @@ data class DevKnobs(
             Spec("dec_out_park", Kind.STRING, debugOnly = true, ids = setOf("off", "on")),
             Spec("cursor_predict", Kind.BOOL, debugOnly = true),
             Spec("unbuffered_src", Kind.STRING, debugOnly = true, ids = setOf("off", "relative")),
+            Spec("decoder", Kind.STRING, debugOnly = true, pattern = DECODER_NAME),
+            Spec("wifi_ll", Kind.BOOL, debugOnly = true),
             Spec("stats_1s", Kind.BOOL, debugOnly = false),
             Spec("pace_trace", Kind.BOOL, debugOnly = false),
             Spec("stall_diag", Kind.BOOL, debugOnly = false),
@@ -180,6 +194,8 @@ data class DevKnobs(
                 decOutPark = x.string("dec_out_park")?.trim()?.lowercase(Locale.ROOT) != "off",
                 cursorPredict = x.bool("cursor_predict", true),
                 unbufferedSrc = UnbufferedSources.parse(x.string("unbuffered_src")),
+                decoder = x.string("decoder")?.trim()?.takeIf { DECODER_NAME.matches(it) },
+                wifiLowLatency = x.bool("wifi_ll", false),
                 stats1s = x.bool("stats_1s", false),
                 paceTrace = x.bool("pace_trace", false),
                 stallDiag = x.bool("stall_diag", false),
@@ -190,7 +206,9 @@ data class DevKnobs(
         private fun value(x: LaunchExtras, s: Spec): String = when (s.kind) {
             Kind.INT -> x.int(s.key, 0).toString()
             Kind.BOOL -> if (x.bool(s.key, false)) "1" else "0"
-            Kind.STRING -> x.string(s.key)?.trim()?.lowercase(Locale.ROOT)?.takeIf { it in s.ids } ?: "other"
+            Kind.STRING ->
+                if (s.pattern != null) x.string(s.key)?.trim()?.takeIf { s.pattern.matches(it) } ?: "other"
+                else x.string(s.key)?.trim()?.lowercase(Locale.ROOT)?.takeIf { it in s.ids } ?: "other"
         }
     }
 
