@@ -40,7 +40,7 @@ Kısaltmalar:
 | Host CLI kipleri | 6 | `host-mac/Sources/MateBridgeApp/main.swift` (`runIfRequested` çağrıları) + `FilesNetSelfTest.swift` (`--files-net-hold`) |
 
 Sınıf dağılımı (canlı anahtarlar):
-- İstemci: yalnızca geliştirici 18 (+4 alt anahtar), kalır 3. T-312 birleşirse +1 (`dec_out_park`, satır 23l).
+- İstemci: yalnızca geliştirici 20 (+4 alt anahtar; T-388 `decoder`, `wifi_ll`), kalır 3. T-312 birleşirse +1 (`dec_out_park`, satır 23l).
 - Host env: yalnızca geliştirici 15, kalır 3.
 - CLI: kalır 6.
 
@@ -93,6 +93,8 @@ Sayıma girmeyen okumalar (açılış parametresi değil ya da başka giriş nok
 | 23k | `--ez catch_up false` | true | `…/session/DevKnobs.kt` (`catchUp`); `VR` (`catchUp`); `…/video/CatchUp.kt` | T-252 | yalnızca geliştirici | `false`: T-252 öncesi taşma yolu (boşalt + keyframe isteği) A/B için | T-252 |
 | 23l | `--es dec_out_park off/on` | **`on`** (T-317, 2026-10-08) | `…/session/DevKnobs.kt` (`decOutPark`); `…/video/OutputPark.kt`; `VideoRenderer.outPark` | T-312, T-317 | yalnızca geliştirici; `off` bir döngü geri dönüş | `on`: codec boşken çıkış iş parçacığı 5 ms yoklama yerine en çok 20 ms park eder; her parktan sonra mutlaka bir dequeue denemesi yapılır (donma yok). Boşta ~40 uyanma/s (bugünkü `IdleWait` ile aynı); kazanç düşük fps akışta. Benimsenirse varsayılan değişir | T-312 |
 | 23m | `--ez cursor_predict false` | true | `…/session/DevKnobs.kt` (`cursorPredict`); MA (`predict = devKnobs.cursorPredict`); `…/cursor/CursorPredictor.kt` | T-278, karar 0036 v2 | yalnızca geliştirici | `false`: yerel imleç v1'deki gibi host konumunda çizilir | T-278 |
+| 23n | `--es decoder <codec adı>` (örn. `c2.mtk.hevc.decoder.lowlatency`) | yok = `createDecoderByType` | `…/session/DevKnobs.kt` (`decoder`, `DECODER_NAME`); `…/video/DecoderSelect.kt` (`NamedDecoderFactory`); MA (`mainDecoderFactory`) | T-388 | yalnızca geliştirici | Yalnız ana video çözücüsü `MediaCodec.createByCodecName` ile açılır; Tam renk yardımcı çözücüsü ve öz test etkilenmez. Ad geçersiz/açılamaz/MIME'yi desteklemiyorsa varsayılan yola düşer (`decoder ev=decoder_fallback reason=`). `ev=profile knobs=` içinde ad olduğu gibi görünür | T-388 |
+| 23o | `--ez wifi_ll true` | false | `…/session/DevKnobs.kt` (`wifiLowLatency`); `…/session/WifiLatencyLock.kt`; MA (`onStart`/`onStop`/`onDestroy`); manifest `WAKE_LOCK` | T-388 | yalnızca geliştirici | `WIFI_MODE_FULL_LOW_LATENCY` Wi-Fi kilidi ön plandayken tutulur (`ev=wifi_lock mode=low_latency state=held/released/unsupported`). Eski `wifi_ll` (23, T-089/T-127, T-300'de kaldırıldı, etkisizdi) yeniden tanımlandı: Xiaomi A/B için | T-388 |
 
 ## Host ortam değişkenleri (19 canlı; kaldırılanlar geçmiş için)
 

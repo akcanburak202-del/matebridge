@@ -29,6 +29,7 @@ class DevKnobsTest {
         "pace_dcap_half" to 3, "pace_feedback" to false,
         "catch_up" to false, "dec_out_park" to "off", "cursor_predict" to false,
         "audio_idle_pause" to "stop", "unbuffered_src" to "relative",
+        "decoder" to "c2.mtk.hevc.decoder.lowlatency", "wifi_ll" to true,
     )
 
     private fun assertDefaults(k: DevKnobs) {
@@ -52,6 +53,8 @@ class DevKnobsTest {
         assertTrue(k.cursorPredict) // T-278
         assertTrue(k.decOutPark) // T-312, default on since T-317
         assertEquals(UnbufferedSources.OFF, k.unbufferedSrc) // T-322
+        assertNull(k.decoder) // T-388
+        assertFalse(k.wifiLowLatency) // T-388
         assertEquals(d.copy(dev = k.dev, ignored = k.ignored, knobs = k.knobs, stats1s = k.stats1s, paceTrace = k.paceTrace, stallDiag = k.stallDiag), k)
     }
 
@@ -139,7 +142,7 @@ class DevKnobsTest {
                 "hz:120", "lead_us:4000", "deadline_us:-1", "ping_ms:100",
                 "audio:0", "transport:wifi", "audio_out:track", "audio_buf_bursts:3", "audio_idle_pause:stop", "quickack:0",
                 "decoder_fault:dequeue", "decoder_fault_after_s:15", "game_display:0",
-                "pace_dcap_half:3", "pace_feedback:0", "catch_up:0", "dec_out_park:off", "cursor_predict:0", "unbuffered_src:relative", "stats_1s:1",
+                "pace_dcap_half:3", "pace_feedback:0", "catch_up:0", "dec_out_park:off", "cursor_predict:0", "unbuffered_src:relative", "decoder:c2.mtk.hevc.decoder.lowlatency", "wifi_ll:1", "stats_1s:1",
             ),
             k.knobs,
         )
@@ -160,6 +163,26 @@ class DevKnobsTest {
         val off = parse("audio_out" to "shared") // no `dev`: ignored
         assertEquals(null, off.audioOut)
         assertEquals(emptyList<String>(), off.knobs)
+    }
+
+    @Test fun decoderAndWifiLlAreGatedAndListed() { // T-388
+        val on = parse("dev" to true, "decoder" to " c2.mtk.hevc.decoder.lowlatency ", "wifi_ll" to true)
+        assertEquals("c2.mtk.hevc.decoder.lowlatency", on.decoder)
+        assertTrue(on.wifiLowLatency)
+        assertEquals(listOf("decoder:c2.mtk.hevc.decoder.lowlatency", "wifi_ll:1"), on.knobs)
+        val off = parse("decoder" to "c2.mtk.hevc.decoder.lowlatency", "wifi_ll" to true) // no `dev`
+        assertNull(off.decoder)
+        assertFalse(off.wifiLowLatency)
+        assertEquals(emptyList<String>(), off.knobs)
+        assertEquals("dev=0 ignored=decoder,wifi_ll", off.logFields())
+    }
+
+    @Test fun decoderNameWithOddCharactersIsDropped() { // T-388
+        val k = parse("dev" to true, "decoder" to "a b;rm -rf")
+        assertNull(k.decoder)
+        assertEquals(listOf("decoder:other"), k.knobs)
+        assertNull(parse("dev" to true, "decoder" to "").decoder)
+        assertNull(parse("dev" to true, "decoder" to "x".repeat(65)).decoder)
     }
 
     @Test fun unknownStringValuesAreLoggedAsOther() {
@@ -252,7 +275,7 @@ class DevKnobsTest {
 
     @Test fun removedExperimentKnobsAreUnknownAndNeverListed() { // T-300
         val removed = listOf(
-            "tos_ctl" to 0xB8, "tos_video" to 0x88, "wifi_ll" to true, "hz_pin" to "all", "dec_lowlat" to "all",
+            "tos_ctl" to 0xB8, "tos_video" to 0x88, "hz_pin" to "all", "dec_lowlat" to "all",
             "dec_oprate" to "fps", "color_range" to "limited", "color_standard" to "bt601", "color_transfer" to "unset",
         )
         val k = parse("dev" to true, *removed.toTypedArray())

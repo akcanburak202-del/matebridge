@@ -299,13 +299,33 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
      * T-159 debug `--es decoder_fault create|configure|dequeue|silent` (debuggable builds); one per launch.
      * T-185: like every debug-only extra it also needs `--ez dev true` ([devKnobs], parsed in onCreate before first use).
      */
+    /**
+     * T-388 dev knob `--es decoder <name>`: the main video decoder opened by name (falls back to the platform default
+     * and logs why). Null = knob absent. The auxiliary decoder and the self test never use it.
+     */
+    private val namedDecoderFactory: dev.matebridge.client.video.DecoderCodec.Factory? by lazy {
+        dev.matebridge.client.video.NamedDecoderFactory.forKnob(
+            devKnobs.decoder, dev.matebridge.client.video.MediaCodecDecoder.FACTORY,
+        ) { level, ev, fields ->
+            if (level == 'W') MbLog.w(ev, fields, "decoder") else MbLog.i(ev, fields, "decoder")
+        }
+    }
+    private val mainDecoderFactory: dev.matebridge.client.video.DecoderCodec.Factory
+        get() = namedDecoderFactory ?: dev.matebridge.client.video.MediaCodecDecoder.FACTORY
+
+    /** T-388 dev knob `--ez wifi_ll true`: the low-latency Wi-Fi lock, held while in the foreground. Null = knob absent. */
+    private val wifiLatencyLock: dev.matebridge.client.session.WifiLatencyLock? by lazy {
+        if (!devKnobs.wifiLowLatency) null
+        else dev.matebridge.client.session.WifiLatencyLock.create(this) { MbLog.i("wifi_lock", "mode=low_latency state=$it") }
+    }
+
     private val decoderFault: dev.matebridge.client.video.DecoderFault? by lazy {
         val mode = dev.matebridge.client.video.DecoderFault.parseMode(devKnobs.decoderFault)
         if (mode == null || applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE == 0) null
         else dev.matebridge.client.video.DecoderFault(
             mode,
             (devKnobs.decoderFaultAfterS ?: dev.matebridge.client.video.DecoderFault.DEFAULT_AFTER_S).coerceAtLeast(0),
-            dev.matebridge.client.video.MediaCodecDecoder.FACTORY,
+            mainDecoderFactory,
         ) { fields -> MbLog.w("decoder_fault", fields, "decoder") }
     }
     private var streamConfig: StreamConfig? = null
@@ -1697,7 +1717,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             onKeyframeRequest = { reason -> controller.trySend(mainKeyframeRequest(reason)) }, // T-259: `view` only in packed mode
             onGiveUp = { why -> MbLog.e("decoder_give_up", "reason=${why.take(40)}", "decoder") },
             vsync = vsync,
-            codecFactory = decoderFault ?: dev.matebridge.client.video.MediaCodecDecoder.FACTORY, // T-159 debug extra
+            codecFactory = decoderFault ?: mainDecoderFactory, // T-159 debug extra; T-388 `decoder` knob
             onHealthEvent = { e -> runOnUiThread { onVideoHealthEvent(e) } }, // T-159; Generation runs inline
             onConfigInstalled = { c -> controller.videoConfigInstalled(c) }, // T-160: frames of c are delivered from now on
         ).also {
@@ -2207,6 +2227,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     override fun onStart() {
         super.onStart()
         started = true
+        wifiLatencyLock?.acquire() // T-388 dev knob
         cameraController?.setForeground(true) // T-355: a held START reopens the same cam_id
         if (cameraController != null) applyCameraWish() // the permission may have changed in the system settings
         dev.matebridge.client.session.MbLog.i("activity_start")
@@ -2538,6 +2559,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     override fun onStop() {
         started = false
+        wifiLatencyLock?.release() // T-388
         cameraController?.setForeground(false) // T-355: camera, encoder, GL and socket closed at once
         syncPerfBoost() // T-350: no boost in the background
         promptVisibility.onStop()?.let { controller.setConfirmPromptVisible(it) } // T-151: the 2-min timer pauses
@@ -2575,6 +2597,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (benchForwarded) { super.onDestroy(); return } // T-090: nothing below was initialised
         ui.removeCallbacksAndMessages(null)
         perfBoost.shutdown() // T-350
+        wifiLatencyLock?.release() // T-388 (onStop normally did)
         releaseRenderer()
         cameraController?.onSessionEnd()
         controller.shutdown()

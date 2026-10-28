@@ -109,6 +109,9 @@ object VendorParams {
 class MediaCodecDecoder private constructor(private val codec: MediaCodec) : DecoderCodec {
     companion object {
         val FACTORY = DecoderCodec.Factory { mime -> MediaCodecDecoder(MediaCodec.createDecoderByType(mime)) }
+
+        /** T-388: wrap a codec created by name. */
+        fun wrap(codec: MediaCodec): DecoderCodec = MediaCodecDecoder(codec)
     }
 
     /** Output thread only (one per codec), like the renderer's former `BufferInfo`. */
