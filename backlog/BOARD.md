@@ -394,3 +394,5 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-384](tasks/T-384-probe-full-chroma-mtk.md) | Probe (Xiaomi Pad Mini, MTK) — tam renk ham GPU okuması neden tutmuyor; çalışan bir yol var mı | 7 | android-client-dev | [T-254, T-259] |
 | [T-385](tasks/T-385-client-full-chroma-selftest-reference.md) | İstemci — tam renk öz testi GPU ham okumasını gömülü sabit referansla karşılaştırsın (MTK CPU okuması güvenilmez) | 7 | android-client-dev | [T-384] |
 | [T-386](tasks/T-386-client-buildconfig-sha-stale.md) | İstemci — BuildConfig.GIT_SHA/BUILD_TIME_UTC artımlı derlemede eskide kalmasın | 7 | android-client-dev | [] |
+| [T-387](tasks/T-387-client-game-resolution-from-native.md) | İstemci — oyun çözünürlüğü seçenekleri tabletin doğal boyutundan (oranla) hesaplanır | 7 | android-client-dev | [T-215, T-223, T-245] |
+| [T-388](tasks/T-388-client-decoder-wifi-latency-knobs.md) | İstemci — geliştirici anahtarları `decoder=<ad>` ve `wifi_ll` (Xiaomi düşük gecikme A/B) | 7 | android-client-dev | [T-381] |

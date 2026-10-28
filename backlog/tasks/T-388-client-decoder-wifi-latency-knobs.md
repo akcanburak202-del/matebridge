@@ -1,7 +1,7 @@
 ---
 id: T-388
 title: İstemci — geliştirici anahtarları `decoder=<ad>` ve `wifi_ll` (Xiaomi düşük gecikme A/B)
-status: review
+status: done
 phase: 7
 owner: android-client-dev
 depends_on: [T-381]

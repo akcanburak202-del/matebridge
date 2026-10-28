@@ -1,7 +1,7 @@
 ---
 id: T-387
 title: İstemci — oyun çözünürlüğü seçenekleri tabletin doğal boyutundan (oranla) hesaplanır
-status: review
+status: done
 phase: 7
 owner: android-client-dev
 depends_on: [T-215, T-223, T-245]
