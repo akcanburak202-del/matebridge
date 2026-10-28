@@ -9,7 +9,8 @@ decisions: []
 files:
   - client-android/app/src/main/kotlin/dev/matebridge/client/video/
   - client-android/app/src/main/kotlin/dev/matebridge/client/session/DevKnobs.kt
-  - client-android/app/src/main/kotlin/dev/matebridge/client/net/
+  - client-android/app/src/main/kotlin/dev/matebridge/client/session/WifiLatencyLock.kt
+  - client-android/app/src/main/AndroidManifest.xml
   - client-android/app/src/main/kotlin/dev/matebridge/client/MainActivity.kt
   - client-android/app/src/test/
   - docs/KNOBS.md
@@ -22,7 +23,7 @@ files:
 Xiaomi Pad Mini (MTK Dimensity 9400) üzerinde düşük gecikme yolunu ölçmek için, varsayılanı değiştirmeyen iki geliştirici anahtarı (T-381 `audio_out` ile aynı düzen: `--ez dev true` olmadan yok sayılır, kalıcı değil, panelde yok).
 
 1. **`--es decoder <ad>`:** Ana video çözücüsü `createDecoderByType` yerine `MediaCodec.createByCodecName(<ad>)` ile açılır (örnek: `c2.mtk.hevc.decoder.lowlatency`). Bugünkü varsayılan çözücü `c2.mtk.hevc.decoder`, `FEATURE_LowLatency` desteklemiyor; `.lowlatency` varyantı listede var ama seçilmiyor (T-384 tek karede açılabildiğini gösterdi). Ad açılamazsa ya da istenen MIME'yi desteklemiyorsa bugünkü yola döner ve bunu loglar. Mevcut `lowLatencySupport` / `KEY_LOW_LATENCY` mantığı seçilen çözücünün yeteneğine göre çalışır.
-2. **`--ez wifi_ll true`:** Yayın sürerken `WifiManager.createWifiLock(WIFI_MODE_FULL_LOW_LATENCY, …)` tutulur (ön planda ve oturum boyunca; arka plana geçince/oturum bitince bırakılır). API desteklemiyorsa loglar, hiçbir şey yapmaz. Gerekli izin manifestte yoksa bunu Open questions'a yaz, manifest bu kartın kapsamında değil.
+2. **`--ez wifi_ll true`:** Yayın sürerken `WifiManager.createWifiLock(WIFI_MODE_FULL_LOW_LATENCY, …)` tutulur (ön planda ve oturum boyunca; arka plana geçince/oturum bitince bırakılır). API desteklemiyorsa loglar, hiçbir şey yapmaz. Gerekli izin (`WAKE_LOCK`) manifestte yoksa eklenir; başka izin gerekmez. Kilit kodu `session/WifiLatencyLock.kt`.
 
 ## Kabul
 
