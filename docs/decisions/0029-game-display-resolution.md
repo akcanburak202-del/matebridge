@@ -38,3 +38,14 @@ Tel biçimi (2026-10-04, T-213): `STREAM_PREFS` sonuna isteğe bağlı `display_
 
 - Kartlar: T-213 (protokol + codec + fixture), T-214 (host), T-215 (istemci), T-216 (cihaz ölçümü).
 - 0014 ve 0016 ile ilişkisi: oyun modlarının çözünürlük alanı bu kararla tanımlanır; 0016'daki "yenileme hızı değişince yeniden kurulum" kuralına "HiDPI/boyut değişince" eklenir.
+
+## Ek 2026-10-28 — Oyun çözünürlükleri tabletin kendi boyutundan
+
+**Bağlam:** İkinci tablet Xiaomi Pad Mini (3008×1880, en-boy 1,60). İstemcinin oyun boyutları (`GameResolution`) MatePad'e göre sabit (1400×920 … 2800×1840, en-boy 1,52). Host bu boyutları HELLO ekranına göre doğruluyor (`GameDisplayPolicy`: çift, `native/2 ≤ boyut ≤ native`, en-boy farkı ≤ %0,5). Xiaomi'de MatePad boyutlarının en-boy oranı tutmuyor; host isteği `rejected` sayıp doğal HiDPI ekrana dönüyor, ya da (eşleşen bir boyut olursa) görüntü kenarda şeritli oluyor. Her iki durumda da oyun modu bu cihazda amaçlandığı gibi çalışmıyor.
+
+**Karar (kullanıcı 2026-10-28 onayladı: "seçenekler cihazın çözünürlüğüne göre"):**
+- Oyun çözünürlüğü seçenekleri, tabletin HELLO'da bildirdiği doğal piksel boyutunun (W×H) oranları olarak hesaplanır: **%50, %66, %75, %80, %100** (son ikisi 0030 §3 ve T-245'teki "panel şekli" ve "panel boyutu"). Varsayılan %66.
+- Kural: `w` = `W·oran`'a en yakın çift sayı; `h` = `w·H/W`'ye en yakın çift sayı; sonuç host kuralına (`GameDisplayPolicy.accepts`) uymuyorsa sınır içine çekilir. MatePad (2800×1840) için sonuç bugünkü listeyle **bayt bayt aynıdır** (1400×920, 1848×1214, 2100×1380, 2240×1472, 2800×1840). Xiaomi: 1504×940, 1986×1242, 2256×1410, 2406×1504, 3008×1880.
+- Kayıtlı tercih oran adımı olarak tutulur; eski kayıtlı değerler (ör. `1848x1214`) aynı adıma eşlenir.
+- Protokol ve host değişmez (tel biçimi zaten piksel boyutu taşıyor, host zaten HELLO'ya göre doğruluyor).
+- Kart: T-387.
