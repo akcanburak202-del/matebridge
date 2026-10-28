@@ -47,6 +47,8 @@ class GameModeSettings(
     private val colourStore: ColourStore? = null,
     /** Decision 0034: true while the full-chroma capability self-test has passed ([dev.matebridge.client.video.FullChromaCapability]). */
     private val fullChromaAvailable: () -> Boolean = { false },
+    /** T-387: the tablet's native size (the HELLO's), of which the game resolutions are steps. */
+    val native: NativeSize = NativeSize.MATEPAD,
 ) {
     init { colourStore?.migrate() } // decision 0034: the 0033 "Keskin renk kenarları" value moves into `colour`
 
@@ -176,8 +178,8 @@ class GameModeSettings(
      * The game display [mode] asks for: the stored "Oyun çözünürlüğü" in Oyun (the same at every frame rate, T-250),
      * null (native display) otherwise.
      */
-    fun display(mode: StreamMode): GameResolution? =
-        if (mode.isGame && gameDisplay) settings.gameResolution() else null
+    fun display(mode: StreamMode): GameDisplay? =
+        if (mode.isGame && gameDisplay) settings.gameResolution().on(native) else null
 
     /** The stored "HDR" setting of [mode] (decision 0032, T-280), regardless of capability; Çizim has none (false). */
     fun hdrSetting(mode: StreamMode): Boolean = settings.hdrFor(mode)

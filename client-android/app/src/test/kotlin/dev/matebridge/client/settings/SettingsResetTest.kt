@@ -60,7 +60,7 @@ class SettingsResetTest {
         s.setStreamMode(StreamMode.GAME)
         s.setModeFps(StreamMode.DAILY, 60) // T-223
         s.setModeFps(StreamMode.GAME, 120)
-        s.setGameResolution(GameResolution.R1400) // T-215
+        s.setGameResolution(GameResolution.P50) // T-215
         s.setBitrateKbps(60_000)
         s.setTouchpadSpeed(2f)
         s.setMouseSpeed(0.5f)
@@ -109,7 +109,7 @@ class SettingsResetTest {
         assertFalse(s.penDot())
         assertFalse(s.fingerTouchDisabled())
         assertEquals(TransportMode.AUTO, s.transportMode())
-        assertEquals(GameResolution.R1848, s.gameResolution()) // T-215: 1848×1214
+        assertEquals(GameResolution.P66, s.gameResolution()) // T-215: 1848×1214
         assertFalse(s.hdrGame()) // T-238: HDR off
         assertFalse(s.hdrDaily()) // T-280: both HDR settings off
         assertTrue(s.cursorLocal()) // T-276: İmleç back to Tablette

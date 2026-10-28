@@ -76,6 +76,7 @@ import dev.matebridge.client.stream.DisplayModePicker
 import dev.matebridge.client.stream.FrameRatePolicy
 import dev.matebridge.client.stream.GameModeSettings
 import dev.matebridge.client.stream.GameResolution
+import dev.matebridge.client.stream.NativeSize
 import dev.matebridge.client.stream.HdrCapability
 import dev.matebridge.client.stream.HdrPolicy
 import dev.matebridge.client.stream.HdrRequestLog
@@ -564,6 +565,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             settings, devKnobs.gameDisplay, hdrCaps,
             colourStore = dev.matebridge.client.stream.ColourStore(prefsStore), // T-260: the panel writes it
             fullChromaAvailable = { fullChromaOn() },
+            native = nativeSize,
         )
         audioOutFromExtra = devKnobs.audioOut?.let { AudioOutPref.parse(it) } != null
         // T-109/T-223: stored mode Oyun or Çizim starts with its defaults (layer built before anything reads them).
@@ -1093,6 +1095,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }
         // T-215 (decision 0029): stored; one complete STREAM_PREFS only while Oyun is on.
         override val gameResolution get() = settings.gameResolution()
+        override fun gameResolutionLabel(r: GameResolution) = r.on(nativeSize).panelLabel
         override fun selectGameResolution(r: GameResolution) {
             gameSettings.selectGameResolution(r, this@MainActivity.streamMode)?.let { sendStreamPrefs(it) }
         }
@@ -3336,11 +3339,18 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     )
 
     @Suppress("DEPRECATION")
+    private val nativeSize: NativeSize by lazy { // T-387: the one source of the HELLO size and the game resolutions
+        val dm = android.util.DisplayMetrics()
+        windowManager.defaultDisplay.getRealMetrics(dm)
+        NativeSize.landscape(dm.widthPixels, dm.heightPixels) // landscape-locked: native landscape size
+    }
+
+    @Suppress("DEPRECATION")
     private fun buildHello(): Hello {
         val dm = android.util.DisplayMetrics()
         windowManager.defaultDisplay.getRealMetrics(dm)
-        val w = max(dm.widthPixels, dm.heightPixels) // landscape-locked: report native landscape size
-        val h = min(dm.widthPixels, dm.heightPixels)
+        val w = nativeSize.widthPx
+        val h = nativeSize.heightPx
         val hz = windowManager.defaultDisplay.refreshRate.roundToInt()
         val caps = Capabilities.PEN or Capabilities.PEN_HOVER or Capabilities.PEN_TILT or Capabilities.KEYBOARD or
             Capabilities.TOUCHPAD or Capabilities.TOUCH or Capabilities.DECODE_H264 or Capabilities.DECODE_HEVC or

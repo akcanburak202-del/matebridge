@@ -1,7 +1,7 @@
 ---
 id: T-387
 title: İstemci — oyun çözünürlüğü seçenekleri tabletin doğal boyutundan (oranla) hesaplanır
-status: todo
+status: review
 phase: 7
 owner: android-client-dev
 depends_on: [T-215, T-223, T-245]
@@ -30,8 +30,19 @@ Karar 0029 eki 2026-10-28. `GameResolution` bugün MatePad'e (2800×1840) göre 
 
 ## Plan
 
-(boş — ajan yazar)
+1. `GameResolution` enum = oran adımları (P50/P66/P75/P80/P100, id "50".."100", `legacyId` = eski `WxH`); `GameDisplay(step, w, h)` = adımın tabletin `NativeSize`'ına göre çözülmüş hali (label, panelLabel, appliedIn). Hesap: w=en yakın çift(W·oran), h=en yakın çift(w·H/W), host kuralına (`accepts` aynası) uymazsa en yakın kabul edilen çifte arama.
+2. `GameModeSettings(native = NativeSize)`; `display(mode)` `GameDisplay?` döner. MainActivity tek `nativeSize` (lazy, getRealMetrics) hem HELLO'yu hem GameModeSettings'i besler; panel etiketi `gameResolutionLabel(r)` ile dinamik.
+3. Testler MatePad değerleriyle aynı beklentilerle uyarlanır; Xiaomi, keyfi boyutlar, göç testleri eklenir.
 
 ## Handoff
 
+- Commit: son T-387 commit'i (task/T-387-game-resolution-native).
+- Dosyalar: stream/GameResolution.kt (enum adımlar P50..P100 + `NativeSize` + `GameDisplay`), stream/GameMode.kt (`native` parametresi, `display()` -> `GameDisplay?`), stream/StreamMode.kt (toastText tipi), settings/SettingsCatalog.kt (`gameResolutionLabel`), session/Settings.kt (yalnız yorum), MainActivity.kt (bkz. Open questions); testler: GameResolutionTest, SettingsCatalogTest, SettingsResetTest, StreamModeTest.
+- Saklama: oran adımı id'si "50|66|75|80|100"; eski `WxH` değerleri `legacyId` ile eşlenir, bilinmeyen -> %66 (testli).
+- MatePad değerleri/etiketleri/STREAM_PREFS aynı (test beklentileri değişmedi). Xiaomi 3008x1880 -> 1504x940, 1986x1242, 2256x1410, 2406x1504, 3008x1880 (testli). Keyfi boyutlar (2560x1600, 2000x1200, 2801x1841, 2800x1839, 1920x1080, 1280x800, 2961x1848) host kuralını sağlar.
+- check.sh: gradle yalnız T-367'deki bilinen zamanlama testlerinde kırmızı (DecoderWaitTest, OutputParkTest; ilk koşuda ayrıca AacDecodeWorkerTest ve bir swift host testi, paralel ajan yükü altında); diğer tüm testler geçti. Kod bu testlere dokunmuyor. Tam yeşil check.sh alınamadı.
+- Tablette kontrol: MatePad'de Oyun çözünürlüğü paneli eskisiyle aynı 5 etiketi göstermeli (son "2800×1840 (deneysel)"), varsayılan 1848×1214, eski kayıtlı seçim korunmalı; Xiaomi'de bağlanmadan önce de 1986×1242 vb. etiketler, bağlanınca `game_display=applied`.
+
 ## Open questions
+
+- `MainActivity.kt` kartın `files:` listesinde yok, ama HELLO ve oyun çözünürlüklerinin tek kaynaktan beslenmesi (kabul 5) ve SettingsHost uygulaması için dokunuldu (lazy `nativeSize`, `gameResolutionLabel`, `native =`). Orchestrator onaylasın.

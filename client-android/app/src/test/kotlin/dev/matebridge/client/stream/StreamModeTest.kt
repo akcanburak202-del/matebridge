@@ -80,8 +80,8 @@ class StreamModeTest {
         assertEquals("Günlük: 60 fps", StreamMode.DAILY.toastText(60))
         assertEquals("Çizim: 120 fps", StreamMode.DRAWING.toastText(120))
         assertEquals("Oyun: 60 fps", StreamMode.GAME.toastText(60)) // game display off
-        assertEquals("Oyun: 60 fps, 1848×1214", StreamMode.GAME.toastText(60, GameResolution.R1848))
-        assertEquals("Oyun: 120 fps, 2240×1472", StreamMode.GAME.toastText(120, GameResolution.R2240))
+        assertEquals("Oyun: 60 fps, 1848×1214", StreamMode.GAME.toastText(60, GameResolution.P66.on(NativeSize.MATEPAD)))
+        assertEquals("Oyun: 120 fps, 2240×1472", StreamMode.GAME.toastText(120, GameResolution.P80.on(NativeSize.MATEPAD)))
     }
 
     @Test fun settingsPersistTheModeAndDefaultToDaily() {
