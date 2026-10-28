@@ -35,6 +35,7 @@ class SettingsCatalogTest {
         override var frameRate = 120
         override fun selectFrameRate(fps: Int) { calls += "fps $fps"; if (streamMode.hasFpsSetting) frameRate = fps }
         override var gameResolution = GameResolution.DEFAULT
+        override fun gameResolutionLabel(r: GameResolution) = r.on(dev.matebridge.client.stream.NativeSize.MATEPAD).panelLabel
         override fun selectGameResolution(r: GameResolution) { calls += "game_resolution ${r.id}"; gameResolution = r }
         override var bitrateKbps = 0L
         override fun selectBitrate(kbps: Long) { calls += "bitrate $kbps"; bitrateKbps = kbps }
@@ -457,12 +458,12 @@ class SettingsCatalogTest {
             listOf("1400×920", "1848×1214", "2100×1380", "2240×1472", "2800×1840 (deneysel)"),
             c.options.map { it.label },
         )
-        assertEquals(listOf("1400x920", "1848x1214", "2100x1380", "2240x1472", "2800x1840"), c.options.map { it.id })
-        assertEquals("1848x1214", c.selected())
-        c.select("1400x920")
-        assertEquals("1400x920", c.selected())
+        assertEquals(listOf("50", "66", "75", "80", "100"), c.options.map { it.id })
+        assertEquals("66", c.selected())
+        c.select("50")
+        assertEquals("50", c.selected())
         c.select("bogus") // unknown: the default
-        assertEquals(listOf("game_resolution 1400x920", "game_resolution 1848x1214"), h.calls)
+        assertEquals(listOf("game_resolution 50", "game_resolution 66"), h.calls)
         h.modeLayer = StreamMode.GAME // a persistent setting: never marked as part of a mode layer
         assertEquals("Oyun çözünürlüğü", c.titleText())
         h.modeLayer = StreamMode.DRAWING
@@ -471,7 +472,7 @@ class SettingsCatalogTest {
 
     @Test fun experimentalGameResolutionAtEveryRate() { // T-250
         val c = choice(SettingsCatalog.sections(h, inStream = true), "game_resolution")
-        val exp = c.options.single { it.id == "2800x1840" }
+        val exp = c.options.single { it.id == "100" }
         for (m in StreamMode.entries) {
             for (fps in listOf(60, 120)) {
                 h.streamMode = m
@@ -482,11 +483,11 @@ class SettingsCatalogTest {
         }
         h.streamMode = StreamMode.GAME
         h.frameRate = 120
-        c.select("2800x1840")
-        assertEquals(listOf("game_resolution 2800x1840"), h.calls)
-        assertEquals("2800x1840", c.selected())
+        c.select("100")
+        assertEquals(listOf("game_resolution 100"), h.calls)
+        assertEquals("100", c.selected())
         h.frameRate = 60
-        assertEquals("2800x1840", c.selected())
+        assertEquals("100", c.selected())
     }
 
     @Test fun frameRateChoiceIsPerModeAndFixedInDrawing() { // T-223, decision 0030 §2

@@ -52,7 +52,7 @@ enum class StreamMode(val id: String, val label: String) {
     fun buttonText(fps: Int) = "Görüntü modu: $label (${resolveFps(fps)} fps)"
 
     /** Toast text, e.g. "Günlük: 120 fps"; with a game display (T-215) its size too, e.g. "Oyun: 60 fps, 1848×1214". */
-    fun toastText(fps: Int, display: GameResolution? = null) =
+    fun toastText(fps: Int, display: GameDisplay? = null) =
         "$label: ${resolveFps(fps)} fps" + (display?.let { ", ${it.label}" } ?: "")
 
     companion object {

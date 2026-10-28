@@ -56,6 +56,8 @@ interface SettingsHost {
     fun selectFrameRate(fps: Int)
     /** "Oyun çözünürlüğü" (decision 0029, T-215): the stored game display size; applies only in the game modes. */
     val gameResolution: GameResolution
+    /** The panel text of [r] on this tablet, e.g. "1848×1214" (T-387: the sizes are steps of the native size). */
+    fun gameResolutionLabel(r: GameResolution): String
     /** Persists the choice; a STREAM_PREFS goes to the host only while a game mode is on. */
     fun selectGameResolution(r: GameResolution)
     /** The user's bit rate choice, one of [Bitrate.OPTIONS_KBPS] (0 = Otomatik). */
@@ -387,7 +389,7 @@ object SettingsCatalog {
                     SettingItem.Choice(
                         "game_resolution", GAME_RESOLUTION_TITLE,
                         // T-250: "2800×1840 (deneysel)" at every Oyun frame rate
-                        GameResolution.entries.map { r -> SettingItem.Option(r.id) { r.panelLabel } },
+                        GameResolution.entries.map { r -> SettingItem.Option(r.id) { h.gameResolutionLabel(r) } },
                         { h.gameResolution.id },
                         hidden = { h.remoteSession },
                     ) { id -> h.selectGameResolution(GameResolution.parse(id)) },

@@ -135,7 +135,7 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
         if (fps in dev.matebridge.client.stream.StreamMode.FPS_OPTIONS) store.putString(key, fps.toString())
     }
 
-    /** "Oyun çözünürlüğü" (T-215, decision 0029); default 1848×1214, also for an unknown stored value. */
+    /** "Oyun çözünürlüğü" (T-215, decision 0029); default 66% (1848×1214 on the MatePad), also for an unknown stored value. */
     fun gameResolution(): dev.matebridge.client.stream.GameResolution =
         dev.matebridge.client.stream.GameResolution.parse(store.getString(KEY_GAME_RESOLUTION))
 
