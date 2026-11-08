@@ -157,6 +157,14 @@ final class Hold120PlannerTests: XCTestCase {
         XCTAssertEqual(p.skippedInput, 0)
     }
 
+    func testInputStampedAfterTheClockReadCountsAsRecent() {
+        var p = onPlanner(at: 10 * sec)
+        let now = 10 * sec
+        XCTAssertEqual(p.next(nowUs: now, lastInputUs: now + 50), .sleep(untilUs: now + Hold120Planner.intervalUs))
+        XCTAssertEqual(p.skippedInput, 1)
+        XCTAssertEqual(p.taps, 0)
+    }
+
     func testOldInputDoesNotSkip() {
         var p = onPlanner(at: 10 * sec)
         XCTAssertEqual(p.next(nowUs: 10 * sec, lastInputUs: 5 * sec), .tap)

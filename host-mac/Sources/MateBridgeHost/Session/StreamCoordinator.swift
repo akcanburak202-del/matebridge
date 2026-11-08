@@ -331,6 +331,7 @@ public final class StreamCoordinator: @unchecked Sendable {
 
     public func sessionEnded() {
         liveSessionLock.withLock { liveSessionID = nil }
+        hold120?.update(sessionFacts: .none)  // T-389: at once, not when the loop gets to the end event
         // Forced (beyond the lifecycle cap, at most one per session): the display-sleep assertion is released here,
         // so this event must never be dropped by an overflow (T-128).
         post(.sessionEnded, forced: true)
@@ -360,6 +361,7 @@ public final class StreamCoordinator: @unchecked Sendable {
     /// Do not call from the coordinator's own callbacks.
     public func shutdown(timeout: TimeInterval = 2) {
         shutdownLock.withLock { shuttingDown = true }
+        hold120?.shutdown()  // T-389: no more taps, whatever the event loop is doing
         tickTimer?.cancel()
         tickTimer = nil
         watchdogTimer?.cancel()
@@ -466,7 +468,7 @@ public final class StreamCoordinator: @unchecked Sendable {
     private func refreshHold120() {
         guard let hold120 else { return }
         var facts = Hold120Conditions.none
-        if let s = session, !isShuttingDown {
+        if let s = session, !isShuttingDown, liveSessionLock.withLock({ liveSessionID }) != nil {
             facts.usbTransport = s.transport == .usb
             if case .sender = consumer { facts.videoFlowing = true }
             facts.gameScreen = !s.settings.displayHiDPI
@@ -670,6 +672,7 @@ public final class StreamCoordinator: @unchecked Sendable {
         live.settings = wanted
         live.configID = nextConfigID(after: live.configID)
         session = live
+        refreshHold120()  // new stream mode: before the rebuild awaits (T-389)
         prefsGate.markApplied(now: HostClock.nowUs())
         log(.info, "stream_reconfigure",
             "config_id=\(live.configID) fps=\(old.fps)->\(wanted.fps) scale=\(old.scalePermille)->\(wanted.scalePermille) "
@@ -685,6 +688,7 @@ public final class StreamCoordinator: @unchecked Sendable {
 
     private func onSessionEnded() async {
         session = nil
+        refreshHold120()  // before any teardown await (T-389)
         wakePolicy.sessionEnded()
         gateLock.withLock { sleepGate.cancelPending() }
         logDisplaySleep(displaySleep.release())
@@ -754,6 +758,7 @@ public final class StreamCoordinator: @unchecked Sendable {
     private func onSenderEnded(id: Int, reason: VideoSender.EndReason) async {
         guard case .sender(let current, _, let link) = consumer, current == id else { return }
         consumer = .none
+        refreshHold120()
         stopAdaptation()
         link.cancel()  // the client sees EOF and reopens the video connection
         log(.info, "video_sender_ended", "reason=\(reason)")
@@ -900,7 +905,7 @@ public final class StreamCoordinator: @unchecked Sendable {
 
     private func onShutdown() async {
         session = nil
-        hold120?.shutdown()
+        hold120?.shutdown()  // T-389 (also stopped directly by `shutdown`)
         wakePolicy.sessionEnded()
         gateLock.withLock { sleepGate.cancelPending() }
         logDisplaySleep(displaySleep.release())
@@ -1221,6 +1226,7 @@ public final class StreamCoordinator: @unchecked Sendable {
         live.settings = native
         live.configID = nextConfigID(after: live.configID)
         session = live
+        refreshHold120()
         log(.warning, "game_display_failed", "applied=\(native.displayModeText) requested=\(old.displayModeText) "
             + "config_id=\(live.configID) encoded=\(native.encodedWidthPx)x\(native.encodedHeightPx) "
             + "bitrate_kbps=\(native.bitrateKbps)")
@@ -1364,6 +1370,7 @@ public final class StreamCoordinator: @unchecked Sendable {
     private func stopConsumer() async {
         let old = consumer
         consumer = .none
+        refreshHold120()  // video detached: stop before the bounded waits below (T-389)
         stopAdaptation()
         switch old {
         case .none: break

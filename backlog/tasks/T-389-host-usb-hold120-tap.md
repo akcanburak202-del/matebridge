@@ -66,6 +66,14 @@ Saf mantik `MateBridgeCore`, adb/zamanlayici `MateBridgeHost`; main.swift dokunu
 - **Assumptions:** "Oyun ekranı etkin" = the 1x game display (decision 0029) is in use, not just a stream mode. `deviceKnown` also means the watcher state is `up` (device present and all tunnels installed). Stats are cumulative totals since the controller started. Tap spacing is measured from tap completion. `reason=not_usb` also covers "no session". The hold's first tap happens immediately when conditions become true.
 - **Not tested / needs the real tablet (orchestrator):** the tap itself (the client swallowing it is T-390, install the client first); that the real `input touchscreen tap 2 2` keeps the panel at 120 Hz over many minutes; the 1.5 s input wait vs lost real touches/pen; heat/battery; behavior when the cable is unplugged mid-session (the watcher notices through IOKit, then the next tap fails and backs off); `ev=hold120` / `ev=hold120_stats` lines in the real log.
 
+## Review round 1 (Codex high, three P2s, all fixed in one commit)
+
+1. **Taps during teardown:** the hold conditions are now published before the awaiting teardown steps, not only after `handleEvent` returns: `refreshHold120()` runs right after `session = nil` in `onSessionEnded`, after `consumer = .none` in `stopConsumer` and `onSenderEnded`, after `session = live` when `applyPrefs` or the game-display fallback changes the stream mode, and in `onShutdown`. `sessionEnded()` (entry point, any thread) pushes `.none` to the controller at once, `shutdown(timeout:)` calls `hold120?.shutdown()` directly before posting its event, and `refreshHold120` also treats "no live session id" as no session so a late event cannot re-enable the hold.
+2. **Clock-read race:** `Hold120Controller.reevaluate` reads the input stamp before the clock; `Hold120Planner.next` also treats a stamp newer than `nowUs` as recent input (test `testInputStampedAfterTheClockReadCountsAsRecent`).
+3. **Registry clear before removal:** `UsbTunnelWatcher.setEnabled(false)` calls `UsbDeviceRegistry.shared.publish(nil)` before `startRemoval()`.
+
+`./scripts/check.sh`: ALL OK.
+
 ## Open questions
 
 - Not blocking: `ev=profile knobs=` (`StreamProfileLog.knobAllowList`) does not list `MATEBRIDGE_HOLD120` (that file is outside this card's files; KNOBS row says so). Add it later if the knob is kept.

@@ -132,7 +132,8 @@ public struct Hold120Planner: Sendable {
         guard isOn else { return .off }
         if tapInFlight { return .waitForCompletion }
         if nowUs < nextDueUs { return .sleep(untilUs: nextDueUs) }
-        if let last = lastInputUs, last <= nowUs, nowUs - last < Self.inputQuietUs {
+        // A stamp newer than `nowUs` (input arrived between the caller's two clock reads) is recent input too.
+        if let last = lastInputUs, last > nowUs || nowUs - last < Self.inputQuietUs {
             skippedInput += 1
             nextDueUs = nowUs + Self.intervalUs
             return .sleep(untilUs: nextDueUs)

@@ -68,11 +68,12 @@ final class Hold120Controller: @unchecked Sendable {
         let serial = registry.serial
         var facts = conditions
         facts.deviceKnown = serial != nil  // owned here: the caller does not know the USB device
+        // Input first, then the clock: an input stamped in between is newer than `now`, which the planner counts as recent.
+        let input = inputLock.withLock { lastInputUs }
         let now = HostClock.nowUs()
         if let change = planner.evaluate(nowUs: now, conditions: facts) {
             logger.log(.info, "hold120", sessionID: 0, generation: 0, fields: change.logFields)
         }
-        let input = inputLock.withLock { lastInputUs }
         switch planner.next(nowUs: now, lastInputUs: input == 0 ? nil : input) {
         case .off, .waitForCompletion:
             break

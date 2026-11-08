@@ -49,10 +49,10 @@ public final class UsbTunnelWatcher: @unchecked Sendable {
                 usbEvents?.stop()
                 usbEvents = nil
                 planner.usbEventsAvailable = false
+                UsbDeviceRegistry.shared.publish(nil)  // before the removal below, which blocks on adb (T-389)
                 startRemoval()
                 planner.reset()
                 lastActionFailed = false
-                UsbDeviceRegistry.shared.publish(nil)
                 onStateChange?(nil)
             }
         }
