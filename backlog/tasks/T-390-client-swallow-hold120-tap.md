@@ -1,7 +1,7 @@
 ---
 id: T-390
 title: İstemci — host'un 120 Hz tutma dokunmasını (adb tap 2,2) yut
-status: todo
+status: review
 phase: 7
 owner: android-client-dev
 depends_on: [T-234]
@@ -42,6 +42,13 @@ Karar 0044, istemci tarafı. Host USB'de saniyede bir `adb shell input touchscre
 4. Birim testleri (JVM): kabul 6'daki bütün durumlar.
 
 ## Handoff
+
+- Dal: `task/T-390-hold-tap-swallow`. Kod commit: 0654a2aa (plan: c8744a68; bu handoff notu ayrı commit). check.sh: ALL OK.
+- Dosyalar: `input/InjectedHoldTap.kt` (yeni, saf), `InjectedHoldTapTest.kt` (yeni, 14 test), `MainActivity.kt` (`dispatchTouchEvent`, `onPause`, `onWindowFocusChanged(false)`), `docs/LOGGING.md`.
+- Varsayımlar: konum için `ev.rawX/rawY` (ekran koordinatı, pencere/ekran kenarlığından bağımsız); `noteInputActivity()` (vsync uyandırma) yutulan olayda da çağrılıyor, `noteIdleInput()` ve `routeToCapture` çağrılmıyor; yutulan olay `super.dispatchTouchEvent`'e de gitmiyor. Log ilk yutmada hemen, sonra en çok 30 sn'de bir ve yalnız olay geldiğinde (yutma durursa son toplam yazılmaz).
+- Yutma kararı DOWN'da; aynı `deviceId`'nin sonraki olayları UP/CANCEL'a kadar yutulur. Eşleşmeyen yeni DOWN aynı `deviceId`'nin eski girdisini siler.
+- Cihazda TEST EDİLMEDİ. Tablette bak: (1) APK kur, ekran akarken `adb shell input touchscreen tap 2 2` -> logcat `MB/input ev=hold_tap_swallowed n=1`, Mac'te tıklama yok, panel/düğme tepkisi yok, boşta karartma sayacı sıfırlanmıyor; (2) `input tap 1400 900` hâlâ Mac'e gidiyor; (3) gerçek parmakla sol üst köşeye dokunmak Mac'e gidiyor (yutulmuyor); (4) kalem ve touchpad etkilenmiyor; (5) saniyede bir tekrarla 30 sn: log en çok 30 sn'de bir satır.
+- Not: kart ve karar 0044 ana checkout'ta commitlenmemiş (untracked); karar dosyasını bu dala koymadım, kartı koydum (merge'de untracked çakışması olursa ana checkout'taki kopyayı silin/commitleyin).
 
 ## Open questions
 
