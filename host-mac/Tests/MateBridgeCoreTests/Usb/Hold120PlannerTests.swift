@@ -62,6 +62,66 @@ final class Hold120PlannerTests: XCTestCase {
         XCTAssertEqual(c.firstBroken, .fpsNot120)
     }
 
+    // MARK: Streaming mode (review round 2)
+
+    private let native60 = Hold120StreamMode(configID: 1, gameScreen: false, fps: 60)
+    private let game120 = Hold120StreamMode(configID: 2, gameScreen: true, fps: 120)
+
+    func testMatchingAttachedSenderEnables() {
+        var c = Hold120StreamMode.conditions(attached: game120, requested: game120, usbTransport: true)
+        c.deviceKnown = true
+        XCTAssertNil(c.firstBroken)
+    }
+
+    func testRequestedGame120WithOldNativeSenderNeverEnables() {
+        // A quiet USB session switches from native/60 to game/120: the old sender is still attached.
+        var c = Hold120StreamMode.conditions(attached: native60, requested: game120, usbTransport: true)
+        c.deviceKnown = true
+        XCTAssertNotNil(c.firstBroken)
+        XCTAssertFalse(c.videoFlowing)
+        XCTAssertFalse(c.gameScreen)
+    }
+
+    func testSameConfigButRequestedModeDiffersOnlyDisables() {
+        let attached = Hold120StreamMode(configID: 3, gameScreen: true, fps: 120)
+        var requested = attached
+        requested.fps = 60
+        var c = Hold120StreamMode.conditions(attached: attached, requested: requested, usbTransport: true)
+        c.deviceKnown = true
+        XCTAssertEqual(c.firstBroken, .fpsNot120)
+        requested = attached
+        requested.gameScreen = false
+        c = Hold120StreamMode.conditions(attached: attached, requested: requested, usbTransport: true)
+        c.deviceKnown = true
+        XCTAssertEqual(c.firstBroken, .notGame)
+    }
+
+    func testRequestedNativeWithAttachedGame120DoesNotEnable() {
+        // Leaving the game mode: the attached sender is still the old game one, the request is already native/60.
+        var requested = Hold120StreamMode(configID: 4, gameScreen: false, fps: 60)
+        var c = Hold120StreamMode.conditions(attached: game120, requested: requested, usbTransport: true)
+        c.deviceKnown = true
+        XCTAssertNotNil(c.firstBroken)
+        requested.configID = game120.configID  // even with a matching config the request wins
+        c = Hold120StreamMode.conditions(attached: game120, requested: requested, usbTransport: true)
+        c.deviceKnown = true
+        XCTAssertNotNil(c.firstBroken)
+    }
+
+    func testNoSenderOrNoSessionIsOff() {
+        var c = Hold120StreamMode.conditions(attached: nil, requested: game120, usbTransport: true)
+        c.deviceKnown = true
+        XCTAssertEqual(c.firstBroken, .noVideo)
+        XCTAssertEqual(Hold120StreamMode.conditions(attached: game120, requested: nil, usbTransport: true),
+                       Hold120Conditions.none)
+    }
+
+    func testWifiTransportStaysOff() {
+        var c = Hold120StreamMode.conditions(attached: game120, requested: game120, usbTransport: false)
+        c.deviceKnown = true
+        XCTAssertEqual(c.firstBroken, .notUsb)
+    }
+
     // MARK: State changes
 
     func testStateChangeReportedOnlyOnChange() {

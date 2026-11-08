@@ -49,6 +49,38 @@ public struct Hold120Conditions: Equatable, Sendable {
     }
 }
 
+/// The stream mode of a session as the hold needs it: the config it belongs to, whether it is the game display, and
+/// its fps.
+public struct Hold120StreamMode: Equatable, Sendable {
+    public var configID: UInt16
+    public var gameScreen: Bool
+    public var fps: Int
+
+    public init(configID: UInt16, gameScreen: Bool, fps: Int) {
+        self.configID = configID
+        self.gameScreen = gameScreen
+        self.fps = fps
+    }
+
+    /// The conditions from what is actually streaming (`attached`: the mode the attached video sender was started
+    /// with; nil = no sender) and what the session wants now (`requested`; nil = no session). A requested change can
+    /// only switch the hold off, never on: the game screen and 120 fps count only if the attached sender has them AND
+    /// the request still agrees, and video counts as flowing only while the sender belongs to the requested config
+    /// (every reconfiguration gets a new `config_id`, so a sender of the old mode never enables the new one). The
+    /// hold turns on once the matching sender is attached. `deviceKnown` is left false (the controller owns it).
+    public static func conditions(attached: Hold120StreamMode?, requested: Hold120StreamMode?,
+                                  usbTransport: Bool) -> Hold120Conditions {
+        guard let requested else { return .none }
+        var facts = Hold120Conditions.none
+        facts.usbTransport = usbTransport
+        guard let attached, attached.configID == requested.configID else { return facts }
+        facts.videoFlowing = true
+        facts.gameScreen = attached.gameScreen && requested.gameScreen
+        facts.streamFps = attached.fps == requested.fps ? attached.fps : 0
+        return facts
+    }
+}
+
 /// Which tablet messages count as real touch, pen or pointer input for the hold (T-389): a real touch already keeps
 /// the panel at 120 Hz, so no fake tap is sent right after one. Keys do not count (a keyboard or gamepad does not wake
 /// the panel). Never looks at the content of a message.

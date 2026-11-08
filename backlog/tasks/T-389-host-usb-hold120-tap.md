@@ -74,6 +74,10 @@ Saf mantik `MateBridgeCore`, adb/zamanlayici `MateBridgeHost`; main.swift dokunu
 
 `./scripts/check.sh`: ALL OK.
 
+## Review round 2 (Codex high, one P2, fixed)
+
+Reconfiguration could enable taps before the new mode was streaming (requested game/120 combined with the old attached native/60 sender). Now the conditions come from what is actually streaming: `StreamCoordinator.attachedMode` (`Hold120StreamMode`: config id, game display, fps) is set when the video sender is created in `onVideoAttached` from the settings the matching pipeline runs, and cleared in `stopConsumer` and `onSenderEnded`. `Hold120StreamMode.conditions(attached:requested:usbTransport:)` (Core, tested) reports video flowing only if the attached sender's `config_id` equals the session's current one (every reconfiguration bumps it), and game screen / 120 fps only if the attached mode has them and the request still agrees. A prefs change can therefore publish "off" early but never "on"; the hold turns on only once the matching sender has attached. Tests: `testRequestedGame120WithOldNativeSenderNeverEnables`, `testMatchingAttachedSenderEnables`, `testSameConfigButRequestedModeDiffersOnlyDisables`, `testRequestedNativeWithAttachedGame120DoesNotEnable`, `testNoSenderOrNoSessionIsOff`, `testWifiTransportStaysOff`. `./scripts/check.sh`: ALL OK. Known residual: a tap already running when the hold turns off cannot be cancelled (one adb call of at most 2 s).
+
 ## Open questions
 
 - Not blocking: `ev=profile knobs=` (`StreamProfileLog.knobAllowList`) does not list `MATEBRIDGE_HOLD120` (that file is outside this card's files; KNOBS row says so). Add it later if the knob is kept.

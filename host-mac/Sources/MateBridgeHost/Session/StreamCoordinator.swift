@@ -165,6 +165,9 @@ public final class StreamCoordinator: @unchecked Sendable {
     /// `onShutdown` only clear a leftover one (rebuild on it, or invalidate).
     private var parked: (display: VirtualDisplay, sinceUs: UInt64)?
     private var consumer = Consumer.none
+    /// T-389: the stream mode the attached `.sender` was started with (what is streaming now); nil whenever the
+    /// consumer is not a sender. Never derived from requested prefs.
+    private var attachedMode: Hold120StreamMode?
     private var consumerID = 0
     /// T-328: Wi-Fi congestion control of the current video connection; nil unless `MATEBRIDGE_WIFI_ADAPT=1` and the
     /// session is on the network. Started with the sender, stopped with it (`stopAdaptation`).
@@ -469,10 +472,14 @@ public final class StreamCoordinator: @unchecked Sendable {
         guard let hold120 else { return }
         var facts = Hold120Conditions.none
         if let s = session, !isShuttingDown, liveSessionLock.withLock({ liveSessionID }) != nil {
-            facts.usbTransport = s.transport == .usb
-            if case .sender = consumer { facts.videoFlowing = true }
-            facts.gameScreen = !s.settings.displayHiDPI
-            facts.streamFps = s.settings.fps
+            // Only what is streaming now counts (the mode the attached sender started with); the session's requested
+            // settings can switch the hold off but never on (review round 2).
+            var attached: Hold120StreamMode?
+            if case .sender = consumer { attached = attachedMode }
+            facts = Hold120StreamMode.conditions(
+                attached: attached,
+                requested: Hold120StreamMode(configID: s.configID, gameScreen: !s.settings.displayHiDPI, fps: s.settings.fps),
+                usbTransport: s.transport == .usb)
         }
         hold120.update(sessionFacts: facts)
     }
@@ -744,6 +751,7 @@ public final class StreamCoordinator: @unchecked Sendable {
                                  },
                                  clock: { HostClock.nowUs() })
         consumer = .sender(id: id, sender, link)
+        attachedMode = Hold120StreamMode(configID: s.configID, gameScreen: !s.settings.displayHiDPI, fps: s.settings.fps)
         lastSent = VideoSender.Counters()
         // T-328: the gate is in place before the first frame is taken. USB sessions never get here (never consulted).
         if WifiAdaptKnob.isActive(ProcessInfo.processInfo.environment, transport: s.transport) {
@@ -758,6 +766,7 @@ public final class StreamCoordinator: @unchecked Sendable {
     private func onSenderEnded(id: Int, reason: VideoSender.EndReason) async {
         guard case .sender(let current, _, let link) = consumer, current == id else { return }
         consumer = .none
+        attachedMode = nil
         refreshHold120()
         stopAdaptation()
         link.cancel()  // the client sees EOF and reopens the video connection
@@ -1370,6 +1379,7 @@ public final class StreamCoordinator: @unchecked Sendable {
     private func stopConsumer() async {
         let old = consumer
         consumer = .none
+        attachedMode = nil
         refreshHold120()  // video detached: stop before the bounded waits below (T-389)
         stopAdaptation()
         switch old {
