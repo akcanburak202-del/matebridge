@@ -2213,3 +2213,10 @@ Yalnız yayının aktığı saniyeler (`sent_kbps` ≥ 1000), host.log, 36 dk; 2
 - Wi-Fi'da (ch 52 / 5260 MHz, RSSI −33, 2401 Mbps) 21:56–22:10 ve 22:21 sonrası dönemsel takılma: tablette `drop` ~10–12/sn, `net_p99` 66–75 ms (temizken 18–20), fps 100–110; host video TCP srtt 12 → 20–25 ms, `rttcur` 75–110 ms sıçramaları, `unacked` 30–130 KB → 150–730 KB. Aynı anda Mac→tablet ICMP (1400 B dahil) en fazla 20 ms, modem 1 ms; tablet wlan0 rx 65 Mbps ≈ yayın (arka plan trafiği yok). Bit hızı 30 Mbps, `wifi_ll` (kilit `held`), eski/yeni APK, çözücü takılmayı gidermedi; takılma kendi kendine gelip gidiyor. Yorum [çıkarım]: modem→tablet yolunda yığın akışa kuyruk (seyrek akışlar etkilenmiyor); kanal/komşu kaynaklı olabilir. Modem birkaç gün önce ch 36'daydı → otomatik kanal.
 - USB A/B (1986×1242, Oyun 120, 60 Mbps), her kol ~1 dk: A `c2.mtk.hevc.decoder` drop 0, fps 120, latency 6,4–7,5 ms, dec p50/p95/p99 5,5/7,2/8,5 ms; B `c2.mtk.hevc.decoder.lowlatency` (`low_latency=on`) drop 0 (bir pencerede 90), latency 6,7–7,4 ms, dec 5,9/7,1/7,9 ms. Fark yok → varsayılan çözücü kalır, kod değişikliği gerekmez.
 - Açık: `wifi_ll` için temiz Wi-Fi'da ayrı A/B; modemde sabit 5 GHz kanalı denemesi.
+
+## 2026-11-08 — USB 3 kablo + dokunmasız 120 Hz için SurfaceFlinger arka kapısı
+
+- MatePad ilk kez USB 3 kabloyla: Mac `Link Speed: 5 Gb/s` (önceki kablo 480 Mb/s). `adb push` Mac→tablet 128 MB: **220 MB/s**. `adb reverse` tünelleri (47001/47002/47004) kurulu. APK f83422d6 (2026-10-28).
+- Kullanıcı: Oyun modunda 100 Mbps ile netlik arttı; dokunma yokken panel 60'a iniyor, takılıyor (bilinen Huawei AGP kuralı, T-140/T-243/0041).
+- Denendi: `service call SurfaceFlinger 1035 i32 0` (mod 0 = 120 Hz) → `Operation not permitted` (shell'de `HARDWARE_TEST` olsa da Huawei engelliyor). `dumpsys` "mode override by backdoor: no". Bu yol da kapalı.
+- Kalan tek yol hâlâ shell'den sahte dokunma (2026-10-20 notu). Wi-Fi'de adb kalıcı olmadığı için reddedilmişti; USB'de adb hep var → yeniden kullanıcıya önerildi.
