@@ -169,6 +169,9 @@ public final class StreamCoordinator: @unchecked Sendable {
     /// T-328: Wi-Fi congestion control of the current video connection; nil unless `MATEBRIDGE_WIFI_ADAPT=1` and the
     /// session is on the network. Started with the sender, stopped with it (`stopAdaptation`).
     private var adaptDriver: WifiAdaptationDriver?
+    /// T-389: the 120 Hz hold (adb tap over USB); nil unless `MATEBRIDGE_HOLD120=1`, so nothing exists with the knob off.
+    /// Fed by `refreshHold120` after every event and by `deliver` (real input times).
+    private let hold120: Hold120Controller?
     private var session: ActiveSession?
     private var lastSent = VideoSender.Counters()
     /// T-289: bounded rebuilds after a running pipeline died, and the HDR10 to SDR fallback after repeated encoder failures.
@@ -217,6 +220,7 @@ public final class StreamCoordinator: @unchecked Sendable {
 
     init(graceUs: UInt64, prefsStore: StreamPrefsStoring) {
         self.prefsStore = prefsStore
+        hold120 = Hold120Knob.isEnabled(ProcessInfo.processInfo.environment) ? Hold120Controller() : nil
         lease = DisplayLease(graceUs: graceUs)
     }
 
@@ -336,6 +340,7 @@ public final class StreamCoordinator: @unchecked Sendable {
 
     /// Messages from the approved session; only `KEYFRAME_REQUEST` and `STATS` are handled here.
     public func deliver(_ message: Message) {
+        if let hold120, Hold120Input.counts(message.type) { hold120.noteInput() }  // T-389: type only, no content
         switch message {
         case .keyframeRequest(let reason, let view): post(.keyframeRequest(reason, view), key: Self.keyframeKey)
         case .stats(let stats): post(.stats(stats), key: Self.statsKey)
@@ -453,6 +458,24 @@ public final class StreamCoordinator: @unchecked Sendable {
     // MARK: Event loop
 
     private func handle(_ event: Event) async {
+        await handleEvent(event)
+        refreshHold120()
+    }
+
+    /// T-389: pushes the session facts to the 120 Hz hold (it ignores unchanged ones). After shutdown it sees no session.
+    private func refreshHold120() {
+        guard let hold120 else { return }
+        var facts = Hold120Conditions.none
+        if let s = session, !isShuttingDown {
+            facts.usbTransport = s.transport == .usb
+            if case .sender = consumer { facts.videoFlowing = true }
+            facts.gameScreen = !s.settings.displayHiDPI
+            facts.streamFps = s.settings.fps
+        }
+        hold120.update(sessionFacts: facts)
+    }
+
+    private func handleEvent(_ event: Event) async {
         if isShuttingDown {
             // After shutdown() nothing new may start (no display, no sender): only the shutdown itself runs.
             switch event {
@@ -877,6 +900,7 @@ public final class StreamCoordinator: @unchecked Sendable {
 
     private func onShutdown() async {
         session = nil
+        hold120?.shutdown()
         wakePolicy.sessionEnded()
         gateLock.withLock { sleepGate.cancelPending() }
         logDisplaySleep(displaySleep.release())

@@ -603,6 +603,14 @@ Oturum donanım kodlayıcıyı ister (`EnableHardwareAcceleratedVideoEncoder`) a
 - Ağ üzerinden adb cihazları (`adb connect` ile `host:port`, Kablosuz hata ayıklamanın `adb-…._adb-tls-connect._tcp` mDNS adı) USB sayılmaz ve seçilmez. Yalnız ağ cihazı bağlıysa durum `no_device` olur ve tünel kurulmaz. Aynı kural `files` tarafındaki `adb forward` için de geçerlidir.
 - Seri numarası loglanmaz.
 
+### USB'de 120 Hz tutma (Mac, `usb`, T-389, karar 0044)
+
+Yalnız `MATEBRIDGE_HOLD120=1` iken (varsayılan kapalı; kapalıyken hiçbir satır yazılmaz).
+
+- `ev=hold120 state=on` / `state=off reason=no_device|not_usb|no_video|not_game|fps_not_120`: yalnız durum ya da kapalıyken neden değişince yazılır. `reason` ilk bozulan koşuldur (sıra: tünel+seri, USB taşıması, video, Oyun ekranı, 120 fps). `not_usb` oturum yokken de çıkar.
+- `ev=hold120_stats taps=<n> skipped_input=<n> failures=<n>`: en çok 30 sn'de bir, yalnız açıkken; toplamlar denetleyicinin başlangıcından beri. `skipped_input`: son 1,5 sn'de gerçek dokunma/kalem/işaretçi mesajı geldiği için atlanan tur. `failures`: adb hatası ya da 2 sn zaman aşımı.
+- Seri numarası, girdi içeriği ve tuş bilgisi loglanmaz; sahte dokunmanın koordinatı sabittir (2,2) ve yazılmaz.
+
 ## Mac'in yeni adresini yeniden keşif (tablet, `MB/session`, T-227)
 
 Adresler yalnız son IPv4 oktetiyle yazılır (`*.107`; IPv4 olmayan `*`), tam adres ve host adı yazılmaz.

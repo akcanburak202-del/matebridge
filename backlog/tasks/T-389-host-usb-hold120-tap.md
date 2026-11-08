@@ -1,7 +1,7 @@
 ---
 id: T-389
 title: Host — USB'de 120 Hz'i tut (MATEBRIDGE_HOLD120, periyodik adb tap)
-status: todo
+status: review
 phase: 7
 owner: mac-host-dev
 depends_on: [T-039, T-325]
@@ -60,4 +60,12 @@ Saf mantik `MateBridgeCore`, adb/zamanlayici `MateBridgeHost`; main.swift dokunu
 
 ## Handoff
 
+- **Branch:** `task/T-389-hold120` (plan commit 4883e338, then the implementation commit; SHA in the final report). `./scripts/check.sh`: ALL OK (1300 Swift tests, 21 new in `Hold120PlannerTests`).
+- **Files:** `MateBridgeCore/Usb/Hold120Planner.swift` (new: `Hold120Reason`, `Hold120Conditions`, `Hold120Input`, `Hold120Planner`), `MateBridgeCore/Session/TransportKnobs.swift` (`Hold120Knob`), `MateBridgeHost/Usb/Hold120Tap.swift` (new: `Hold120Controller`), `MateBridgeHost/Usb/UsbDeviceRegistry.swift` (new), `MateBridgeHost/Usb/UsbTunnelWatcher.swift` (publishes serial), `MateBridgeHost/Session/StreamCoordinator.swift`, `Tests/MateBridgeCoreTests/Usb/Hold120PlannerTests.swift`, `docs/KNOBS.md` (row 50), `docs/LOGGING.md`, this card. Task branch was fast-forwarded to `main` first (the card and 0044 were committed after the worktree base).
+- **Design:** the knob off -> `StreamCoordinator.hold120 == nil`: no controller, timer, registry observer or adb call; `deliver` and `handle` only add a nil check. On: `refreshHold120()` runs after every coordinator event and pushes session facts (`session.transport == .usb`, a `.sender` consumer, `!settings.displayHiDPI` = game display, `settings.fps == 120`). The device condition comes from the new `UsbDeviceRegistry`, which `UsbTunnelWatcher.tick` fills with the serial only while its state is `.up` (and clears on disable); `main.swift` is outside the card's files, so the controller is wired through the coordinator and the registry instead of the app. Real input: `deliver` stamps a lock-protected time for pen, pointerRel, pointerAbs, scroll, penGesture, pinch, padSwipe (type only; keys do not count). Timer exists only while on and no tap runs; adb runs on its own queue with a 2 s `ProcessRunner` deadline, `-s <serial> shell input touchscreen tap 2 2` only. No tap if the adb server does not answer on loopback (counts as a failure; the hold never starts a server).
+- **Assumptions:** "Oyun ekranı etkin" = the 1x game display (decision 0029) is in use, not just a stream mode. `deviceKnown` also means the watcher state is `up` (device present and all tunnels installed). Stats are cumulative totals since the controller started. Tap spacing is measured from tap completion. `reason=not_usb` also covers "no session". The hold's first tap happens immediately when conditions become true.
+- **Not tested / needs the real tablet (orchestrator):** the tap itself (the client swallowing it is T-390, install the client first); that the real `input touchscreen tap 2 2` keeps the panel at 120 Hz over many minutes; the 1.5 s input wait vs lost real touches/pen; heat/battery; behavior when the cable is unplugged mid-session (the watcher notices through IOKit, then the next tap fails and backs off); `ev=hold120` / `ev=hold120_stats` lines in the real log.
+
 ## Open questions
+
+- Not blocking: `ev=profile knobs=` (`StreamProfileLog.knobAllowList`) does not list `MATEBRIDGE_HOLD120` (that file is outside this card's files; KNOBS row says so). Add it later if the knob is kept.
