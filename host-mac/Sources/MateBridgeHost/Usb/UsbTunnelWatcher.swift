@@ -49,6 +49,7 @@ public final class UsbTunnelWatcher: @unchecked Sendable {
                 usbEvents?.stop()
                 usbEvents = nil
                 planner.usbEventsAvailable = false
+                UsbDeviceRegistry.shared.publish(nil)  // before the removal below, which blocks on adb (T-389)
                 startRemoval()
                 planner.reset()
                 lastActionFailed = false
@@ -104,6 +105,7 @@ public final class UsbTunnelWatcher: @unchecked Sendable {
         lastDeviceSerial = serial
 
         let decision = planner.decide(snapshot)
+        UsbDeviceRegistry.shared.publish(decision.state == .up ? serial : nil)  // T-389: the 120 Hz hold's adb target
         if let change = decision.stateChange {
             logger.log(change == .noAdb ? .warning : .info, "usb_tunnel", sessionID: 0, generation: 0,
                        fields: "state=\(change.rawValue)")

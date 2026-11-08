@@ -1,7 +1,7 @@
 ---
 id: T-389
 title: Host — USB'de 120 Hz'i tut (MATEBRIDGE_HOLD120, periyodik adb tap)
-status: todo
+status: review
 phase: 7
 owner: mac-host-dev
 depends_on: [T-039, T-325]
@@ -46,8 +46,38 @@ Karar 0044, host tarafı. `MATEBRIDGE_HOLD120=1` açıkken ve koşullar sağland
 
 ## Plan
 
-(boş; ajan doldurur ve önce commit eder)
+Saf mantik `MateBridgeCore`, adb/zamanlayici `MateBridgeHost`; main.swift dokunulmaz (kart dosya listesinde yok), baglanti `StreamCoordinator` icinden.
+
+1. `TransportKnobs.swift`: `Hold120Knob` (`MATEBRIDGE_HOLD120`, yalniz `1`), `WifiAdaptKnob` duzeninde.
+2. `Core/Usb/Hold120Planner.swift` (saf, saat girdili):
+   - `Hold120Conditions` (tunel+seri, usb tasimasi, video, oyun ekrani, 120 fps) ve `firstBroken` -> `Hold120Reason` (log `reason=`).
+   - `Hold120Planner.decide(now:conditions:lastInputUs:)` -> `.off(reason)` / `.wait(until)` / `.skipInput` / `.tap`. Aralik 1 sn, gercek girdi sessizligi 1,5 sn, ayni anda en cok bir cagri (in-flight), ardisik hata geri cekilmesi 1->2->5 sn (basarida sifirlanir), durum degisimi (`stateChange`) ve 30 sn stats penceresi. `Hold120Input.counts(MessageType)`: pen, pointerRel, pointerAbs, scroll, penGesture, pinch, padSwipe (tus ve diger mesajlar sayilmaz).
+3. `Host/Usb/UsbDeviceRegistry.swift`: kilitli, `UsbTunnelWatcher.tick` tunel `up` iken seriyi yayinlar, aksi halde/devre disi iken siler; tek gozlemci geri cagrisi. `UsbTunnelWatcher.swift` kucuk degisiklik.
+4. `Host/Usb/Hold120Tap.swift`: `Hold120Controller` (kendi seri kuyrugu + ayri adb kuyrugu, ana is parcacigi/video/girdi yolu yok). `updateConditions` (esitse yok sayar), `noteInput()` (kilitli zaman damgasi, sicak yol), zamanlayici yalniz kosullar saglanirken calisir. Komut yalniz `adb -s <seri> shell input touchscreen tap 2 2`, `ProcessRunner` + `AdbBinary.environment`, 2 sn zaman asimi, adb sunucusu kapaliysa cagri yok (basarisiz sayilir). Loglar `usb` bileseni, `ev=hold120`, `ev=hold120_stats`.
+5. `StreamCoordinator`: anahtar aciksa denetleyici olusturulur (kapaliyken nil -> sifir fark); `deliver` icinde `noteInput`; `handle` sonunda kosullar (`session.transport == .usb`, `consumer == .sender`, `!settings.displayHiDPI`, `settings.fps == 120`) itilir; `onShutdown`'da durdurulur.
+6. Testler: knob, planner (kosullar, ilk bozulan neden, girdi atlama, aralik, in-flight, geri cekilme, stats, durum degisimi), `Hold120Input`.
+7. `docs/KNOBS.md` satir 50, `docs/LOGGING.md` bolumu.
 
 ## Handoff
 
+- **Branch:** `task/T-389-hold120` (plan commit 4883e338, then the implementation commit; SHA in the final report). `./scripts/check.sh`: ALL OK (1300 Swift tests, 21 new in `Hold120PlannerTests`).
+- **Files:** `MateBridgeCore/Usb/Hold120Planner.swift` (new: `Hold120Reason`, `Hold120Conditions`, `Hold120Input`, `Hold120Planner`), `MateBridgeCore/Session/TransportKnobs.swift` (`Hold120Knob`), `MateBridgeHost/Usb/Hold120Tap.swift` (new: `Hold120Controller`), `MateBridgeHost/Usb/UsbDeviceRegistry.swift` (new), `MateBridgeHost/Usb/UsbTunnelWatcher.swift` (publishes serial), `MateBridgeHost/Session/StreamCoordinator.swift`, `Tests/MateBridgeCoreTests/Usb/Hold120PlannerTests.swift`, `docs/KNOBS.md` (row 50), `docs/LOGGING.md`, this card. Task branch was fast-forwarded to `main` first (the card and 0044 were committed after the worktree base).
+- **Design:** the knob off -> `StreamCoordinator.hold120 == nil`: no controller, timer, registry observer or adb call; `deliver` and `handle` only add a nil check. On: `refreshHold120()` runs after every coordinator event and pushes session facts (`session.transport == .usb`, a `.sender` consumer, `!settings.displayHiDPI` = game display, `settings.fps == 120`). The device condition comes from the new `UsbDeviceRegistry`, which `UsbTunnelWatcher.tick` fills with the serial only while its state is `.up` (and clears on disable); `main.swift` is outside the card's files, so the controller is wired through the coordinator and the registry instead of the app. Real input: `deliver` stamps a lock-protected time for pen, pointerRel, pointerAbs, scroll, penGesture, pinch, padSwipe (type only; keys do not count). Timer exists only while on and no tap runs; adb runs on its own queue with a 2 s `ProcessRunner` deadline, `-s <serial> shell input touchscreen tap 2 2` only. No tap if the adb server does not answer on loopback (counts as a failure; the hold never starts a server).
+- **Assumptions:** "Oyun ekranı etkin" = the 1x game display (decision 0029) is in use, not just a stream mode. `deviceKnown` also means the watcher state is `up` (device present and all tunnels installed). Stats are cumulative totals since the controller started. Tap spacing is measured from tap completion. `reason=not_usb` also covers "no session". The hold's first tap happens immediately when conditions become true.
+- **Not tested / needs the real tablet (orchestrator):** the tap itself (the client swallowing it is T-390, install the client first); that the real `input touchscreen tap 2 2` keeps the panel at 120 Hz over many minutes; the 1.5 s input wait vs lost real touches/pen; heat/battery; behavior when the cable is unplugged mid-session (the watcher notices through IOKit, then the next tap fails and backs off); `ev=hold120` / `ev=hold120_stats` lines in the real log.
+
+## Review round 1 (Codex high, three P2s, all fixed in one commit)
+
+1. **Taps during teardown:** the hold conditions are now published before the awaiting teardown steps, not only after `handleEvent` returns: `refreshHold120()` runs right after `session = nil` in `onSessionEnded`, after `consumer = .none` in `stopConsumer` and `onSenderEnded`, after `session = live` when `applyPrefs` or the game-display fallback changes the stream mode, and in `onShutdown`. `sessionEnded()` (entry point, any thread) pushes `.none` to the controller at once, `shutdown(timeout:)` calls `hold120?.shutdown()` directly before posting its event, and `refreshHold120` also treats "no live session id" as no session so a late event cannot re-enable the hold.
+2. **Clock-read race:** `Hold120Controller.reevaluate` reads the input stamp before the clock; `Hold120Planner.next` also treats a stamp newer than `nowUs` as recent input (test `testInputStampedAfterTheClockReadCountsAsRecent`).
+3. **Registry clear before removal:** `UsbTunnelWatcher.setEnabled(false)` calls `UsbDeviceRegistry.shared.publish(nil)` before `startRemoval()`.
+
+`./scripts/check.sh`: ALL OK.
+
+## Review round 2 (Codex high, one P2, fixed)
+
+Reconfiguration could enable taps before the new mode was streaming (requested game/120 combined with the old attached native/60 sender). Now the conditions come from what is actually streaming: `StreamCoordinator.attachedMode` (`Hold120StreamMode`: config id, game display, fps) is set when the video sender is created in `onVideoAttached` from the settings the matching pipeline runs, and cleared in `stopConsumer` and `onSenderEnded`. `Hold120StreamMode.conditions(attached:requested:usbTransport:)` (Core, tested) reports video flowing only if the attached sender's `config_id` equals the session's current one (every reconfiguration bumps it), and game screen / 120 fps only if the attached mode has them and the request still agrees. A prefs change can therefore publish "off" early but never "on"; the hold turns on only once the matching sender has attached. Tests: `testRequestedGame120WithOldNativeSenderNeverEnables`, `testMatchingAttachedSenderEnables`, `testSameConfigButRequestedModeDiffersOnlyDisables`, `testRequestedNativeWithAttachedGame120DoesNotEnable`, `testNoSenderOrNoSessionIsOff`, `testWifiTransportStaysOff`. `./scripts/check.sh`: ALL OK. Known residual: a tap already running when the hold turns off cannot be cancelled (one adb call of at most 2 s).
+
 ## Open questions
+
+- Not blocking: `ev=profile knobs=` (`StreamProfileLog.knobAllowList`) does not list `MATEBRIDGE_HOLD120` (that file is outside this card's files; KNOBS row says so). Add it later if the knob is kept.

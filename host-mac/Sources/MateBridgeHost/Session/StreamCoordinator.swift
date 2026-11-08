@@ -165,10 +165,16 @@ public final class StreamCoordinator: @unchecked Sendable {
     /// `onShutdown` only clear a leftover one (rebuild on it, or invalidate).
     private var parked: (display: VirtualDisplay, sinceUs: UInt64)?
     private var consumer = Consumer.none
+    /// T-389: the stream mode the attached `.sender` was started with (what is streaming now); nil whenever the
+    /// consumer is not a sender. Never derived from requested prefs.
+    private var attachedMode: Hold120StreamMode?
     private var consumerID = 0
     /// T-328: Wi-Fi congestion control of the current video connection; nil unless `MATEBRIDGE_WIFI_ADAPT=1` and the
     /// session is on the network. Started with the sender, stopped with it (`stopAdaptation`).
     private var adaptDriver: WifiAdaptationDriver?
+    /// T-389: the 120 Hz hold (adb tap over USB); nil unless `MATEBRIDGE_HOLD120=1`, so nothing exists with the knob off.
+    /// Fed by `refreshHold120` after every event and by `deliver` (real input times).
+    private let hold120: Hold120Controller?
     private var session: ActiveSession?
     private var lastSent = VideoSender.Counters()
     /// T-289: bounded rebuilds after a running pipeline died, and the HDR10 to SDR fallback after repeated encoder failures.
@@ -217,6 +223,7 @@ public final class StreamCoordinator: @unchecked Sendable {
 
     init(graceUs: UInt64, prefsStore: StreamPrefsStoring) {
         self.prefsStore = prefsStore
+        hold120 = Hold120Knob.isEnabled(ProcessInfo.processInfo.environment) ? Hold120Controller() : nil
         lease = DisplayLease(graceUs: graceUs)
     }
 
@@ -327,6 +334,7 @@ public final class StreamCoordinator: @unchecked Sendable {
 
     public func sessionEnded() {
         liveSessionLock.withLock { liveSessionID = nil }
+        hold120?.update(sessionFacts: .none)  // T-389: at once, not when the loop gets to the end event
         // Forced (beyond the lifecycle cap, at most one per session): the display-sleep assertion is released here,
         // so this event must never be dropped by an overflow (T-128).
         post(.sessionEnded, forced: true)
@@ -336,6 +344,7 @@ public final class StreamCoordinator: @unchecked Sendable {
 
     /// Messages from the approved session; only `KEYFRAME_REQUEST` and `STATS` are handled here.
     public func deliver(_ message: Message) {
+        if let hold120, Hold120Input.counts(message.type) { hold120.noteInput() }  // T-389: type only, no content
         switch message {
         case .keyframeRequest(let reason, let view): post(.keyframeRequest(reason, view), key: Self.keyframeKey)
         case .stats(let stats): post(.stats(stats), key: Self.statsKey)
@@ -355,6 +364,7 @@ public final class StreamCoordinator: @unchecked Sendable {
     /// Do not call from the coordinator's own callbacks.
     public func shutdown(timeout: TimeInterval = 2) {
         shutdownLock.withLock { shuttingDown = true }
+        hold120?.shutdown()  // T-389: no more taps, whatever the event loop is doing
         tickTimer?.cancel()
         tickTimer = nil
         watchdogTimer?.cancel()
@@ -453,6 +463,28 @@ public final class StreamCoordinator: @unchecked Sendable {
     // MARK: Event loop
 
     private func handle(_ event: Event) async {
+        await handleEvent(event)
+        refreshHold120()
+    }
+
+    /// T-389: pushes the session facts to the 120 Hz hold (it ignores unchanged ones). After shutdown it sees no session.
+    private func refreshHold120() {
+        guard let hold120 else { return }
+        var facts = Hold120Conditions.none
+        if let s = session, !isShuttingDown, liveSessionLock.withLock({ liveSessionID }) != nil {
+            // Only what is streaming now counts (the mode the attached sender started with); the session's requested
+            // settings can switch the hold off but never on (review round 2).
+            var attached: Hold120StreamMode?
+            if case .sender = consumer { attached = attachedMode }
+            facts = Hold120StreamMode.conditions(
+                attached: attached,
+                requested: Hold120StreamMode(configID: s.configID, gameScreen: !s.settings.displayHiDPI, fps: s.settings.fps),
+                usbTransport: s.transport == .usb)
+        }
+        hold120.update(sessionFacts: facts)
+    }
+
+    private func handleEvent(_ event: Event) async {
         if isShuttingDown {
             // After shutdown() nothing new may start (no display, no sender): only the shutdown itself runs.
             switch event {
@@ -647,6 +679,7 @@ public final class StreamCoordinator: @unchecked Sendable {
         live.settings = wanted
         live.configID = nextConfigID(after: live.configID)
         session = live
+        refreshHold120()  // new stream mode: before the rebuild awaits (T-389)
         prefsGate.markApplied(now: HostClock.nowUs())
         log(.info, "stream_reconfigure",
             "config_id=\(live.configID) fps=\(old.fps)->\(wanted.fps) scale=\(old.scalePermille)->\(wanted.scalePermille) "
@@ -662,6 +695,7 @@ public final class StreamCoordinator: @unchecked Sendable {
 
     private func onSessionEnded() async {
         session = nil
+        refreshHold120()  // before any teardown await (T-389)
         wakePolicy.sessionEnded()
         gateLock.withLock { sleepGate.cancelPending() }
         logDisplaySleep(displaySleep.release())
@@ -717,6 +751,7 @@ public final class StreamCoordinator: @unchecked Sendable {
                                  },
                                  clock: { HostClock.nowUs() })
         consumer = .sender(id: id, sender, link)
+        attachedMode = Hold120StreamMode(configID: s.configID, gameScreen: !s.settings.displayHiDPI, fps: s.settings.fps)
         lastSent = VideoSender.Counters()
         // T-328: the gate is in place before the first frame is taken. USB sessions never get here (never consulted).
         if WifiAdaptKnob.isActive(ProcessInfo.processInfo.environment, transport: s.transport) {
@@ -731,6 +766,8 @@ public final class StreamCoordinator: @unchecked Sendable {
     private func onSenderEnded(id: Int, reason: VideoSender.EndReason) async {
         guard case .sender(let current, _, let link) = consumer, current == id else { return }
         consumer = .none
+        attachedMode = nil
+        refreshHold120()
         stopAdaptation()
         link.cancel()  // the client sees EOF and reopens the video connection
         log(.info, "video_sender_ended", "reason=\(reason)")
@@ -877,6 +914,7 @@ public final class StreamCoordinator: @unchecked Sendable {
 
     private func onShutdown() async {
         session = nil
+        hold120?.shutdown()  // T-389 (also stopped directly by `shutdown`)
         wakePolicy.sessionEnded()
         gateLock.withLock { sleepGate.cancelPending() }
         logDisplaySleep(displaySleep.release())
@@ -1197,6 +1235,7 @@ public final class StreamCoordinator: @unchecked Sendable {
         live.settings = native
         live.configID = nextConfigID(after: live.configID)
         session = live
+        refreshHold120()
         log(.warning, "game_display_failed", "applied=\(native.displayModeText) requested=\(old.displayModeText) "
             + "config_id=\(live.configID) encoded=\(native.encodedWidthPx)x\(native.encodedHeightPx) "
             + "bitrate_kbps=\(native.bitrateKbps)")
@@ -1340,6 +1379,8 @@ public final class StreamCoordinator: @unchecked Sendable {
     private func stopConsumer() async {
         let old = consumer
         consumer = .none
+        attachedMode = nil
+        refreshHold120()  // video detached: stop before the bounded waits below (T-389)
         stopAdaptation()
         switch old {
         case .none: break

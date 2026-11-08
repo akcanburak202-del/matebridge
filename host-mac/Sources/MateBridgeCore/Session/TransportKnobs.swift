@@ -199,3 +199,15 @@ public enum WifiAdaptKnob {
         return isEnabled(env)
     }
 }
+
+/// `MATEBRIDGE_HOLD120=1` (T-389, decision 0044): over USB, while the game display streams at 120 fps, the host sends a
+/// harmless `adb shell input touchscreen tap 2 2` about once a second so Huawei's panel governor stays at 120 Hz
+/// (it drops to 60 Hz without touch, pen or pointer input). Default off. Only `1` turns it on; absent or anything
+/// else is off. With the knob off no timer and no adb call exist.
+public enum Hold120Knob {
+    public static let name = "MATEBRIDGE_HOLD120"
+
+    public static func isEnabled(_ env: [String: String]) -> Bool {
+        env[name]?.trimmingCharacters(in: .whitespaces) == "1"
+    }
+}
