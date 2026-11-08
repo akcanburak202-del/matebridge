@@ -34,6 +34,7 @@ import android.widget.EditText
 import android.widget.TextView
 import android.widget.Toast
 import dev.matebridge.client.input.DoubleTapDetector
+import dev.matebridge.client.input.InjectedHoldTap
 import dev.matebridge.client.input.InputCapture
 import dev.matebridge.client.input.InputSink
 import dev.matebridge.client.input.PreImeFrameLayout
@@ -786,6 +787,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
+        if (!hasFocus) holdTap.reset() // T-390
         if (hasFocus) applyImmersive()
         if (::clipboard.isInitialized) { if (hasFocus) clipboard.start() else clipboard.stop() } // clipboard reads need focus
         if (!::capture.isInitialized) return
@@ -794,6 +796,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     override fun onPause() {
+        holdTap.reset() // T-390
         // Release before onStop() closes the session, so RELEASE_ALL is queued ahead of BYE (PROTOCOL.md section 7).
         if (::capture.isInitialized) capture.releaseAll(ReleaseAll.BACKGROUND, SystemClock.uptimeMillis())
         if (::sidePanel.isInitialized) closeSettingsPanel(SettingsPanelState.Via.BACKGROUND, resync = false) // T-105; the ticker re-syncs
@@ -816,6 +819,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private var lastCaptureRequestMs = 0L
+    private val holdTap = InjectedHoldTap() // T-390
 
     /**
      * Pointer capture (touchpad and mouse, T-034) is wanted while input is accepted, the window has focus and input is not
@@ -884,11 +888,24 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
         noteInputActivity()
+        if (swallowHoldTap(ev)) return true // T-390: before routing; no idle signal from it
         try {
             return routeToCapture(ev) || super.dispatchTouchEvent(ev)
         } finally {
             noteIdleInput()
         }
+    }
+
+    /**
+     * T-390 (decision 0044): the host's USB 120 Hz hold tap (`input touchscreen tap 2 2` from a virtual device) is
+     * swallowed here: not routed to the Mac, not shown to the views, not counted as idle input.
+     */
+    private fun swallowHoldTap(ev: MotionEvent): Boolean {
+        val swallowed = holdTap.onTouch(ev.actionMasked, ev.deviceId, ev.source, ev.pointerCount, ev.rawX, ev.rawY) {
+            InputDevice.getDevice(ev.deviceId)?.isVirtual == false
+        }
+        if (swallowed) holdTap.takeLog(SystemClock.uptimeMillis())?.let { MbLog.i("hold_tap_swallowed", "n=$it", "input") }
+        return swallowed
     }
 
     override fun dispatchGenericMotionEvent(ev: MotionEvent): Boolean {

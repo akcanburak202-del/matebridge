@@ -744,3 +744,6 @@ Kamera görüntüsü hiçbir yerde loglanmaz ya da yazılmaz; yalnız sayaçlar 
 - `I input ev=pad_swipe dir=up|down|left|right`: üç parmağın ortak yolu eşiği geçti ve `PAD_SWIPE` gönderildi. Hareket başına en çok bir satır.
 - `I input ev=pad_swipe3_end dx=<n> dy=<n> sent=0|1 max=<n>`: üç parmaklı bir hareketin bitişi (son parmak kalktı). `dx`/`dy`: parmakların ortak yolunun (ağırlık merkezi) başlangıçtan son konuma ham pad birimi farkı (pad eni ~1560). `max`: harekette aynı anda görülen en çok parmak. Bu satır hiç çıkmıyorsa HarmonyOS üç parmak touchpad olayını uygulamaya iletmiyordur. Dört parmakta çıkmaz. Seyrek olduğu için info düzeyindedir (kart debug demişti; `MainActivity` kart kapsamı dışında).
 - Parmak koordinatı ve tuş loglanmaz.
+
+## USB 120 Hz tutma dokunması yutma (tablet, `MB/input`, T-390, karar 0044)
+- `I input ev=hold_tap_swallowed n=<toplam>`: host'un `adb shell input touchscreen tap 2 2` dokunması (sanal/bilinmeyen aygıt, dokunmatik ekran kaynağı, tek parmak, sol üst köşe ≤ 4 px) tablette yutuldu; Mac'e gitmedi, boşta sayacını beslemedi. `n`: uygulama açıldığından beri yutulan toplam. En çok 30 sn'de bir, yalnız sayı değiştiyse. Konum ve aygıt adı yazılmaz.
