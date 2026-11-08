@@ -1,7 +1,7 @@
 ---
 id: T-390
 title: İstemci — host'un 120 Hz tutma dokunmasını (adb tap 2,2) yut
-status: review
+status: done
 phase: 7
 owner: android-client-dev
 depends_on: [T-234]

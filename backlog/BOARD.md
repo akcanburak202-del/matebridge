@@ -396,3 +396,5 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-386](tasks/T-386-client-buildconfig-sha-stale.md) | İstemci — BuildConfig.GIT_SHA/BUILD_TIME_UTC artımlı derlemede eskide kalmasın | 7 | android-client-dev | [] |
 | [T-387](tasks/T-387-client-game-resolution-from-native.md) | İstemci — oyun çözünürlüğü seçenekleri tabletin doğal boyutundan (oranla) hesaplanır | 7 | android-client-dev | [T-215, T-223, T-245] |
 | [T-388](tasks/T-388-client-decoder-wifi-latency-knobs.md) | İstemci — geliştirici anahtarları `decoder=<ad>` ve `wifi_ll` (Xiaomi düşük gecikme A/B) | 7 | android-client-dev | [T-381] |
+| [T-389](tasks/T-389-host-usb-hold120-tap.md) | Host — USB'de 120 Hz'i tut (MATEBRIDGE_HOLD120, periyodik adb tap) | 7 | mac-host-dev | [T-039, T-325] |
+| [T-390](tasks/T-390-client-swallow-hold120-tap.md) | İstemci — host'un 120 Hz tutma dokunmasını (adb tap 2,2) yut | 7 | android-client-dev | [T-234] |

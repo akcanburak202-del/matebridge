@@ -2234,3 +2234,10 @@ Statik inceleme (`/system/lib64/libagp.so`, `hwServices.jar`, `hwEmui.jar`, `agp
 - **Denenmedi:** 221 "stylus mode" (gerçek kalem durumunu bozabilir; adı max hızla ilgili), 212/351 (fps sınırlama, düşürme yönlü), 74/78/80 (zamanlama/iAware).
 - **Sonuç:** Uygulama içinden ya da adb'den temiz bir "120 Hz'i tut" yolu yok. Çalışan tek yol hâlâ shell'den sahte dokunma (2026-10-20), yalnız USB'de kalıcı. Ham dosyalar ve araçlar oturum scratch'inde (repo dışında).
 - **Tekrar (14:3x, kullanıcı sordu):** ilk denemeler MateBridge Günlük 60'tayken yapılmıştı (istemci `preferredDisplayModeId` 60 + `setFrameRate(60)` istiyor) → 79/77/108 sonuçları şüpheliydi. Oyun 120'de (`target_hz=120`, dokunmasız panel 60 doğrulandı) yeniden: 79 (`set framerate boost - 1` logu görüldü), 77, 108 → panel yine 60. Sonuç değişmedi. Probe kaldırıldı.
+
+## 2026-11-08 ~15:15 — 0044 USB'de 120 Hz'i tut: T-389 + T-390 birleşti ve kuruldu
+
+- Main 2c2a7677: T-389 (host, Codex high 3 tur: teardown sırasında dokunma, saat okuma yarışı, kayıt temizleme sırası, ayar değişince erken açılma → düzeltildi) + T-390 (istemci, Codex high temiz). check.sh ALL OK.
+- Kuruldu: daily APK 0.1-2c2a7677 (15:15), host bundle 2c2a7677 `open --env MATEBRIDGE_HOLD120=1` ile. **Host normal açılışta anahtar kapalı döner** (env yalnız bu açılış için).
+- Cihazda doğrulandı: Günlük 60'ta `ev=hold120 state=off reason=not_game`; elle `input touchscreen tap 2 2` → istemci `ev=hold_tap_swallowed n=1`, Mac'e gitmedi.
+- **Denenmedi (kullanıcı oturumu kapattı):** Oyun 120'de dokunmasız panel 120 kalıyor mu (`dumpsys SurfaceFlinger` Current mode, host `display_rate`), `hold120_stats`, gerçek dokunuş/kalem kaybı, ısı, kablo çekme. Kullanıcıya test listesi verildi.

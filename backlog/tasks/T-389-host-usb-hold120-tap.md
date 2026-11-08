@@ -1,7 +1,7 @@
 ---
 id: T-389
 title: Host — USB'de 120 Hz'i tut (MATEBRIDGE_HOLD120, periyodik adb tap)
-status: review
+status: done
 phase: 7
 owner: mac-host-dev
 depends_on: [T-039, T-325]
