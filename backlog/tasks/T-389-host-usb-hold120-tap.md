@@ -46,7 +46,17 @@ Karar 0044, host tarafı. `MATEBRIDGE_HOLD120=1` açıkken ve koşullar sağland
 
 ## Plan
 
-(boş; ajan doldurur ve önce commit eder)
+Saf mantik `MateBridgeCore`, adb/zamanlayici `MateBridgeHost`; main.swift dokunulmaz (kart dosya listesinde yok), baglanti `StreamCoordinator` icinden.
+
+1. `TransportKnobs.swift`: `Hold120Knob` (`MATEBRIDGE_HOLD120`, yalniz `1`), `WifiAdaptKnob` duzeninde.
+2. `Core/Usb/Hold120Planner.swift` (saf, saat girdili):
+   - `Hold120Conditions` (tunel+seri, usb tasimasi, video, oyun ekrani, 120 fps) ve `firstBroken` -> `Hold120Reason` (log `reason=`).
+   - `Hold120Planner.decide(now:conditions:lastInputUs:)` -> `.off(reason)` / `.wait(until)` / `.skipInput` / `.tap`. Aralik 1 sn, gercek girdi sessizligi 1,5 sn, ayni anda en cok bir cagri (in-flight), ardisik hata geri cekilmesi 1->2->5 sn (basarida sifirlanir), durum degisimi (`stateChange`) ve 30 sn stats penceresi. `Hold120Input.counts(MessageType)`: pen, pointerRel, pointerAbs, scroll, penGesture, pinch, padSwipe (tus ve diger mesajlar sayilmaz).
+3. `Host/Usb/UsbDeviceRegistry.swift`: kilitli, `UsbTunnelWatcher.tick` tunel `up` iken seriyi yayinlar, aksi halde/devre disi iken siler; tek gozlemci geri cagrisi. `UsbTunnelWatcher.swift` kucuk degisiklik.
+4. `Host/Usb/Hold120Tap.swift`: `Hold120Controller` (kendi seri kuyrugu + ayri adb kuyrugu, ana is parcacigi/video/girdi yolu yok). `updateConditions` (esitse yok sayar), `noteInput()` (kilitli zaman damgasi, sicak yol), zamanlayici yalniz kosullar saglanirken calisir. Komut yalniz `adb -s <seri> shell input touchscreen tap 2 2`, `ProcessRunner` + `AdbBinary.environment`, 2 sn zaman asimi, adb sunucusu kapaliysa cagri yok (basarisiz sayilir). Loglar `usb` bileseni, `ev=hold120`, `ev=hold120_stats`.
+5. `StreamCoordinator`: anahtar aciksa denetleyici olusturulur (kapaliyken nil -> sifir fark); `deliver` icinde `noteInput`; `handle` sonunda kosullar (`session.transport == .usb`, `consumer == .sender`, `!settings.displayHiDPI`, `settings.fps == 120`) itilir; `onShutdown`'da durdurulur.
+6. Testler: knob, planner (kosullar, ilk bozulan neden, girdi atlama, aralik, in-flight, geri cekilme, stats, durum degisimi), `Hold120Input`.
+7. `docs/KNOBS.md` satir 50, `docs/LOGGING.md` bolumu.
 
 ## Handoff
 
